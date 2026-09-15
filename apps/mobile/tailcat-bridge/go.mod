@@ -1,8 +1,11 @@
 module ghostex.local/tailcatbridge
 
-go 1.27.0
+go 1.27.1
 
-require github.com/tailscale/tailcat v0.4.0
+require (
+	github.com/tailscale/tailcat v0.6.0
+	tailscale.com v1.103.0-pre.0.20260904030409-31d8badb3bfb
+)
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -35,7 +38,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
-	github.com/tailscale/wireguard-go v0.0.0-20260821191448-23d18d66172c // indirect
+	github.com/tailscale/wireguard-go v0.0.0-20260904023712-e855235c55a2 // indirect
 	github.com/u-root/u-root v0.14.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
@@ -54,5 +57,4 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
-	tailscale.com v1.103.0-pre.0.20260830144538-72780705eda8 // indirect
 )
