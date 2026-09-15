@@ -3,19 +3,16 @@
 //!
 //! CDXC:TranscriptExport 2026-09-15 DECISION:
 //! User: the React app modals do not fill their GPUI child window and need a hand-tuned window height, so they are being rebuilt in GPUI one at a time, starting with Handoff / Export. The native dialog must match the React one 1 to 1: the same layout, copy, colors, states and behaviour in both appearances. It measures its own first layout and sizes the window to it instead of trusting a constant.
-//! SEE-ALSO: packages/core-ui/export-transcript-result-modal.tsx and packages/core-ui/styles/modals.css (the React twin and the `.gx-app-modal` / `.export-transcript-*` tokens mirrored below), apps/desktop/src/app/export_transcript_modal_lifecycle.rs (open, close, sidebar bridge), apps/desktop/src/bin/export_transcript_modal_demo.rs (standalone preview).
-//!
-//! This module depends only on gpui, gpui-component and serde_json so the demo binary can include it with `#[path]`; the app drives it through `ExportTranscriptModalHost`.
+//! SEE-ALSO: packages/core-ui/export-transcript-result-modal.tsx and packages/core-ui/styles/modals.css (the React twin and the `.export-transcript-*` rules mirrored below), apps/desktop/src/app/window/native_modal_kit.rs (shared chrome and controls), apps/desktop/src/app/export_transcript_modal_lifecycle.rs (open, close, sidebar bridge), apps/desktop/src/bin/native_modal_demo.rs (standalone preview).
+use super::native_modal_kit::*;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Bounds, ClickEvent, Context, FocusHandle,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, MouseDownEvent,
-    ParentElement as _, Pixels, Render, Rgba, StatefulInteractiveElement as _, Styled as _,
-    Transformation, Window, anchored, deferred, div, point, px, radians, rgb, size, svg,
+    AnyElement, App, ClickEvent, Context, FocusHandle, FontWeight, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, StatefulInteractiveElement as _,
+    Styled as _, Window, div, px,
 };
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{h_flex, v_flex};
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -25,29 +22,12 @@ pub(crate) const EXPORT_TRANSCRIPT_MODAL_WIDTH: f32 = 570.0;
 /// First-frame height only. The window is resized to the measured layout as soon as the first prepaint reports it.
 pub(crate) const EXPORT_TRANSCRIPT_MODAL_INITIAL_HEIGHT: f32 = 520.0;
 
-const WINDOW_PADDING: f32 = 24.0;
-const SECTION_GAP: f32 = 20.0;
-const FOOTER_BUTTON_HEIGHT: f32 = 32.0;
-const CONTROL_HEIGHT: f32 = 32.0;
-const RADIUS_CONTROL: f32 = 8.0;
-const RADIUS_SECTION: f32 = 12.0;
-const UI_FONT: &str = ".SystemUIFont";
-const MONO_FONT: &str = if cfg!(target_os = "macos") {
-    ".AppleSystemUIFontMonospaced"
-} else if cfg!(target_os = "windows") {
-    "Consolas"
-} else {
-    "monospace"
-};
-
 const ICON_USER_SHARE: &str = "modals/export-transcript/user-share.svg";
 const ICON_MARKDOWN: &str = "modals/export-transcript/markdown.svg";
 const ICON_CHECK_CARD: &str = "modals/export-transcript/check-card.svg";
 const ICON_CHECK_BUTTON: &str = "modals/export-transcript/check-button.svg";
 const ICON_COPY: &str = "modals/export-transcript/copy.svg";
 const ICON_FOLDER_SEARCH: &str = "modals/export-transcript/folder-search.svg";
-const ICON_SELECTOR: &str = "modals/export-transcript/selector.svg";
-const ICON_LOADER: &str = "modals/export-transcript/loader-2.svg";
 const ICON_CIRCLE_CHECK: &str = "modals/export-transcript/circle-check-filled.svg";
 
 const TITLE: &str = "Handoff / Export";
@@ -186,167 +166,15 @@ pub(crate) struct ExportTranscriptModalConfig {
     pub(crate) agents: Vec<ExportTranscriptAgent>,
     /// The exported session's own agent, preselected so "handoff to the same agent" is one click away.
     pub(crate) default_agent_id: Option<String>,
-    pub(crate) light: bool,
-    /// The `sidebarTheme` setting; tinted dark themes recolor the foreground and muted text.
-    pub(crate) sidebar_theme: Option<String>,
+    pub(crate) palette: ModalPalette,
     pub(crate) prefs_path: Option<PathBuf>,
     /// Overrides the remembered mode on open; the demo uses it to show one branch.
     pub(crate) initial_mode: Option<ExportTranscriptMode>,
 }
 
-/// The `.gx-app-modal` tokens plus the shadcn theme tokens the export dialog
-/// reads, resolved for one appearance. Dark values come from modals.css and
-/// shadcn.css, light values from modals-light.css.
-#[derive(Clone, Copy)]
-struct Palette {
-    surface: Rgba,
-    panel: Rgba,
-    raised: Rgba,
-    raised_hover: Rgba,
-    hairline: Rgba,
-    foreground: Rgba,
-    muted: Rgba,
-    /// `--background`: the switch thumb color.
-    background: Rgba,
-    primary: Rgba,
-    primary_foreground: Rgba,
-    /// `bg-input/90`: the unchecked switch track.
-    switch_off: Rgba,
-    focus_border: Rgba,
-    destructive: Rgba,
-    success: Rgba,
-    accent: Rgba,
-    menu_background: Rgba,
-    menu_border: Rgba,
-}
-
-fn rgba(hex: u32, alpha: f32) -> Rgba {
-    let mut color = rgb(hex);
-    color.a = alpha;
-    color
-}
-
-/// CSS `color-mix(in srgb, a <weight_a>, b)`: premultiplied interpolation.
-fn css_mix(a: Rgba, weight_a: f32, b: Rgba) -> Rgba {
-    let weight_b = 1.0 - weight_a;
-    let alpha = a.a * weight_a + b.a * weight_b;
-    if alpha <= 0.0 {
-        return Rgba {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
-        };
-    }
-    let channel = |ca: f32, cb: f32| (ca * a.a * weight_a + cb * b.a * weight_b) / alpha;
-    Rgba {
-        r: channel(a.r, b.r),
-        g: channel(a.g, b.g),
-        b: channel(a.b, b.b),
-        a: alpha,
-    }
-}
-
-/// The `--app-foreground`, `--app-muted` and `--app-background` triple of each
-/// dark sidebar theme in packages/core-ui/styles/theme.css.
-fn dark_theme_text_colors(sidebar_theme: Option<&str>) -> (u32, u32, u32) {
-    match sidebar_theme {
-        Some("dark-1") => (0xc8cdd5, 0x747b85, 0x191919),
-        Some("dark-green") => (0xd8e3db, 0x8ea196, 0x0b120d),
-        Some("dark-blue") => (0xdce6f8, 0x90a0b8, 0x0c1117),
-        Some("dark-red") => (0xf1dde1, 0xb6939b, 0x140c0e),
-        Some("dark-pink") => (0xf4deeb, 0xb99bad, 0x160d13),
-        Some("dark-orange") => (0xf0dfcf, 0xbaa08c, 0x171008),
-        _ => (0xc8cdd5, 0x747b85, 0x0e0e0e),
-    }
-}
-
-impl Palette {
-    fn resolve(light: bool, sidebar_theme: Option<&str>) -> Self {
-        if light {
-            Self {
-                surface: rgb(0xffffff),
-                panel: rgb(0xf5f5f5),
-                raised: rgb(0xf0f0f0),
-                raised_hover: rgb(0xe5e5e5),
-                hairline: rgba(0x000000, 0.14),
-                foreground: rgb(0x262626),
-                muted: rgb(0x626262),
-                background: rgb(0xffffff),
-                primary: rgb(0x262626),
-                primary_foreground: rgb(0xffffff),
-                switch_off: rgba(0x000000, 0.16 * 0.9),
-                focus_border: rgb(0x525252),
-                destructive: rgb(0xb91c1c),
-                success: rgb(0x15803d),
-                accent: rgb(0xe9e9e9),
-                menu_background: rgb(0xffffff),
-                menu_border: rgba(0x000000, 0.16),
-            }
-        } else {
-            let (foreground, muted, background) = dark_theme_text_colors(sidebar_theme);
-            Self {
-                surface: rgb(0x0e0e0e),
-                panel: rgb(0x161616),
-                raised: rgb(0x1d1d1d),
-                raised_hover: rgb(0x232323),
-                hairline: rgba(0xffffff, 0.08),
-                foreground: rgb(foreground),
-                muted: rgb(muted),
-                background: rgb(background),
-                primary: rgb(0xe5e5e5),
-                primary_foreground: rgb(0x171717),
-                switch_off: rgba(0xffffff, 0.15 * 0.9),
-                focus_border: rgb(0xffffff),
-                destructive: rgb(0xf87171),
-                success: rgb(0x4ade80),
-                accent: rgb(0x262626),
-                menu_background: rgb(0x161616),
-                menu_border: rgba(0xffffff, 0.08),
-            }
-        }
-    }
-
-    fn card_selected_background(&self) -> Rgba {
-        css_mix(self.foreground, 0.06, self.raised)
-    }
-
-    fn card_selected_border(&self) -> Rgba {
-        css_mix(self.foreground, 0.45, self.hairline)
-    }
-
-    fn chip_background(&self) -> Rgba {
-        rgba_of(self.foreground, 0.10)
-    }
-
-    fn menu_selected_background(&self) -> Rgba {
-        rgba_of(self.foreground, 0.12)
-    }
-
-    fn primary_hover(&self) -> Rgba {
-        css_mix(self.primary, 0.88, rgb(0xffffff))
-    }
-}
-
-fn rgba_of(color: Rgba, alpha: f32) -> Rgba {
-    Rgba { a: alpha, ..color }
-}
-
-fn hsla(color: Rgba) -> Hsla {
-    color.into()
-}
-
-fn transparent() -> Hsla {
-    gpui::transparent_black()
-}
-
-fn icon(path: &'static str, icon_size: f32, color: Rgba) -> gpui::Svg {
-    svg().path(path).size(px(icon_size)).text_color(hsla(color))
-}
-
 pub(crate) struct GpuiExportTranscriptModalWindow {
     host: ExportTranscriptModalHost,
-    palette: Palette,
+    palette: ModalPalette,
     prefs_path: Option<PathBuf>,
     agents: Vec<ExportTranscriptAgent>,
     default_agent_id: Option<String>,
@@ -358,11 +186,8 @@ pub(crate) struct GpuiExportTranscriptModalWindow {
     handoff_requested: bool,
     copied: bool,
     copied_generation: u64,
-    agent_menu_open: bool,
-    agent_menu_highlight: Option<usize>,
-    agent_trigger_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// The window height the first prepaint asked for; later prepaints only grow the window.
-    requested_height: Rc<Cell<Option<f32>>>,
+    agent_select: ModalSelect,
+    fit: ModalFit,
     focus_handle: FocusHandle,
 }
 
@@ -382,7 +207,7 @@ impl GpuiExportTranscriptModalWindow {
         focus_handle.focus(window, cx);
         Self {
             host,
-            palette: Palette::resolve(config.light, config.sidebar_theme.as_deref()),
+            palette: config.palette,
             prefs_path: config.prefs_path,
             agents: config.agents,
             default_agent_id: config.default_agent_id,
@@ -396,10 +221,8 @@ impl GpuiExportTranscriptModalWindow {
             handoff_requested: false,
             copied: false,
             copied_generation: 0,
-            agent_menu_open: false,
-            agent_menu_highlight: None,
-            agent_trigger_bounds: Rc::new(Cell::new(None)),
-            requested_height: Rc::new(Cell::new(None)),
+            agent_select: ModalSelect::new(),
+            fit: ModalFit::new(),
             focus_handle,
         }
     }
@@ -415,7 +238,7 @@ impl GpuiExportTranscriptModalWindow {
         }
         self.agents = agents;
         if self.agents.is_empty() {
-            self.agent_menu_open = false;
+            self.agent_select.close();
         }
         cx.notify();
     }
@@ -487,6 +310,11 @@ impl GpuiExportTranscriptModalWindow {
             .or_else(|| self.agents.first())
     }
 
+    fn effective_agent_index(&self) -> Option<usize> {
+        self.effective_agent()
+            .and_then(|agent| self.agents.iter().position(|candidate| candidate == agent))
+    }
+
     fn is_done(&self) -> bool {
         matches!(self.stage, ExportTranscriptStage::Done { .. })
     }
@@ -551,7 +379,7 @@ impl GpuiExportTranscriptModalWindow {
             return;
         }
         self.mode = mode;
-        self.agent_menu_open = false;
+        self.agent_select.close();
         self.persist_prefs();
         cx.notify();
     }
@@ -573,7 +401,7 @@ impl GpuiExportTranscriptModalWindow {
         if !self.can_run() {
             return;
         }
-        self.agent_menu_open = false;
+        self.agent_select.close();
         self.handoff_requested = self.effective_mode() == ExportTranscriptMode::Handoff;
         self.stage = ExportTranscriptStage::Exporting;
         cx.notify();
@@ -625,12 +453,8 @@ impl GpuiExportTranscriptModalWindow {
         if self.controls_disabled() || self.agents.is_empty() {
             return;
         }
-        self.agent_menu_open = !self.agent_menu_open;
-        self.agent_menu_highlight = self.agent_menu_open.then(|| {
-            self.effective_agent()
-                .and_then(|agent| self.agents.iter().position(|candidate| candidate == agent))
-                .unwrap_or(0)
-        });
+        let selected = self.effective_agent_index();
+        self.agent_select.toggle(selected);
         cx.notify();
     }
 
@@ -638,65 +462,40 @@ impl GpuiExportTranscriptModalWindow {
         if let Some(agent) = self.agents.get(index) {
             self.selected_agent_id = Some(agent.agent_id.clone());
         }
-        self.agent_menu_open = false;
-        cx.notify();
-    }
-
-    fn move_agent_highlight(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.agents.is_empty() {
-            return;
-        }
-        let count = self.agents.len() as isize;
-        let current = self.agent_menu_highlight.unwrap_or(0) as isize;
-        let next = (current + delta).rem_euclid(count) as usize;
-        self.agent_menu_highlight = Some(next);
+        self.agent_select.close();
         cx.notify();
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
-            "escape" => {
-                if self.agent_menu_open {
-                    self.agent_menu_open = false;
-                    cx.notify();
-                } else {
-                    self.cancel(window, cx);
-                }
+        let key = event.keystroke.key.as_str();
+        match self.agent_select.handle_key(key, self.agents.len()) {
+            ModalSelectKey::Consumed => {
+                cx.notify();
+                cx.stop_propagation();
+                return;
             }
+            ModalSelectKey::Choose(index) => {
+                self.choose_agent(index, cx);
+                cx.stop_propagation();
+                return;
+            }
+            ModalSelectKey::Ignored => {}
+        }
+        match key {
+            "escape" => self.cancel(window, cx),
             "enter" => {
                 if event.is_held {
                     return;
                 }
-                if self.agent_menu_open {
-                    if let Some(index) = self.agent_menu_highlight {
-                        self.choose_agent(index, cx);
-                    }
-                } else if self.show_result() {
+                if self.show_result() {
                     self.copy_path(cx);
                 } else {
                     self.run(cx);
                 }
             }
-            "up" if self.agent_menu_open => self.move_agent_highlight(-1, cx),
-            "down" if self.agent_menu_open => self.move_agent_highlight(1, cx),
             _ => return,
         }
         cx.stop_propagation();
-    }
-
-    fn render_header(&self) -> AnyElement {
-        let p = self.palette;
-        v_flex()
-            .gap(px(6.0))
-            .child(div().text_size(px(16.0)).line_height(px(20.8)).child(TITLE))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .line_height(px(20.15))
-                    .text_color(hsla(p.muted))
-                    .child(DESCRIPTION),
-            )
-            .into_any_element()
     }
 
     fn render_mode_card(
@@ -723,7 +522,7 @@ impl GpuiExportTranscriptModalWindow {
             .pr(px(12.0))
             .pb(px(11.0))
             .pl(px(10.0))
-            .rounded(px(RADIUS_CONTROL))
+            .rounded(px(MODAL_RADIUS_CONTROL))
             .border_1()
             .border_color(hsla(if selected {
                 p.card_selected_border()
@@ -756,7 +555,7 @@ impl GpuiExportTranscriptModalWindow {
                     } else {
                         p.chip_background()
                     }))
-                    .child(icon(
+                    .child(modal_icon(
                         icon_path,
                         16.0,
                         if selected {
@@ -788,11 +587,13 @@ impl GpuiExportTranscriptModalWindow {
                     ),
             )
             .when(selected, |this| {
-                this.child(div().absolute().top(px(10.0)).right(px(10.0)).child(icon(
-                    ICON_CHECK_CARD,
-                    14.0,
-                    p.foreground,
-                )))
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(10.0))
+                        .right(px(10.0))
+                        .child(modal_icon(ICON_CHECK_CARD, 14.0, p.foreground)),
+                )
             })
             .into_any_element()
     }
@@ -826,187 +627,31 @@ impl GpuiExportTranscriptModalWindow {
         let p = self.palette;
         if self.effective_mode() == ExportTranscriptMode::Export {
             return h_flex()
-                .min_h(px(CONTROL_HEIGHT))
+                .min_h(px(MODAL_CONTROL_HEIGHT))
                 .items_center()
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .line_height(px(17.4))
-                        .text_color(hsla(p.muted))
-                        .child(EXPORT_HINT),
-                )
+                .child(modal_hint(&p, EXPORT_HINT))
                 .into_any_element();
         }
-        let disabled = self.controls_disabled();
-        let open = self.agent_menu_open;
-        let trigger_bounds = self.agent_trigger_bounds.clone();
         let value = self.effective_agent().map(|agent| agent.name.clone());
         h_flex()
-            .min_h(px(CONTROL_HEIGHT))
+            .min_h(px(MODAL_CONTROL_HEIGHT))
             .items_center()
             .gap(px(10.0))
-            .on_children_prepainted(move |bounds, _window, _cx| {
-                trigger_bounds.set(bounds.get(1).copied());
-            })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(12.0))
-                    .line_height(px(17.14))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(hsla(p.muted))
-                    .child(CONTINUE_WITH),
-            )
-            .child(
-                h_flex()
-                    .id("export-transcript-agent-select")
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(CONTROL_HEIGHT))
-                    .px(px(12.0))
-                    .gap(px(6.0))
-                    .items_center()
-                    .justify_between()
-                    .rounded(px(RADIUS_CONTROL))
-                    .border_1()
-                    .border_color(hsla(if open { p.focus_border } else { p.hairline }))
-                    .bg(hsla(p.raised))
-                    .text_size(px(14.0))
-                    .line_height(px(20.0))
-                    .when(disabled, |this| this.opacity(0.5).cursor_default())
-                    .when(!disabled, |this| {
-                        this.cursor_pointer()
-                            .when(!open, |this| {
-                                this.hover(move |this| this.bg(hsla(p.raised_hover)))
-                            })
-                            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                this.toggle_agent_menu(cx);
-                            }))
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .when(value.is_none(), |this| this.text_color(hsla(p.muted)))
-                            .child(value.unwrap_or_else(|| SELECT_AGENT_PLACEHOLDER.to_string())),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .child(icon(ICON_SELECTOR, 16.0, p.muted)),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn render_agent_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.agent_menu_open {
-            return None;
-        }
-        let trigger = self.agent_trigger_bounds.get()?;
-        let p = self.palette;
-        let selected_index = self
-            .effective_agent()
-            .and_then(|agent| self.agents.iter().position(|candidate| candidate == agent));
-        let highlight = self.agent_menu_highlight;
-        let position = point(
-            trigger.origin.x,
-            trigger.origin.y + trigger.size.height + px(4.0),
-        );
-        let rows = self.agents.iter().enumerate().map(|(index, agent)| {
-            let selected = selected_index == Some(index);
-            let highlighted = highlight == Some(index);
-            h_flex()
-                .id(("export-transcript-agent-item", index))
-                .w_full()
-                .min_h(px(28.0))
-                .px(px(8.0))
-                .py(px(6.0))
-                .gap(px(8.0))
-                .items_center()
-                .rounded(px(6.0))
-                .text_size(px(14.0))
-                .line_height(px(20.0))
-                .text_color(hsla(p.foreground))
-                .cursor_default()
-                .when(selected, |this| this.bg(hsla(p.menu_selected_background())))
-                .when(!selected && highlighted, |this| this.bg(hsla(p.accent)))
-                .when(!selected, |this| {
-                    this.hover(move |this| this.bg(hsla(p.accent)))
-                })
-                .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                    this.choose_agent(index, cx);
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(agent.name.clone()),
-                )
-        });
-        Some(
-            deferred(
-                anchored()
-                    .position(position)
-                    .snap_to_window_with_margin(px(8.0))
-                    .child(
-                        v_flex()
-                            .id("export-transcript-agent-menu")
-                            .occlude()
-                            .w(trigger.size.width)
-                            .p(px(4.0))
-                            .rounded(px(RADIUS_CONTROL))
-                            .border_1()
-                            .border_color(hsla(p.menu_border))
-                            .bg(hsla(p.menu_background))
-                            .shadow_lg()
-                            .on_mouse_down_out(cx.listener(
-                                move |this, event: &MouseDownEvent, _window, cx| {
-                                    // A mouse-down on the trigger is the trigger's own toggle-close.
-                                    if trigger.contains(&event.position) {
-                                        return;
-                                    }
-                                    this.agent_menu_open = false;
-                                    cx.notify();
-                                },
-                            ))
-                            .children(rows),
-                    ),
-            )
-            .with_priority(1)
-            .into_any_element(),
-        )
-    }
-
-    fn render_switch(&self, checked: bool, disabled: bool) -> AnyElement {
-        let p = self.palette;
-        div()
-            .flex_shrink_0()
-            .w(px(32.0))
-            .h(px(20.0))
-            .rounded(px(6.0))
-            .border_2()
-            .border_color(if checked {
-                hsla(p.primary)
-            } else {
-                transparent()
-            })
-            .bg(hsla(if checked { p.primary } else { p.switch_off }))
-            .when(disabled, |this| this.opacity(0.5))
-            .child(
-                div()
-                    .size(px(16.0))
-                    .ml(px(if checked { 12.0 } else { 0.0 }))
-                    .rounded(px(4.0))
-                    .bg(hsla(p.background))
-                    .shadow_sm(),
-            )
+            .on_children_prepainted(capture_child_bounds(
+                self.agent_select.trigger_bounds.clone(),
+                1,
+            ))
+            .child(modal_section_title(&p, CONTINUE_WITH).flex_shrink_0())
+            .child(modal_select_trigger(
+                &p,
+                &self.agent_select,
+                "export-transcript-agent-select",
+                value,
+                SELECT_AGENT_PLACEHOLDER,
+                self.controls_disabled(),
+                |this, _window, cx| this.toggle_agent_menu(cx),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1027,80 +672,37 @@ impl GpuiExportTranscriptModalWindow {
             self.include.reasoning,
         ];
         let mut elements = vec![
-            div()
+            modal_section_title(&p, INCLUDE)
                 .mt(px(4.0))
-                .text_size(px(12.0))
-                .line_height(px(17.14))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(hsla(p.muted))
-                .child(INCLUDE)
                 .into_any_element(),
-            v_flex()
-                .w_full()
-                .rounded(px(RADIUS_SECTION))
-                .border_1()
-                .border_color(hsla(p.hairline))
-                .bg(hsla(p.panel))
-                .overflow_hidden()
+            modal_panel(&p)
                 .children(
                     ROWS.iter()
                         .enumerate()
                         .map(|(index, (label, description))| {
-                            h_flex()
-                                .id(("export-transcript-toggle-row", index))
-                                .w_full()
-                                .items_center()
-                                .justify_between()
-                                .gap(px(16.0))
-                                .px(px(12.0))
-                                .py(px(9.0))
-                                .when(index > 0, |this| {
-                                    this.border_t_1().border_color(hsla(p.hairline))
-                                })
-                                .when(!disabled, |this| {
-                                    this.cursor_pointer().on_click(cx.listener(
-                                        move |this, _: &ClickEvent, _window, cx| {
-                                            this.toggle_include(index, cx);
-                                        },
-                                    ))
-                                })
-                                .child(
-                                    v_flex()
-                                        .min_w_0()
-                                        .gap(px(2.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(13.0))
-                                                .line_height(px(18.57))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(*label),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .line_height(px(17.14))
-                                                .text_color(hsla(p.muted))
-                                                .child(*description),
-                                        ),
-                                )
-                                .child(self.render_switch(values[index], disabled))
+                            modal_panel_row(
+                                &p,
+                                *label,
+                                Some(*description),
+                                modal_switch(&p, values[index], disabled),
+                                index > 0,
+                            )
+                            .id(("export-transcript-toggle-row", index))
+                            .when(!disabled, |this| {
+                                this.cursor_pointer().on_click(cx.listener(
+                                    move |this, _: &ClickEvent, _window, cx| {
+                                        this.toggle_include(index, cx);
+                                    },
+                                ))
+                            })
                         }),
                 )
                 .into_any_element(),
         ];
         if let ExportTranscriptStage::Failed { message } = &self.stage {
-            elements.push(self.render_error(message.clone()));
+            elements.push(modal_error(&p, message.clone()));
         }
         elements
-    }
-
-    fn render_error(&self, message: String) -> AnyElement {
-        div()
-            .text_size(px(12.0))
-            .line_height(px(18.0))
-            .text_color(hsla(self.palette.destructive))
-            .child(message)
-            .into_any_element()
     }
 
     fn render_result(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1111,15 +713,10 @@ impl GpuiExportTranscriptModalWindow {
             } => (path.clone(), *can_reveal),
             _ => (String::new(), false),
         };
-        v_flex()
-            .w_full()
+        modal_panel(&p)
             .mt(px(4.0))
             .gap(px(10.0))
             .p(px(12.0))
-            .rounded(px(RADIUS_SECTION))
-            .border_1()
-            .border_color(hsla(p.hairline))
-            .bg(hsla(p.panel))
             .child(
                 h_flex()
                     .items_center()
@@ -1127,11 +724,13 @@ impl GpuiExportTranscriptModalWindow {
                     .text_size(px(13.0))
                     .line_height(px(18.57))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(icon(ICON_CIRCLE_CHECK, 16.0, p.success))
+                    .child(modal_icon(ICON_CIRCLE_CHECK, 16.0, p.success))
                     .child(SAVED_AS_MARKDOWN),
             )
             .child(
-                h_flex()
+                modal_raised_box(&p)
+                    .flex()
+                    .flex_row()
                     .w_full()
                     .items_center()
                     .gap(px(6.0))
@@ -1139,38 +738,26 @@ impl GpuiExportTranscriptModalWindow {
                     .pr(px(8.0))
                     .pb(px(8.0))
                     .pl(px(12.0))
-                    .rounded(px(RADIUS_CONTROL))
-                    .border_1()
-                    .border_color(hsla(p.hairline))
-                    .bg(hsla(p.raised))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .font_family(MONO_FONT)
+                            .font_family(MODAL_MONO_FONT)
                             .text_size(px(12.0))
                             .line_height(px(17.4))
                             .child(path),
                     )
                     .when(can_reveal, |this| {
                         this.child(
-                            div()
-                                .id("export-transcript-reveal")
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(px(32.0))
-                                .rounded(px(RADIUS_CONTROL))
-                                .cursor_pointer()
-                                .hover(move |this| this.bg(hsla(p.accent)))
-                                .tooltip(|window, cx| {
-                                    Tooltip::new(REVEAL_IN_FINDER).build(window, cx)
-                                })
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.reveal(window, cx);
-                                }))
-                                .child(icon(ICON_FOLDER_SEARCH, 15.0, p.foreground)),
+                            modal_icon_button(
+                                &p,
+                                "export-transcript-reveal",
+                                ICON_FOLDER_SEARCH,
+                                15.0,
+                                |this, window, cx| this.reveal(window, cx),
+                                cx,
+                            )
+                            .tooltip(|window, cx| Tooltip::new(REVEAL_IN_FINDER).build(window, cx)),
                         )
                     }),
             )
@@ -1191,197 +778,86 @@ impl GpuiExportTranscriptModalWindow {
         body.into_any_element()
     }
 
-    fn render_action_button(
-        &self,
-        id: &'static str,
-        label: String,
-        leading: Option<AnyElement>,
-        primary: bool,
-        disabled: bool,
-        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let p = self.palette;
-        h_flex()
-            .id(id)
-            .flex_1()
-            .flex_basis(px(0.0))
-            .min_w_0()
-            .h(px(FOOTER_BUTTON_HEIGHT))
-            .px(px(12.0))
-            .gap(px(6.0))
-            .items_center()
-            .justify_center()
-            .rounded(px(RADIUS_CONTROL))
-            .border_1()
-            .border_color(hsla(if primary { p.primary } else { p.hairline }))
-            .bg(if primary {
-                hsla(p.primary)
-            } else {
-                transparent()
-            })
-            .text_size(px(14.0))
-            .line_height(px(20.0))
-            .text_color(hsla(if primary {
-                p.primary_foreground
-            } else {
-                p.foreground
-            }))
-            .whitespace_nowrap()
-            .when(disabled, |this| this.opacity(0.5).cursor_default())
-            .when(!disabled, |this| {
-                this.cursor_pointer()
-                    .hover(move |this| {
-                        this.bg(hsla(if primary {
-                            p.primary_hover()
-                        } else {
-                            p.raised_hover
-                        }))
-                    })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        on_click(this, window, cx);
-                    }))
-            })
-            .children(leading)
-            .child(label)
-            .into_any_element()
-    }
-
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let show_result = self.show_result();
-        let left = self.render_action_button(
+        let left = modal_action_button(
+            &p,
             "export-transcript-cancel",
-            if show_result { "Done" } else { "Cancel" }.to_string(),
+            if show_result { "Done" } else { "Cancel" },
             None,
-            false,
+            ModalButtonTone::Neutral,
             false,
             |this, window, cx| this.cancel(window, cx),
             cx,
         );
         let right = if show_result {
             let copied = self.copied;
-            self.render_action_button(
+            modal_action_button(
+                &p,
                 "export-transcript-copy",
-                if copied { "Path Copied" } else { "Copy Path" }.to_string(),
+                if copied { "Path Copied" } else { "Copy Path" },
                 Some(
-                    icon(
+                    modal_icon(
                         if copied { ICON_CHECK_BUTTON } else { ICON_COPY },
                         15.0,
                         p.primary_foreground,
                     )
                     .into_any_element(),
                 ),
-                true,
+                ModalButtonTone::Primary,
                 false,
                 |this, _window, cx| this.copy_path(cx),
                 cx,
             )
         } else {
-            let spinner = self.busy().then(|| {
-                icon(ICON_LOADER, 15.0, p.primary_foreground)
-                    .with_animation(
-                        "export-transcript-spinner",
-                        Animation::new(Duration::from_millis(900)).repeat(),
-                        |svg, delta| {
-                            svg.with_transformation(Transformation::rotate(radians(
-                                delta * std::f32::consts::TAU,
-                            )))
-                        },
-                    )
-                    .into_any_element()
-            });
-            self.render_action_button(
+            modal_action_button(
+                &p,
                 "export-transcript-primary",
                 self.primary_label(),
-                spinner,
-                true,
+                self.busy().then(|| modal_spinner(p.primary_foreground)),
+                ModalButtonTone::Primary,
                 !self.can_run(),
                 |this, _window, cx| this.run(cx),
                 cx,
             )
         };
-        h_flex()
-            .w_full()
-            .gap(px(8.0))
-            .child(left)
-            .child(right)
-            .into_any_element()
+        modal_footer(vec![left, right])
     }
 }
 
 impl Render for GpuiExportTranscriptModalWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.palette;
-        let requested_height = self.requested_height.clone();
-        let menu = self.render_agent_menu(cx);
-        div()
-            .id("ghostex-gpui-export-transcript-modal")
-            .size_full()
-            .overflow_hidden()
-            .bg(hsla(p.surface))
-            .font_family(UI_FONT)
-            .text_size(px(14.0))
-            .line_height(px(20.0))
-            .text_color(hsla(p.foreground))
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .child(
-                v_flex()
-                    .size_full()
-                    .p(px(WINDOW_PADDING))
-                    .gap(px(SECTION_GAP))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .w_full()
-                            .gap(px(SECTION_GAP))
-                            /*
-                            The child window opens at a first-frame estimate. The first prepaint knows the real
-                            header and body heights, so the window is resized to fit them exactly; later prepaints
-                            only grow it (a failure message under the toggles) and never shrink it, so the saved-file
-                            state keeps the frame the options layout established, like the React dialog.
-                            */
-                            .on_children_prepainted(move |bounds, window, cx| {
-                                if bounds.len() < 2 {
-                                    return;
-                                }
-                                let content: f32 = bounds
-                                    .iter()
-                                    .map(|bounds| f32::from(bounds.size.height))
-                                    .sum();
-                                let needed = (content
-                                    + WINDOW_PADDING * 2.0
-                                    + SECTION_GAP * 2.0
-                                    + FOOTER_BUTTON_HEIGHT)
-                                    .round();
-                                let current = f32::from(window.viewport_size().height).round();
-                                let first = requested_height.get().is_none();
-                                if !first && needed <= current {
-                                    return;
-                                }
-                                if (needed - current).abs() < 1.0
-                                    || requested_height.get() == Some(needed)
-                                {
-                                    if first {
-                                        requested_height.set(Some(needed));
-                                    }
-                                    return;
-                                }
-                                requested_height.set(Some(needed));
-                                let handle = window.window_handle();
-                                let width = window.viewport_size().width;
-                                cx.defer(move |cx| {
-                                    let _ = handle.update(cx, |_root, window, _cx| {
-                                        window.resize(size(width, px(needed)));
-                                    });
-                                });
-                            })
-                            .child(self.render_header())
-                            .child(self.render_body(cx)),
-                    )
-                    .child(self.render_footer(cx)),
-            )
-            .children(menu)
+        let names: Vec<String> = self.agents.iter().map(|agent| agent.name.clone()).collect();
+        let menu = modal_select_menu(
+            &p,
+            &self.agent_select,
+            "export-transcript-agent-menu",
+            &names,
+            self.effective_agent_index(),
+            |this, index, _window, cx| this.choose_agent(index, cx),
+            |this, _window, cx| {
+                this.agent_select.close();
+                cx.notify();
+            },
+            cx,
+        );
+        let content = vec![
+            modal_header(&p, TITLE, Some(DESCRIPTION)),
+            self.render_body(cx),
+        ];
+        let footer = self.render_footer(cx);
+        modal_shell(
+            &p,
+            "ghostex-gpui-export-transcript-modal",
+            &self.focus_handle,
+            &self.fit,
+            Self::on_key_down,
+            content,
+            footer,
+            menu,
+            cx,
+        )
     }
 }

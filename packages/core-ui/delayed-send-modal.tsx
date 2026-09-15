@@ -40,7 +40,7 @@ const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 
-type DelayedSendTrigger = 'afterDelay' | 'agentStops' | 'allAgentsStop' | 'specificAgentStops';
+type DelayedSendTrigger = 'afterDelay' | 'specificTime' | 'agentStops' | 'allAgentsStop' | 'specificAgentStops';
 
 export type DelayedSendModalProps = {
   agentIcon?: SidebarAgentIcon;
@@ -87,7 +87,7 @@ export type DelayedSendModalProps = {
  * cancellation so users can verify or change the pending Enter keypress.
  *
  * CDXC:DelayedSend 2026-06-16-17:57:
- * Users should configure delayed-send timers only in whole hours and minutes.
+ * After a delay uses whole hours and minutes; Specific time (2026-09-15) calculates a precise remaining wait instead.
  * Round active remaining deadlines up to the next whole minute when prefilling
  * so editing an existing timer cannot silently shorten a sub-minute remainder
  * and seconds never reappear as an input.
@@ -133,6 +133,9 @@ export function DelayedSendModal({
   const specificAgentInputId = useId();
   const [hours, setHours] = useState('0');
   const [minutes, setMinutes] = useState('5');
+  const [specificTime, setSpecificTime] = useState('');
+  const [nowMs, setNowMs] = useState(Date.now);
+  const specificTimeInputId = useId();
   const [sendEnterEnabled, setSendEnterEnabled] = useState(true);
   const [trigger, setTrigger] = useState<DelayedSendTrigger>('afterDelay');
   const [closeAfterDoneEnabled, setCloseAfterDoneEnabled] = useState(closeAfterDoneActive);
@@ -195,6 +198,9 @@ export function DelayedSendModal({
     const duration = remainingMs > 0 ? durationPartsFromMs(remainingMs) : undefined;
     setHours(String(duration?.hours ?? 0));
     setMinutes(String(duration?.minutes ?? 5));
+    const now = Date.now();
+    setNowMs(now);
+    setSpecificTime(formatLocalDateTime(Math.ceil((now + (remainingMs || 5 * MINUTE_MS)) / MINUTE_MS) * MINUTE_MS));
     const shouldSendWhenAllProjectSessionsStop =
       supportsSendWhenAllProjectSessionsStop && sendWhenAllProjectSessionsStopActive;
     const shouldSendWhenAgentStops =
@@ -237,17 +243,30 @@ export function DelayedSendModal({
     supportsSendWhenAgentStops,
   ]);
 
+  useEffect(() => {
+    if (!isOpen || trigger !== 'specificTime') return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), SECOND_MS);
+    return () => window.clearInterval(timer);
+  }, [isOpen, trigger]);
+
   if (!isOpen) {
     return null;
   }
 
-  const delayMs = getDelayMs(hours, minutes);
-  const isValidDelay = delayMs >= MINUTE_MS && delayMs <= MAX_DELAY_MS;
-  const hasStatusTrigger = trigger !== 'afterDelay';
+  /**
+   * CDXC:DelayedSend 2026-09-15 DECISION:
+   * User: add "Specific time", calculate the wait from the selected time, and reuse the existing After a delay timer.
+   * Recalculate on Save so time spent editing the modal does not shift the scheduled send.
+   */
+  const delayMs = trigger === 'specificTime' ? Date.parse(specificTime) - nowMs : getDelayMs(hours, minutes);
+  const isValidDelay = delayMs >= (trigger === 'specificTime' ? 1 : MINUTE_MS) && delayMs <= MAX_DELAY_MS;
+  const hasStatusTrigger = trigger !== 'afterDelay' && trigger !== 'specificTime';
   const selectedAgent = awakeSessions?.find((session) => agentReferenceKey(session) === specificAgentKey);
   const isValidSchedule = trigger === 'specificAgentStops' ? Boolean(selectedAgent) : hasStatusTrigger || isValidDelay;
   const hasActiveSend = Boolean(
     activeSpecificAgentKey ||
+    delayedSendDeadlineAt ||
     delayedSendRemainingLabel ||
     sendWhenAgentStopsActive ||
     sendWhenAllProjectSessionsStopActive
@@ -264,6 +283,7 @@ export function DelayedSendModal({
     : undefined;
   const triggerOptions: { label: string; value: DelayedSendTrigger }[] = [
     { label: 'After a delay', value: 'afterDelay' },
+    { label: 'Specific time', value: 'specificTime' },
     ...(supportsSendWhenAgentStops ? [{ label: 'When this agent finishes', value: 'agentStops' as const }] : []),
     ...(awakeSessions ? [{ label: 'When a specific agent finishes', value: 'specificAgentStops' as const }] : []),
     ...(supportsSendWhenAllProjectSessionsStop
@@ -294,12 +314,17 @@ export function DelayedSendModal({
     if (!canSave) {
       return;
     }
+    const submittedDelayMs = trigger === 'specificTime' ? Date.parse(specificTime) - Date.now() : delayMs;
+    if (sendEnterEnabled && !hasStatusTrigger && !(submittedDelayMs > 0 && submittedDelayMs <= MAX_DELAY_MS)) {
+      setNowMs(Date.now());
+      return;
+    }
     if (closeAfterDoneChanged) {
       onToggleCloseAfterDone();
     }
     if (sendEnterEnabled) {
       onConfirm(
-        hasStatusTrigger ? undefined : delayMs,
+        hasStatusTrigger ? undefined : submittedDelayMs,
         sendWhenAgentStops,
         sendWhenAllProjectSessionsStop,
         trigger === 'specificAgentStops' && selectedAgent
@@ -435,6 +460,27 @@ export function DelayedSendModal({
                           />
                         </Field>
                       </div>
+                    ) : trigger === 'specificTime' ? (
+                      <Field>
+                        <FieldLabel htmlFor={specificTimeInputId}>Date and time</FieldLabel>
+                        <Input
+                          aria-label='Specific time'
+                          id={specificTimeInputId}
+                          type='datetime-local'
+                          step={60}
+                          min={formatLocalDateTime(Math.ceil((nowMs + 1) / MINUTE_MS) * MINUTE_MS)}
+                          max={formatLocalDateTime(nowMs + MAX_DELAY_MS)}
+                          value={specificTime}
+                          onChange={(event) => setSpecificTime(event.currentTarget.value)}
+                          onKeyDown={submitFromDurationInput}
+                          required
+                        />
+                        <p className='delayed-send-trigger-description' role={isValidDelay ? undefined : 'status'}>
+                          {isValidDelay
+                            ? 'Uses your computer’s local time.'
+                            : 'Choose a future date and time within 24 days.'}
+                        </p>
+                      </Field>
                     ) : trigger === 'specificAgentStops' ? (
                       <Field>
                         <FieldLabel htmlFor={specificAgentInputId}>Agent session</FieldLabel>
@@ -546,4 +592,10 @@ function durationPartsFromMs(delayMs: number): { hours: number; minutes: number 
 
 function agentReferenceKey(reference: DelayedSendAgentReference): string {
   return JSON.stringify([reference.projectId, reference.sessionId]);
+}
+
+function formatLocalDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }

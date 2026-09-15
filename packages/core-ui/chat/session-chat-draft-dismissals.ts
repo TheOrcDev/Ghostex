@@ -1,5 +1,8 @@
+import { storageScope } from '@/packages/client-storage';
 import type { SessionChatDraftVersion } from '@/packages/shared/session-chat-queue';
 import { withDraftStorageLock } from './session-chat-draft-disk';
+
+const clientStorage = storageScope(["recovery","recoveryDismissed"]);
 
 const RECOVERY_PREFIX = 'ghostex.sessionChat.recovery.';
 const PREFIX = 'ghostex.sessionChat.recoveryDismissed.';
@@ -15,7 +18,7 @@ function key(sessionKey: string, draftId: string): string {
 
 export function isDraftRecoveryDismissed(sessionKey: string, version?: SessionChatDraftVersion): boolean {
   if (!version) return false;
-  const ranges: Range[] = JSON.parse(localStorage.getItem(key(sessionKey, version.draftId)) ?? '[]');
+  const ranges: Range[] = JSON.parse(clientStorage.getItem(key(sessionKey, version.draftId)) ?? '[]');
   return ranges.some(([start, end]) => start <= version.revision && version.revision <= end);
 }
 
@@ -44,22 +47,24 @@ export function compactDraftRecoveryDismissals(remove: (key: string) => void, na
   if (name) pending.add(name);
   if (running) return running;
   if (scanned && pending.size === 0) return Promise.resolve();
+  const processed = new Set<string>();
   running = withDraftStorageLock(() => {
     if (!scanned) {
-      for (const name of Object.keys(localStorage)) {
+      for (const name of clientStorage.keys()) {
         if (name.startsWith(RECOVERY_PREFIX)) pending.add(name);
       }
       scanned = true;
     }
     const groups = new Map<string, { names: string[]; revisions: Range[] }>();
     for (const name of pending) {
-      const raw = localStorage.getItem(name);
+      processed.add(name);
+      const raw = clientStorage.getItem(name);
       if (raw === null) continue;
       const entry = marker(raw);
       if (!entry) continue;
       const [sessionKey, draftId, revision] = entry;
       const compact = JSON.stringify(entry);
-      if (compact.length < raw.length) localStorage.setItem(name, compact);
+      if (compact.length < raw.length) clientStorage.setItem(name, compact);
       const groupKey = key(sessionKey, draftId);
       let group = groups.get(groupKey);
       if (!group) groups.set(groupKey, (group = { names: [], revisions: [] }));
@@ -67,17 +72,21 @@ export function compactDraftRecoveryDismissals(remove: (key: string) => void, na
       group.revisions.push([revision, revision]);
     }
     for (const [groupKey, group] of groups) {
-      const previous: Range[] = JSON.parse(localStorage.getItem(groupKey) ?? '[]');
+      const previous: Range[] = JSON.parse(clientStorage.getItem(groupKey) ?? '[]');
       const merged: Range[] = [];
       for (const [start, end] of [...previous, ...group.revisions].sort((a, b) => a[0] - b[0])) {
         const last = merged[merged.length - 1];
         if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
         else merged.push([start, end]);
       }
-      localStorage.setItem(groupKey, JSON.stringify(merged));
+      clientStorage.setItem(groupKey, JSON.stringify(merged));
       for (const name of group.names) remove(name);
     }
-    pending.clear();
+  }).then(() => {
+    for (const name of processed) pending.delete(name);
+  }).catch((error: unknown) => {
+    scanned = false;
+    throw error;
   }).finally(() => {
     running = undefined;
   });

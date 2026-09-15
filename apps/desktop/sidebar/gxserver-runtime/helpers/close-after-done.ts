@@ -1,10 +1,13 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:RepoStructure 2026-08-22:
 Split out of the single 21,861-line `gxserver-runtime.ts`. Pure move: no logic
 changed. See `core.ts` for how the runtime's methods are re-attached.
 */
-import { GPUI_CLOSE_AFTER_DONE_STORAGE_KEY, GPUI_DELAYED_SEND_MIN_DELAY_MS } from '../constants';
+import { GPUI_CLOSE_AFTER_DONE_STORAGE_KEY } from '../constants';
 import type { GxserverPresentationSession } from '@/packages/shared/gxserver-protocol';
+
+const clientStorage = storageScope(["closeAfterDone"]);
 
 export function isGpuiInactiveProjectPresentationSession(session: GxserverPresentationSession): boolean {
   /*
@@ -47,17 +50,22 @@ export function formatGpuiCloseAfterDoneCountdown(remainingMs: number): string {
 }
 
 export function formatGpuiDelayedSendDelay(delayMs: number): string {
-  const totalMinutes = Math.max(1, Math.round(delayMs / GPUI_DELAYED_SEND_MIN_DELAY_MS));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return [hours > 0 ? `${hours}h` : undefined, minutes > 0 ? `${minutes}m` : undefined]
+  const totalSeconds = Math.max(1, Math.ceil(delayMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return [
+    hours > 0 ? `${hours}h` : undefined,
+    minutes > 0 ? `${minutes}m` : undefined,
+    seconds > 0 ? `${seconds}s` : undefined,
+  ]
     .filter((part): part is string => part !== undefined)
     .join(' ');
 }
 
 export function readStoredGpuiCloseAfterDoneSessionIds(): string[] {
   try {
-    const raw = window.localStorage.getItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY);
+    const raw = clientStorage.getItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -74,10 +82,10 @@ export function readStoredGpuiCloseAfterDoneSessionIds(): string[] {
 export function writeStoredGpuiCloseAfterDoneSessionIds(sessionIds: readonly string[]): void {
   try {
     if (sessionIds.length === 0) {
-      window.localStorage.removeItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY);
+      clientStorage.removeItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY, JSON.stringify([...sessionIds]));
+    clientStorage.setItem(GPUI_CLOSE_AFTER_DONE_STORAGE_KEY, JSON.stringify([...sessionIds]));
   } catch {
     // Storage availability must never gate close-after-done behavior.
   }

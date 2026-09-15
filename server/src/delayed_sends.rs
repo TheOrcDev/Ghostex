@@ -150,11 +150,12 @@ impl DelayedSendRuntime {
             ));
         }
         if let Some(delay_ms) = delay_ms {
-            if !(DELAYED_SEND_MIN_DELAY_MS..=DELAYED_SEND_MAX_DELAY_MS).contains(&delay_ms)
-                || delay_ms % DELAYED_SEND_MIN_DELAY_MS != 0
+            // CDXC:DelayedSend 2026-09-15 WHY:
+            // Specific time is converted to a remaining wait at submission, including partial minutes. Keep that precision in the ordinary timer path.
+            if !(1..=DELAYED_SEND_MAX_DELAY_MS).contains(&delay_ms)
             {
                 return Err(DomainStateError::bad_request(
-                    "Delayed Send delay must be a whole number of minutes between 1 minute and 24 days.",
+                    "Delayed Send delay must be positive and no longer than 24 days.",
                 ));
             }
         }

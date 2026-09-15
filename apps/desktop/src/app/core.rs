@@ -37,6 +37,7 @@ use gpui_component::input::InputState;
 use crate::app::element::*;
 use crate::app::helpers::*;
 use crate::app::model::*;
+use crate::app::native_app_modal_lifecycle::NativeAppModal;
 use crate::app::terminal_sync::GpuiEngineTerminalAnnouncedVisibility;
 use crate::app::window::*;
 use crate::*;
@@ -537,9 +538,8 @@ pub struct GhostexGpuiApp {
     pub(crate) sidebar_timer_presentations_replayed_after_ready: bool,
     /// The sidebar page's last-used launcher agent id, published over the native host bridge for the native New Thread picker.
     pub(crate) sidebar_primary_agent_launcher_id: Option<String>,
-    /// The native Handoff / Export dialog window, if open; see app/window/export_transcript_modal.rs.
-    pub(crate) export_transcript_modal_window:
-        Option<WindowHandle<GpuiExportTranscriptModalWindow>>,
+    /// The open native GPUI app modal, if any; see app/native_app_modal_lifecycle.rs.
+    pub(crate) native_app_modal: Option<NativeAppModal>,
     pub(crate) new_thread_picker_window: Option<WindowHandle<Root>>,
     pub(crate) new_thread_picker: Option<Entity<GpuiNewThreadPickerWindow>>,
     pub(crate) new_thread_picker_visible: bool,

@@ -1,3 +1,4 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
 import { sessionChatDraftClientId } from './session-chat-queue';
 import type { SessionChatDraftVersion, SessionChatDraft } from '@/packages/shared/session-chat-queue';
 /**
@@ -18,6 +19,8 @@ import {
 } from './session-chat-draft-recovery';
 import { recordDeliveredSessionChatDrafts } from './session-chat-sent-history';
 import { SessionChatStorageIndex } from './session-chat-storage-index';
+
+const clientStorage = storageScope(["drafts"]);
 
 const SESSION_CHAT_DRAFT_STORAGE_PREFIX = 'ghostex.sessionChat.draft.';
 
@@ -41,14 +44,15 @@ export type DecodedStoredDraft = {
   updatedAt: number | undefined;
 };
 const draftIndex = new SessionChatStorageIndex<DecodedStoredDraft>(
+  'drafts',
   SESSION_CHAT_DRAFT_STORAGE_PREFIX,
   decodeStoredDraft,
   () => ''
 );
 
-function draftStorage(): Storage | null {
+function draftStorage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     return null;
   }

@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { useManageFileIndex } from './file-index';
 import { ManageFileTree, type ManageFileTreeHandle } from './file-tree';
 import {
@@ -31,6 +32,7 @@ import {
   type ProjectDocsResponse as ManageFilesBridgeResponse,
 } from '@/packages/shared/project-docs';
 import {
+  MANAGE_ACTIVE_FILE_STORAGE_KEY_PREFIX,
   MANAGE_ANNOTATIONS_SIDECAR_PATH,
   MANAGE_BRIDGE_TIMEOUT_MS,
   MANAGE_CONTENT_AUTOSAVE_DELAY_MS,
@@ -70,6 +72,8 @@ import {
   isRecord,
 } from './types';
 import { ManageFileContextMenu, ManageRenameDialog, ManageSidebarActions } from './file-tree-ui';
+import { manageOpenFileLabel, useManageOpenDocuments, writeStoredManageDrafts } from './open-documents';
+import { ManageCloseDocumentDialog, ManageOpenFilesList } from './open-files-list';
 import { isManageFindShortcut } from './keyboard';
 import { ManagePreview } from './preview/manage-preview';
 import { ManageTooltipButton } from './manage-tooltip-button';
@@ -115,6 +119,8 @@ import {
   writeTextToClipboard,
 } from './annotation-store';
 import { type ManageAnnotationFeedbackDocument, formatManageAnnotationFeedback } from './annotation-feedback';
+
+const clientStorage = storageScope(["docsSide","docsWidth","docsPinned","docsActiveFile"]);
 
 /*
  * CDXC:Docs 2026-06-20-06:14:
@@ -467,6 +473,13 @@ export function ManageApp() {
   const [preview, setPreview] = useState<ManageFilePreview>();
   const [draftContent, setDraftContent] = useState('');
   const [lastSavedContent, setLastSavedContent] = useState('');
+  /* Mirrors for callbacks that must see the latest text without re-creating on every keystroke. */
+  const draftContentRef = useRef('');
+  draftContentRef.current = draftContent;
+  const lastSavedContentRef = useRef('');
+  lastSavedContentRef.current = lastSavedContent;
+  const openDocuments = useManageOpenDocuments(projectId);
+  const [closeDocumentPrompt, setCloseDocumentPrompt] = useState<{ error?: string; path: string; saving: boolean }>();
   const listState = indexing ? 'loading' : indexError ? 'error' : 'ready';
   const [previewState, setPreviewState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -537,10 +550,21 @@ export function ManageApp() {
   const isReviewDocumentSelected = isManageReviewDocumentPath(selectedPath);
   const isDirty = isEditablePreview && !isReviewDocumentSelected && draftContent !== lastSavedContent;
 
+  /* `discardDraft` is the explicit Reload: it returns to the disk content. Every other read of the selected file keeps its unsaved draft. */
   const readFile = useCallback(
-    async (path: string) => {
+    async (path: string, { discardDraft = false }: { discardDraft?: boolean } = {}) => {
       const sequence = ++fileReadSequenceRef.current;
-      if (isManageReviewDocumentPath(selectedPathRef.current)) {
+      const previousPath = selectedPathRef.current;
+      if (
+        previousPath !== undefined &&
+        previousPath !== path &&
+        !isManageReviewDocumentPath(previousPath) &&
+        draftContentRef.current !== lastSavedContentRef.current
+      ) {
+        openDocuments.stashDraft(previousPath, draftContentRef.current, lastSavedContentRef.current);
+      }
+      openDocuments.openDocument(path);
+      if (isManageReviewDocumentPath(previousPath)) {
         setReviewDocument(undefined);
         setReviewAnnotations([]);
       }
@@ -567,9 +591,19 @@ export function ManageApp() {
         }
         const openedFile = response.file;
         setPreview(openedFile);
-        const nextContent = openedFile?.content ?? '';
+        const savedContentOnDisk = openedFile?.content ?? '';
+        /* Switching back to a file restores its unsaved draft over whatever is on disk now; re-reading the selected file keeps the draft in hand unless this is the Reload. */
+        const pendingDraft = discardDraft
+          ? undefined
+          : previousPath === path
+            ? { draft: draftContentRef.current, savedContent: lastSavedContentRef.current }
+            : openDocuments.takeDraft(path);
+        const nextContent =
+          pendingDraft && openedFile?.kind === 'text' && pendingDraft.draft !== savedContentOnDisk
+            ? pendingDraft.draft
+            : savedContentOnDisk;
         setDraftContent(nextContent);
-        setLastSavedContent(nextContent);
+        setLastSavedContent(savedContentOnDisk);
         if (openedFile) {
           setEntries((currentEntries) =>
             currentEntries.map((entry) =>
@@ -616,8 +650,51 @@ export function ManageApp() {
         setError(readError instanceof Error ? readError.message : 'Could not open file.');
       }
     },
-    [projectEditorId, projectId]
+    [openDocuments.openDocument, openDocuments.stashDraft, openDocuments.takeDraft, projectEditorId, projectId]
   );
+
+  const dirtyPaths = useMemo(() => {
+    if (!isDirty || !selectedPath) {
+      return openDocuments.backgroundDirtyPaths;
+    }
+    const next = new Set(openDocuments.backgroundDirtyPaths);
+    next.add(selectedPath);
+    return next;
+  }, [isDirty, openDocuments.backgroundDirtyPaths, selectedPath]);
+
+  useEffect(() => {
+    const drafts = { ...openDocuments.backgroundDrafts };
+    if (isDirty && selectedPath && !isManageReviewDocumentPath(selectedPath)) {
+      drafts[selectedPath] = { draft: draftContent, savedContent: lastSavedContent };
+    }
+    writeStoredManageDrafts(projectId, drafts);
+  }, [draftContent, isDirty, lastSavedContent, openDocuments.backgroundDrafts, projectId, selectedPath]);
+
+  /* Reopen the file that was showing when Docs last closed, if it is still in the open list. Runs once, before the active-file store below can clear the key. */
+  const restoredActiveFileRef = useRef(false);
+  useEffect(() => {
+    if (restoredActiveFileRef.current) {
+      return;
+    }
+    restoredActiveFileRef.current = true;
+    const storedActivePath = clientStorage.getItem(`${MANAGE_ACTIVE_FILE_STORAGE_KEY_PREFIX}${projectId}`);
+    if (
+      storedActivePath &&
+      openDocuments.openPaths.includes(storedActivePath) &&
+      selectedPathRef.current === undefined
+    ) {
+      void readFile(storedActivePath);
+    }
+  }, [openDocuments.openPaths, projectId, readFile]);
+
+  useEffect(() => {
+    const key = `${MANAGE_ACTIVE_FILE_STORAGE_KEY_PREFIX}${projectId}`;
+    if (selectedPath && !isManageReviewDocumentPath(selectedPath)) {
+      clientStorage.setItem(key, selectedPath);
+    } else if (!selectedPath) {
+      clientStorage.removeItem(key);
+    }
+  }, [projectId, selectedPath]);
 
   /*
    * CDXC:SessionChat 2026-08-03:
@@ -814,7 +891,7 @@ export function ManageApp() {
             return;
           }
           if (automaticallyReload) {
-            void readFile(path);
+            void readFile(path, { discardDraft: true });
           } else {
             setHasExternalChanges(true);
           }
@@ -856,15 +933,15 @@ export function ManageApp() {
   }, [refreshFiles]);
 
   useEffect(() => {
-    window.localStorage.setItem(MANAGE_SIDEBAR_SIDE_STORAGE_KEY, sidebarSide);
+    clientStorage.setItem(MANAGE_SIDEBAR_SIDE_STORAGE_KEY, sidebarSide);
   }, [sidebarSide]);
 
   useEffect(() => {
-    window.localStorage.setItem(MANAGE_SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(sidebarWidth)));
+    clientStorage.setItem(MANAGE_SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(sidebarWidth)));
   }, [sidebarWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem(MANAGE_SIDEBAR_PINNED_STORAGE_KEY, String(sidebarPinned));
+    clientStorage.setItem(MANAGE_SIDEBAR_PINNED_STORAGE_KEY, String(sidebarPinned));
   }, [sidebarPinned]);
 
   useLayoutEffect(() => {
@@ -1874,6 +1951,7 @@ export function ManageApp() {
           nextPath
         );
         setCollapsedDirectoryPaths((current) => remapManagePathSetForMove(current, path, nextPath));
+        openDocuments.remapMovedEntry(path, nextPath);
         if (currentEntry.kind === 'file' && renamedFile && selectedPathRef.current === path) {
           selectedPathRef.current = renamedFile.path;
           setSelectedPath(renamedFile.path);
@@ -1905,6 +1983,7 @@ export function ManageApp() {
       draftContent,
       entries,
       isDirty,
+      openDocuments.remapMovedEntry,
       projectEditorId,
       projectId,
       readFile,
@@ -1951,6 +2030,7 @@ export function ManageApp() {
           path
         );
         setCollapsedDirectoryPaths((current) => removeManagePathSetForDeletedEntry(current, path));
+        openDocuments.removeDeletedEntry(path);
         setFileContextMenu(undefined);
         if (deletesSelectedPath) {
           selectedPathRef.current = undefined;
@@ -1968,7 +2048,17 @@ export function ManageApp() {
         setFileOperation((current) => (current?.action === 'delete' && current.path === path ? undefined : current));
       }
     },
-    [clearPendingContentAutosave, entries, fileOperation, isDirty, projectEditorId, projectId, refreshFiles, saveState]
+    [
+      clearPendingContentAutosave,
+      entries,
+      fileOperation,
+      isDirty,
+      openDocuments.removeDeletedEntry,
+      projectEditorId,
+      projectId,
+      refreshFiles,
+      saveState,
+    ]
   );
 
   const duplicateFile = useCallback(
@@ -2126,6 +2216,7 @@ export function ManageApp() {
           nextPath
         );
         setCollapsedDirectoryPaths((current) => remapManagePathSetForMove(current, entry.path, nextPath));
+        openDocuments.remapMovedEntry(entry.path, nextPath);
         if (movedSelectedPath) {
           selectedPathRef.current = movedSelectedPath;
           setSelectedPath(movedSelectedPath);
@@ -2142,7 +2233,17 @@ export function ManageApp() {
         );
       }
     },
-    [entries, fileOperation, isDirty, projectEditorId, projectId, readFile, refreshFiles, saveState]
+    [
+      entries,
+      fileOperation,
+      isDirty,
+      openDocuments.remapMovedEntry,
+      projectEditorId,
+      projectId,
+      readFile,
+      refreshFiles,
+      saveState,
+    ]
   );
 
   const submitRenameDialog = useCallback(() => {
@@ -2373,7 +2474,9 @@ export function ManageApp() {
   const selectTreeEntry = useCallback(
     (entry: ManageFileEntry) => {
       if (entry.kind === 'file') {
-        void readFile(entry.path);
+        if (entry.path !== selectedPathRef.current) {
+          void readFile(entry.path);
+        }
         if (sidebarTransient === 'drawer') {
           closeTransientSidebar();
         }
@@ -2384,6 +2487,98 @@ export function ManageApp() {
     },
     [closeTransientSidebar, prioritizeDirectory, readFile, sidebarTransient, toggleDirectory]
   );
+
+  const selectOpenDocument = useCallback(
+    (path: string) => {
+      if (path !== selectedPathRef.current) {
+        void readFile(path);
+      }
+      if (sidebarTransient === 'drawer') {
+        closeTransientSidebar();
+      }
+    },
+    [closeTransientSidebar, readFile, sidebarTransient]
+  );
+
+  const clearSelectedDocument = useCallback(() => {
+    fileReadSequenceRef.current += 1;
+    selectedPathRef.current = undefined;
+    setSelectedPath(undefined);
+    setPreview(undefined);
+    setDraftContent('');
+    setLastSavedContent('');
+    setPreviewState('idle');
+    setSaveState('idle');
+    setHasExternalChanges(false);
+    setError(undefined);
+  }, []);
+
+  /* Closing the selected file moves to its neighbour below, else above; the selection is cleared first so the read does not stash the closing file's draft. */
+  const closeOpenDocument = useCallback(
+    (path: string) => {
+      const index = openDocuments.openPaths.indexOf(path);
+      const neighbour =
+        index === -1 ? undefined : (openDocuments.openPaths[index + 1] ?? openDocuments.openPaths[index - 1]);
+      const wasSelected = selectedPathRef.current === path;
+      if (wasSelected) {
+        clearPendingContentAutosave();
+        clearSelectedDocument();
+      }
+      openDocuments.removeDocument(path);
+      setCloseDocumentPrompt(undefined);
+      if (wasSelected && neighbour !== undefined) {
+        void readFile(neighbour);
+      }
+    },
+    [
+      clearPendingContentAutosave,
+      clearSelectedDocument,
+      openDocuments.openPaths,
+      openDocuments.removeDocument,
+      readFile,
+    ]
+  );
+
+  const requestCloseDocument = useCallback(
+    (path: string) => {
+      const dirty =
+        selectedPathRef.current === path
+          ? draftContentRef.current !== lastSavedContentRef.current
+          : path in openDocuments.backgroundDrafts;
+      if (!dirty) {
+        closeOpenDocument(path);
+        return;
+      }
+      setCloseDocumentPrompt({ path, saving: false });
+    },
+    [closeOpenDocument, openDocuments.backgroundDrafts]
+  );
+
+  const saveAndCloseDocument = useCallback(async () => {
+    if (!closeDocumentPrompt) {
+      return;
+    }
+    const { path } = closeDocumentPrompt;
+    const content =
+      selectedPathRef.current === path ? draftContentRef.current : openDocuments.backgroundDrafts[path]?.draft;
+    if (content === undefined) {
+      closeOpenDocument(path);
+      return;
+    }
+    setCloseDocumentPrompt({ path, saving: true });
+    try {
+      await saveContentSnapshot({ content, path, throwOnError: true });
+      closeOpenDocument(path);
+    } catch (saveError) {
+      setCloseDocumentPrompt({
+        error: saveError instanceof Error ? saveError.message : 'Could not save file.',
+        path,
+        saving: false,
+      });
+    }
+  }, [closeDocumentPrompt, closeOpenDocument, openDocuments.backgroundDrafts, saveContentSnapshot]);
+
+  const entriesByPath = useMemo(() => new Map(entries.map((entry) => [entry.path, entry] as const)), [entries]);
 
   /**
    * CDXC:Docs 2026-09-07 DECISION:
@@ -2580,6 +2775,14 @@ export function ManageApp() {
               </ManageTooltipButton>
             ) : null}
           </div>
+          <ManageOpenFilesList
+            dirtyPaths={dirtyPaths}
+            entriesByPath={entriesByPath}
+            onClose={requestCloseDocument}
+            onSelect={selectOpenDocument}
+            openPaths={openDocuments.openPaths}
+            selectedPath={selectedPath}
+          />
           <ManageFileTree
             ref={fileTreeRef}
             entries={visibleEntries}
@@ -2634,6 +2837,7 @@ export function ManageApp() {
         />
       ) : null}
       <section className='manage-preview'>
+        {openDocuments.storageError ? <p role='alert' className='m-2 rounded border border-destructive p-2 text-sm text-destructive'>{openDocuments.storageError}</p> : null}
         <ManagePreview
           annotations={annotationsForSelectedPath}
           draftContent={draftContent}
@@ -2648,7 +2852,7 @@ export function ManageApp() {
           onOpenDocument={(path) => void readFile(path)}
           onReload={() => {
             if (selectedPath) {
-              void readFile(selectedPath);
+              void readFile(selectedPath, { discardDraft: true });
             }
           }}
           onSendFeedback={sendAnnotationFeedback}
@@ -2661,6 +2865,16 @@ export function ManageApp() {
           sendTarget={annotationSendTarget}
         />
       </section>
+      {closeDocumentPrompt ? (
+        <ManageCloseDocumentDialog
+          error={closeDocumentPrompt.error}
+          isSaving={closeDocumentPrompt.saving}
+          label={entriesByPath.get(closeDocumentPrompt.path)?.name ?? manageOpenFileLabel(closeDocumentPrompt.path)}
+          onCancel={() => setCloseDocumentPrompt(undefined)}
+          onDiscard={() => closeOpenDocument(closeDocumentPrompt.path)}
+          onSave={() => void saveAndCloseDocument()}
+        />
+      ) : null}
       {fileContextMenu && contextMenuEntry ? (
         <ManageFileContextMenu
           canAddToSessionContext={contextMenuEntry.kind === 'file'}
@@ -2749,15 +2963,15 @@ export function requestManageFiles(
 }
 
 export function readStoredManageSidebarSide(): ManageSidebarSide {
-  return window.localStorage.getItem(MANAGE_SIDEBAR_SIDE_STORAGE_KEY) === 'left' ? 'left' : 'right';
+  return clientStorage.getItem(MANAGE_SIDEBAR_SIDE_STORAGE_KEY) === 'left' ? 'left' : 'right';
 }
 
 export function readStoredManageSidebarPinned(): boolean {
-  return window.localStorage.getItem(MANAGE_SIDEBAR_PINNED_STORAGE_KEY) !== 'false';
+  return clientStorage.getItem(MANAGE_SIDEBAR_PINNED_STORAGE_KEY) !== 'false';
 }
 
 export function readStoredManageSidebarWidth(): number {
-  const parsedWidth = Number(window.localStorage.getItem(MANAGE_SIDEBAR_WIDTH_STORAGE_KEY));
+  const parsedWidth = Number(clientStorage.getItem(MANAGE_SIDEBAR_WIDTH_STORAGE_KEY));
   return clampManageSidebarWidth(
     Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : MANAGE_SIDEBAR_DEFAULT_WIDTH,
     window.innerWidth

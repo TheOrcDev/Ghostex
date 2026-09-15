@@ -445,6 +445,11 @@ impl GhostexGpuiApp {
                 // CDXC:AddProject 2026-09-06 DECISION: User: newly added projects become active, switch to their Space, expand their sidebar groups, and scroll into view, just like Quick Access project activation.
                 // Completed clones register through Add too; the shared activation route refreshes the project and focuses or creates its default session.
                 if let Some(project_id) = added_project_id {
+                    this.forward_gpui_added_project_to_sidebar(
+                        &project_id,
+                        remote_machine_id.as_deref(),
+                        cx,
+                    );
                     let scoped_project_id = match remote_machine_id.as_deref() {
                         Some(machine_id) => gpui_remote_scoped_project_id(machine_id, &project_id),
                         None => project_id,

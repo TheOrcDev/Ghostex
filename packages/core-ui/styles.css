@@ -5353,24 +5353,24 @@ body.app-modal-host-body {
 }
 
 .quick-access-surface.previous-sessions-modal .session-history-status-dot {
-  background: #fff;
+  /* CDXC:Sessions 2026-09-15 DECISION: User: make the rightmost session-list dots more apparent in light mode because light dots disappear on the light background. */
+  background: light-dark(#737373, rgb(255 255 255 / 20%));
   border-radius: 9999px;
   display: block;
   height: 6px;
-  opacity: 0.2;
   width: 6px;
 }
 
 .quick-access-surface.previous-sessions-modal
   .session-history-card[data-in-sidebar='true']
   .session-history-status-dot {
-  opacity: 1;
+  background: light-dark(#404040, #fff);
 }
 
 .quick-access-surface.previous-sessions-modal
   .session-history-card[data-session-lifecycle='sleeping']
   .session-history-status-dot {
-  opacity: 0.2;
+  background: light-dark(#737373, rgb(255 255 255 / 20%));
 }
 
 .quick-access-surface.previous-sessions-modal .previous-session-delete-button {

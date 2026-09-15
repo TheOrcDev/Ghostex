@@ -1,6 +1,9 @@
+import { storageScope } from '@/packages/client-storage';
 import { GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY } from '../constants';
 import { isPresentationSnapshot } from './remote-presentation';
 import type { GxserverPresentationSnapshot } from '@/packages/shared/gxserver-protocol';
+
+const clientStorage = storageScope(["remotePresentations"]);
 
 const machineKeyPrefix = `${GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY}:machine:`;
 
@@ -19,7 +22,7 @@ export class GpuiRemoteLastSeenStore {
   read(): Map<string, GxserverPresentationSnapshot> {
     const next = new Map<string, GxserverPresentationSnapshot>();
     try {
-      const legacy = localStorage.getItem(GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY);
+      const legacy = clientStorage.getItem(GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY);
       if (legacy !== null) {
         this.migrating = true;
         try {
@@ -36,12 +39,12 @@ export class GpuiRemoteLastSeenStore {
           // A malformed legacy entry must not hide valid per-machine entries.
         }
       }
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
+      for (let index = 0; index < clientStorage.length; index += 1) {
+        const key = clientStorage.key(index);
         if (!key?.startsWith(machineKeyPrefix)) continue;
         try {
           const machineId = decodeURIComponent(key.slice(machineKeyPrefix.length));
-          const snapshot: unknown = JSON.parse(localStorage.getItem(key) ?? 'null');
+          const snapshot: unknown = JSON.parse(clientStorage.getItem(key) ?? 'null');
           if (machineId.trim() && isPresentationSnapshot(snapshot)) {
             next.set(machineId, snapshot);
             this.pending.delete(machineId);
@@ -69,10 +72,10 @@ export class GpuiRemoteLastSeenStore {
       try {
         const key = `${machineKeyPrefix}${encodeURIComponent(machineId)}`;
         if (update.snapshot === null) {
-          localStorage.removeItem(key);
-        } else if (!update.migrateOnly || localStorage.getItem(key) === null) {
+          clientStorage.removeItem(key);
+        } else if (!update.migrateOnly || clientStorage.getItem(key) === null) {
           update.serialized ??= JSON.stringify(update.snapshot);
-          localStorage.setItem(key, update.serialized);
+          clientStorage.setItem(key, update.serialized);
         }
         this.pending.delete(machineId);
       } catch {
@@ -81,7 +84,7 @@ export class GpuiRemoteLastSeenStore {
     }
     if (this.migrating && this.pending.size === 0) {
       try {
-        localStorage.removeItem(GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY);
+        clientStorage.removeItem(GPUI_REMOTE_LAST_SEEN_PRESENTATIONS_STORAGE_KEY);
         this.migrating = false;
       } catch {
         // Keep the legacy copy until every migrated machine has been stored.

@@ -932,7 +932,7 @@ export function getSettingsSearchSectionDefinitions() {
          */
         {
           key: 'debuggingMode',
-          subtitle: 'Show debug-only UI controls and allow enabled routine diagnostic logs.',
+          subtitle: 'Show debug-only controls, inspect storage usage and budgets, and allow enabled routine diagnostic logs.',
           title: 'Show debug UI controls',
         },
         {

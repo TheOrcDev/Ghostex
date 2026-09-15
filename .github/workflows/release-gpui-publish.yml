@@ -313,6 +313,10 @@ jobs:
           TAP_DIR="$RUNNER_TEMP/homebrew-audit"
           node tooling/release-gpui/publish-homebrew-cask.mjs \
             --version "${VERSION}" --render "$TAP_DIR/Casks/ghostex.rb"
+          if [ ! -f "$TAP_DIR/Casks/ghostex.rb" ]; then
+            echo "Nothing rendered (the official cask already ships ${VERSION}); skipping the audit."
+            exit 0
+          fi
           git -C "$TAP_DIR" init -q
           git -C "$TAP_DIR" add Casks/ghostex.rb
           git -C "$TAP_DIR" -c user.name=ghostex-release -c user.email=release@ghostex.invalid commit -qm "ghostex ${VERSION}"

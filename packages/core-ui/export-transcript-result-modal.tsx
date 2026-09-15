@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import {
   IconCheck,
   IconCircleCheckFilled,
@@ -31,6 +32,8 @@ import {
 import { AppTooltip } from './app-tooltip';
 import { playCopySound } from './copy-sound';
 
+const clientStorage = storageScope(["exportOptions","exportMode"]);
+
 /**
  * CDXC:TranscriptExport 2026-08-24:
  * The export dialog's include-toggles. User and agent messages are never
@@ -63,7 +66,7 @@ function readExportTranscriptIncludeOptions(): ExportTranscriptIncludeOptions {
   }
   try {
     const stored = JSON.parse(
-      window.localStorage.getItem(EXPORT_TRANSCRIPT_INCLUDE_OPTIONS_STORAGE_KEY) ?? 'null'
+      clientStorage.getItem(EXPORT_TRANSCRIPT_INCLUDE_OPTIONS_STORAGE_KEY) ?? 'null'
     ) as Partial<ExportTranscriptIncludeOptions> | null;
     return {
       includeCommands:
@@ -86,7 +89,7 @@ function readExportTranscriptIncludeOptions(): ExportTranscriptIncludeOptions {
 
 function writeExportTranscriptIncludeOptions(options: ExportTranscriptIncludeOptions): void {
   try {
-    window.localStorage.setItem(EXPORT_TRANSCRIPT_INCLUDE_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+    clientStorage.setItem(EXPORT_TRANSCRIPT_INCLUDE_OPTIONS_STORAGE_KEY, JSON.stringify(options));
   } catch {
     // Storage can be unavailable in isolated web, test, and story contexts.
   }
@@ -97,7 +100,7 @@ function readExportTranscriptMode(): ExportTranscriptMode {
     return 'handoff';
   }
   try {
-    return window.localStorage.getItem(EXPORT_TRANSCRIPT_MODE_STORAGE_KEY) === 'export' ? 'export' : 'handoff';
+    return clientStorage.getItem(EXPORT_TRANSCRIPT_MODE_STORAGE_KEY) === 'export' ? 'export' : 'handoff';
   } catch {
     return 'handoff';
   }
@@ -105,7 +108,7 @@ function readExportTranscriptMode(): ExportTranscriptMode {
 
 function writeExportTranscriptMode(mode: ExportTranscriptMode): void {
   try {
-    window.localStorage.setItem(EXPORT_TRANSCRIPT_MODE_STORAGE_KEY, mode);
+    clientStorage.setItem(EXPORT_TRANSCRIPT_MODE_STORAGE_KEY, mode);
   } catch {
     // Storage can be unavailable in isolated web, test, and story contexts.
   }

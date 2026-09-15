@@ -44,16 +44,17 @@
     "generate:mobile-tabler-icons": "node tooling/generate-mobile-tabler-icons.mjs",
     "cli": "cargo run --quiet --manifest-path server/Cargo.toml --bin ghostex --",
     "storybook": "bun run build:sidebar-css && storybook dev -p 6006 --no-open -c packages/core-ui/.storybook",
-    "build:storybook": "bun run build:sidebar-css && storybook build -c packages/core-ui/.storybook",
+    "build:storybook": "bun run storage:check && bun run build:sidebar-css && storybook build -c packages/core-ui/.storybook",
     "web:dev": "vite --config apps/web/vite.config.ts",
     "web:build": "vite build --config apps/web/vite.config.ts",
-    "web:typecheck": "tsc -p apps/web/tsconfig.json --noEmit",
-    "desktop:typecheck": "tsc -p apps/desktop/tsconfig.json --noEmit",
+    "web:typecheck": "bun run storage:check && tsc -p apps/web/tsconfig.json --noEmit",
+    "desktop:typecheck": "bun run storage:check && tsc -p apps/desktop/tsconfig.json --noEmit",
     "sandbox:onboarding": "vite --config apps/desktop/test/onboarding-sandbox/vite.config.ts",
     "help:generate": "bun tooling/ghostex-help/generate.ts",
     "help:check": "bun tooling/ghostex-help/generate.ts --check",
-    "typecheck": "bun run help:check && tsc --noEmit --pretty false",
-    "test": "vitest run"
+    "typecheck": "bun run storage:check && bun run help:check && tsc --noEmit --pretty false",
+    "test": "vitest run",
+    "storage:check": "node tooling/client-storage/check.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { useWorkareaTheme } from '../workarea-theme';
 import {
   IconAdjustmentsHorizontal,
@@ -164,6 +165,8 @@ import {
   type BoardCardViewOptions,
 } from './card-view-options';
 
+const clientStorage = storageScope(["boardView","boardCards","nativeSettings"]);
+
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 
 export type TicketDetailSaveDraft = Omit<DetailDraft, 'isDeleting' | 'isSaving' | 'ticket'> & {
@@ -220,13 +223,13 @@ export function ProjectBoardApp() {
    */
   const [cardView, setCardView] = useState<BoardCardViewOptions>(loadBoardCardViewOptions);
   useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
+    const onStorage = (event: { key: string; newValue: string | null }) => {
       if (event.key === BOARD_CARD_VIEW_STORAGE_KEY) {
         setCardView(loadBoardCardViewOptions());
       }
     };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    const unsubscribeStorage = clientStorage.subscribe(onStorage);
+    return () => unsubscribeStorage();
   }, []);
   const toggleCardViewField = useCallback((key: keyof BoardCardViewOptions, value: boolean) => {
     setCardView((current) => {
@@ -473,7 +476,7 @@ export function ProjectBoardApp() {
     const syncExperimentalFeaturesEnabled = () => {
       setExperimentalFeaturesEnabled(readExperimentalFeaturesEnabled(new URLSearchParams(window.location.search)));
     };
-    const handleStorage = (event: StorageEvent) => {
+    const handleStorage = (event: { key: string; newValue: string | null }) => {
       if (event.key === null || event.key === NATIVE_SETTINGS_STORAGE_KEY) {
         syncExperimentalFeaturesEnabled();
       }
@@ -483,11 +486,11 @@ export function ProjectBoardApp() {
         syncExperimentalFeaturesEnabled();
       }
     };
-    window.addEventListener('storage', handleStorage);
+    const unsubscribeStorage = clientStorage.subscribe(handleStorage);
     window.addEventListener('focus', syncExperimentalFeaturesEnabled);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
-      window.removeEventListener('storage', handleStorage);
+      unsubscribeStorage();
       window.removeEventListener('focus', syncExperimentalFeaturesEnabled);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
@@ -495,7 +498,7 @@ export function ProjectBoardApp() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(
+      clientStorage.setItem(
         PROJECT_BOARD_VIEW_PREFERENCES_STORAGE_KEY,
         JSON.stringify({ estimateFilter, priorityFilter, sortOption, tagFilter })
       );

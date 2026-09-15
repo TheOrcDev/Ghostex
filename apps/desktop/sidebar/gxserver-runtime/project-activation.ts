@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import type { GpuiSidebarRuntime } from './core';
 import { createGpuiSidebarSettings } from './helpers/bootstrap';
 import {
@@ -13,6 +14,8 @@ import {
   createGxserverPresentationProjectSessionId,
   createGxserverPresentationSessionsByProjectFromGroups,
 } from '@/packages/shared/gxserver-presentation-sidebar-projection';
+
+const clientStorage = storageScope(["projectLastSession"]);
 
 const storagePrefix = 'ghostex.gpui.project-last-session.v1:';
 const pendingReveals = new WeakMap<GpuiSidebarRuntime, string>();
@@ -32,8 +35,8 @@ export function rememberGpuiProjectSession(runtime: GpuiSidebarRuntime, projectI
   const sidebarSessionId = remote ? sessionId : createGxserverPresentationProjectSessionId(projectId, sessionId);
   try {
     const key = storagePrefix + scopedProjectId;
-    if (localStorage.getItem(key) !== sidebarSessionId) {
-      localStorage.setItem(key, sidebarSessionId);
+    if (clientStorage.getItem(key) !== sidebarSessionId) {
+      clientStorage.setItem(key, sidebarSessionId);
     }
   } catch {
     runtime.postSidebarActionToast('warning', 'Could not remember the selected project session.');
@@ -78,7 +81,7 @@ export function activateGpuiProject(runtime: GpuiSidebarRuntime, projectId: stri
         remote
           ? createGpuiRemotePresentationSessionId(remote.machineId, remote.projectId, sessionId)
           : createGxserverPresentationProjectSessionId(projectId, sessionId);
-      const remembered = localStorage.getItem(storagePrefix + projectId);
+      const remembered = clientStorage.getItem(storagePrefix + projectId);
       const selected = sessions.find((session) => sidebarId(session.sessionId) === remembered) ?? sessions[0];
       pendingReveals.set(runtime, projectId);
       if (selected) {

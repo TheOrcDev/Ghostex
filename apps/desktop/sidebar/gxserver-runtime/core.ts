@@ -1313,7 +1313,7 @@ export class GpuiSidebarRuntime {
         await this.postponeDelayedSend(message.sessionId, message.delayMs);
         return;
       case 'cancelDelayedSend':
-        await this.cancelRemoteDelayedSend(message.sessionId);
+        await this.cancelDelayedSend(message.sessionId);
         return;
       case 'openAutomationsPage':
         /*

@@ -1,3 +1,6 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["verbose"]);
 // Per-session Verbose Mode override. The `sessionChatVerboseMode` Ghostex
 // setting stays the default for every chat; the composer pill pins a value for
 // one session only, so a chat keeps its mode across reloads and restarts
@@ -6,9 +9,9 @@
 
 const STORAGE_PREFIX = 'ghostex.sessionChat.verbose.';
 
-function storage(): Storage | null {
+function storage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     // Storage disabled by the embedder: the pill still works, just per-mount.
     return null;

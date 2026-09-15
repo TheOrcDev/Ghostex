@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import {
   KEEP_AWAKE_DURATION_OPTIONS,
   getSidebarTitlebarForegroundForBackground,
@@ -32,6 +33,8 @@ import type {
   TitlebarKeepAwakeSettings,
   TitlebarProjectState,
 } from './types';
+
+const clientStorage = storageScope(["titlebarGit","keepAwake","keepAwakeSync","tipsRead"]);
 
 export function mergeTitlebarProjectState(
   current: TitlebarProjectState,
@@ -135,7 +138,7 @@ export function cacheTitlebarGitState(state: TitlebarProjectState): void {
   if (cacheKey === undefined || state.git.isBusy || !isCacheableTitlebarGitState(state.git)) {
     return;
   }
-  localStorage.setItem(cacheKey, JSON.stringify(state.git));
+  clientStorage.setItem(cacheKey, JSON.stringify(state.git));
 }
 
 export function isCacheableTitlebarGitState(state: SidebarGitState): boolean {
@@ -150,7 +153,7 @@ export function readCachedTitlebarGitState(
     return undefined;
   }
   try {
-    const parsed = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    const parsed = JSON.parse(clientStorage.getItem(cacheKey) || 'null');
     return normalizeCachedTitlebarGitState(parsed);
   } catch {
     return undefined;
@@ -405,7 +408,7 @@ export function createTitlebarKeepAwakeSettings(
 
 export function readStoredKeepAwakeRuntime(): KeepAwakeRuntimeState | undefined {
   try {
-    const parsed = JSON.parse(localStorage.getItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY) || 'null');
+    const parsed = JSON.parse(clientStorage.getItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY) || 'null');
     return parseKeepAwakeRuntimeState(parsed);
   } catch {
     return undefined;
@@ -457,7 +460,7 @@ export function publishKeepAwakeRuntimeSync(state: KeepAwakeRuntimeSyncState): v
     suppressAutoStart: state.suppressAutoStart,
     updatedAtMs: Date.now(),
   };
-  localStorage.setItem(KEEP_AWAKE_RUNTIME_SYNC_STORAGE_KEY, JSON.stringify(payload));
+  clientStorage.setItem(KEEP_AWAKE_RUNTIME_SYNC_STORAGE_KEY, JSON.stringify(payload));
   window.dispatchEvent(
     new CustomEvent<KeepAwakeRuntimeSyncState>(KEEP_AWAKE_RUNTIME_CHANGED_EVENT, {
       detail: {
@@ -470,7 +473,7 @@ export function publishKeepAwakeRuntimeSync(state: KeepAwakeRuntimeSyncState): v
 
 export function readStoredTitlebarTipIds(): Set<string> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(TITLEBAR_TIPS_READ_STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(clientStorage.getItem(TITLEBAR_TIPS_READ_STORAGE_KEY) || '[]');
     if (!Array.isArray(parsed)) {
       return new Set();
     }
@@ -481,7 +484,7 @@ export function readStoredTitlebarTipIds(): Set<string> {
 }
 
 export function writeStoredTitlebarTipIds(ids: Set<string>) {
-  localStorage.setItem(TITLEBAR_TIPS_READ_STORAGE_KEY, JSON.stringify([...ids]));
+  clientStorage.setItem(TITLEBAR_TIPS_READ_STORAGE_KEY, JSON.stringify([...ids]));
 }
 
 export async function applyKeepAwakeLidSleepPrevention(

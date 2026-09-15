@@ -1,3 +1,4 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
 import { createRoot } from 'react-dom/client';
 import './find-prompts.css';
 import type {
@@ -151,8 +152,8 @@ const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error('Ghostex find root element was not found.');
 }
-createRoot(rootElement).render(
+bootClientStorage(() => { createRoot(rootElement).render(
   <div className='native-sidebar-shell gpui-find-prompts'>
     <FindPromptsView transport={transport} />
   </div>
-);
+); });

@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:RepoStructure 2026-08-22:
 Split out of the single 21,861-line `gxserver-runtime.ts`. Pure move: no logic
@@ -21,6 +22,8 @@ import {
   normalizeWorkspaceProjectIconDataUrl,
   normalizeWorkspaceThemeColor,
 } from '@/packages/shared/workspace-project-appearance';
+
+const clientStorage = storageScope(["remoteOrder","remoteRecents"]);
 
 export function createGpuiRecentProjects(
   recentProjects: readonly GxserverRecentProjectDomainState[],
@@ -133,7 +136,7 @@ machine ids and remote project ids.
 */
 export function readStoredGpuiRemoteGroupOrder(): Map<string, string[]> {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(GPUI_REMOTE_GROUP_ORDER_STORAGE_KEY) ?? '{}');
+    const raw: unknown = JSON.parse(clientStorage.getItem(GPUI_REMOTE_GROUP_ORDER_STORAGE_KEY) ?? '{}');
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       return new Map();
     }
@@ -157,7 +160,7 @@ export function readStoredGpuiRemoteGroupOrder(): Map<string, string[]> {
 
 export function writeStoredGpuiRemoteGroupOrder(orderByMachineId: ReadonlyMap<string, readonly string[]>): void {
   try {
-    localStorage.setItem(GPUI_REMOTE_GROUP_ORDER_STORAGE_KEY, JSON.stringify(Object.fromEntries(orderByMachineId)));
+    clientStorage.setItem(GPUI_REMOTE_GROUP_ORDER_STORAGE_KEY, JSON.stringify(Object.fromEntries(orderByMachineId)));
   } catch {
     // CEF storage may be unavailable in tests or early bootstrap; the in-memory order still drives this session.
   }
@@ -167,7 +170,7 @@ export function readStoredGpuiRemoteRecentProjects(): Map<string, GxserverRecent
   try {
     return groupGpuiRemoteRecentProjectsByMachine(
       normalizeStoredGpuiRemoteRecentProjects(
-        JSON.parse(localStorage.getItem(GPUI_REMOTE_RECENT_PROJECTS_STORAGE_KEY) ?? '[]')
+        JSON.parse(clientStorage.getItem(GPUI_REMOTE_RECENT_PROJECTS_STORAGE_KEY) ?? '[]')
       )
     );
   } catch {
@@ -206,7 +209,7 @@ export function writeStoredGpuiRemoteRecentProjects(
     and count; do not persist tokens, SSH hosts, usernames, command text,
     terminal output, or local gxserver project rows.
     */
-    localStorage.setItem(GPUI_REMOTE_RECENT_PROJECTS_STORAGE_KEY, JSON.stringify(rows));
+    clientStorage.setItem(GPUI_REMOTE_RECENT_PROJECTS_STORAGE_KEY, JSON.stringify(rows));
   } catch {
     // CEF storage may be unavailable in tests or early bootstrap; the in-memory rows still drive this session.
   }

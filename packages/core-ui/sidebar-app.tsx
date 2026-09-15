@@ -3,6 +3,12 @@ import { useSystemColorScheme } from './use-system-color-scheme';
 import { resolveSidebarTheme } from '@/packages/shared/session-grid-contract';
 import { ImportSessionsCard, useImportSessionsIntro } from './sidebar-app/import-sessions-card';
 import { SidebarProjectsLoading } from './sidebar-app/projects-loading';
+import {
+  clampSidebarAddProjectContextMenuPosition,
+  SidebarAddProjectContextMenu,
+  SidebarEmptyProjectsState,
+  type SidebarAddProjectContextMenuPosition,
+} from './sidebar-app/empty-projects-state';
 import { monitorAccountSetup } from './accounts/setup-monitor';
 import { Cursor, KeyboardSensor, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider } from '@dnd-kit/react';
@@ -21,6 +27,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   type ApplySidebarSpaceEditorResultMessage,
   type ExtensionToSidebarMessage,
+  type SidebarAssignAddedProjectToSelectedSpaceMessage,
   type SidebarPreviousSessionItem,
 } from '../shared/session-grid-contract';
 import { normalizeWorkspaceThemeColor } from '../shared/workspace-project-appearance';
@@ -79,6 +86,7 @@ import {
   type SidebarProjectCollectionsState,
 } from './project-collections';
 import {
+  addSpaceProjectMember,
   applySidebarSpaceEditorResult,
   areSidebarSpacesStatesEqual,
   getSidebarSpaceIdsContainingCollection,
@@ -160,6 +168,7 @@ import {
   getProjectCollectionFamilyProjectIds,
   getRemoteProjectCollectionFamilyProjectIds,
   LOCAL_PROJECT_LIST_SCOPE_ID,
+  moveProjectGroupFamilyToStart,
   moveRemoteMachineIdToDropTarget,
   summarizePointerEventForPinnedReorder,
   summarizeSidebarWakeScrollGeometry,
@@ -887,6 +896,16 @@ export function SidebarApp({
     requestNewSession();
   };
 
+  const [addProjectContextMenuPosition, setAddProjectContextMenuPosition] =
+    useState<SidebarAddProjectContextMenuPosition>();
+  const handleSidebarContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!emptyProjectListAddProject || !isEmptySidebarDoubleClick(event)) {
+      return;
+    }
+    event.preventDefault();
+    setAddProjectContextMenuPosition(clampSidebarAddProjectContextMenuPosition(event.clientX, event.clientY));
+  };
+
   const handleSidebarClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -1113,6 +1132,11 @@ export function SidebarApp({
       `updateRemoteSpaces` (remote) then pushes it to the owning daemon.
       */
       applySpaceEditorResult(event.data);
+      return;
+    }
+
+    if (event.data.type === 'assignAddedProjectToSelectedSpace') {
+      assignAddedProjectToSelectedSpace(event.data);
       return;
     }
 
@@ -2551,6 +2575,69 @@ export function SidebarApp({
     return { collectionState, groupIds, resolveProjectId, sectionKey, sectionSpaces };
   };
   /*
+   * CDXC:Spaces 2026-09-15 DECISION:
+   * User: a project added through Add Project is assigned to the Space that is open in the sidebar and goes to the top of it.
+   * The host posts this before it activates the project, so the membership already exists when the activation reveal resolves the project's Space and the sidebar stays in the user's Space instead of jumping to Other. Other and a Space-incapable daemon take no membership; the move to the top still happens so the new project is first in its section.
+   * The move waits for the group to be published: the presentation patch carrying the new project arrives after this message, so the effect below retries on every project-list change until the group exists.
+   */
+  const pendingAddedProjectTopMoveRef = useRef<{ machineId: string | undefined; projectId: string }>(undefined);
+  const moveAddedProjectToTopWhenPublished = useEffectEvent(() => {
+    const pending = pendingAddedProjectTopMoveRef.current;
+    if (!pending) {
+      return;
+    }
+    const section = describeSidebarSpaceSection(pending.machineId);
+    const groupId = section.groupIds.find((candidate) => section.resolveProjectId(candidate) === pending.projectId);
+    if (!groupId) {
+      return;
+    }
+    pendingAddedProjectTopMoveRef.current = undefined;
+    const nextGroupIds = moveProjectGroupFamilyToStart(section.groupIds, groupId, groupsById);
+    if (nextGroupIds.every((candidate, index) => section.groupIds[index] === candidate)) {
+      return;
+    }
+    vscode.postMessage({ groupIds: nextGroupIds, type: 'syncGroupOrder' });
+  });
+  const assignAddedProjectToSelectedSpace = useEffectEvent(
+    (message: SidebarAssignAddedProjectToSelectedSpaceMessage) => {
+      const projectId = message.projectId.trim();
+      if (!projectId) {
+        return;
+      }
+      const machineId = message.remoteMachineId;
+      const section = describeSidebarSpaceSection(machineId);
+      const selection = resolveSelectedSidebarSpace(
+        section.sectionSpaces,
+        selectedSpaceIdBySectionKey[section.sectionKey]
+      );
+      if (selection?.kind === 'space') {
+        const existingGroupId = section.groupIds.find((candidate) => section.resolveProjectId(candidate) === projectId);
+        const alreadyVisible =
+          existingGroupId !== undefined &&
+          createSelectedSidebarSpaceVisibility({
+            collectionState: section.collectionState,
+            groupIds: section.groupIds,
+            groupsById,
+            resolveProjectId: section.resolveProjectId,
+            selection,
+          })(existingGroupId);
+        if (!alreadyVisible) {
+          const spaceId = selection.spaceId;
+          if (machineId) {
+            updateRemoteSpaces(machineId, (previous) => addSpaceProjectMember(previous, spaceId, projectId));
+          } else {
+            setSpacesState((previous) => (previous ? addSpaceProjectMember(previous, spaceId, projectId) : previous));
+          }
+        }
+      }
+      pendingAddedProjectTopMoveRef.current = { machineId, projectId };
+      moveAddedProjectToTopWhenPublished();
+    }
+  );
+  useEffect(() => {
+    moveAddedProjectToTopWhenPublished();
+  }, [unfilteredReferenceProjectGroupIds, unfilteredRemoteProjectGroupIdsByMachineId]);
+  /*
    * CDXC:Spaces 2026-09-11 DECISION:
    * User: switching Spaces restores the state each Space was last in, so every
    * focus change is filed under the Space that owns the focused session's
@@ -3029,18 +3116,16 @@ export function SidebarApp({
   ) : !hasReceivedSnapshot || hasGxserverUnavailablePlaceholder ? (
     <SidebarProjectsLoading />
   ) : (
-    <div className='reference-sidebar-empty-state'>
-      {shouldShowFirstProjectEmptyState ? (
-        <>
-          No Projects Added.
-          <br />
-          <br />
-          {'Open the More menu at the top of the sidebar and choose Add Project to get started!'}
-        </>
-      ) : (
-        'No projects'
-      )}
-    </div>
+    <SidebarEmptyProjectsState
+      copy={
+        shouldShowFirstProjectEmptyState
+          ? 'No projects added yet.'
+          : selectedLocalSpace?.kind === 'space'
+            ? 'No projects in this Space.'
+            : 'No projects'
+      }
+      onAddProject={() => openAddProjectModal()}
+    />
   );
   const { hasOverflow: sessionGroupsHaveScrollableOverflow } = useScrollGlowState(sessionGroupsContentRef);
   /*
@@ -3899,6 +3984,25 @@ export function SidebarApp({
       },
     };
   })();
+  /** The Add Project action for the selected machine while its project list is empty; drives the empty-area right-click menu. */
+  const emptyProjectListAddProject: (() => void) | undefined = (() => {
+    if (isSessionSearchOpen || shouldHideReferenceSectionsForSearchEmptyState) {
+      return undefined;
+    }
+    if (selectedRemoteMachineId === undefined) {
+      return displayedReferenceProjectGroupIds.length === 0 &&
+        hasReceivedSnapshot &&
+        !hasGxserverUnavailablePlaceholder &&
+        !showGxserverUnavailableEmptyState
+        ? () => openAddProjectModal()
+        : undefined;
+    }
+    const machineId = selectedRemoteMachineId;
+    return (remoteProjectGroupIdsByMachineId[machineId] ?? []).length === 0 &&
+      remoteMachineRuntimeStatuses[machineId] === 'connected'
+      ? () => openAddProjectModal(machineId)
+      : undefined;
+  })();
 
   const { isVisible: showImportSessionsIntro, openImportSessions } = useImportSessionsIntro(openExternalSessions);
 
@@ -4024,6 +4128,7 @@ export function SidebarApp({
             data-sidebar-custom-theme={String(Boolean(normalizeWorkspaceThemeColor(customThemeColor)))}
             data-sidebar-theme={theme}
             onClickCapture={handleSidebarClickCapture}
+            onContextMenu={handleSidebarContextMenu}
             onDoubleClick={handleSidebarDoubleClick}
           >
             <section
@@ -4393,6 +4498,11 @@ export function SidebarApp({
                                     onReorderSpaces={(orderedSpaceIds) =>
                                       reorderRemoteSpaces(machine.id, orderedSpaceIds)
                                     }
+                                    onAddProject={
+                                      remoteMachineRuntimeStatuses[machine.id] === 'connected'
+                                        ? () => openAddProjectModal(machine.id)
+                                        : undefined
+                                    }
                                     onSelectSpace={(spaceId) => switchSidebarSpaceFromUser(machine.id, spaceId)}
                                     selectedSpaceId={machineSelectedSpace?.spaceId}
                                     sessionSummaryBySpaceId={remoteSpaceSessionSummariesByMachineId[machine.id]}
@@ -4570,6 +4680,14 @@ export function SidebarApp({
                           referenceLayoutElement
                         )
                       : null}
+                    {addProjectContextMenuPosition && emptyProjectListAddProject ? (
+                      <SidebarAddProjectContextMenu
+                        onAddProject={emptyProjectListAddProject}
+                        onDismiss={() => setAddProjectContextMenuPosition(undefined)}
+                        position={addProjectContextMenuPosition}
+                        vscode={vscode}
+                      />
+                    ) : null}
                   </DragDropProvider>
                 </div>
               </div>

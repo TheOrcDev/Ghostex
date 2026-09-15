@@ -336,6 +336,10 @@ async function checkSparkleBuildNumber(options) {
       'STALE CHECK, not a product regression - appcast.xml contains no <sparkle:version> elements, so this check would pass for any build number. Fix the assertion, not the release.'
     );
   }
+  if (buildVersion === maxVersion && options.allowExistingRelease) {
+    /* The macOS stage already advanced the feed for this version; the recovery amends the same release. */
+    return warn(`Sparkle already carries build ${buildVersion} (recovery redispatch of a live release).`);
+  }
   if (buildVersion <= maxVersion) {
     return fail(`Build ${buildVersion} must exceed latest Sparkle build ${maxVersion}.`);
   }

@@ -170,7 +170,9 @@ export function SessionAccountsPanel({
                     title={a.status !== 'ready' ? 'Reconnect this account in Settings' : undefined}
                     onClick={() => {
                       if (a.status === 'ready') {
+                        // CDXC:AgentProviders 2026-09-15 DECISION: User: picking an account in the Switch account submenu closes the menu and submenu instantly; the switch card in the chat carries the progress from there.
                         void request({ operation: 'select', accountId: a.id });
+                        close();
                       } else {
                         manageAccounts();
                       }

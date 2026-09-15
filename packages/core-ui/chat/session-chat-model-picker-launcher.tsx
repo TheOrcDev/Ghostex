@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { lazy, Suspense, useEffect, useRef, useState, type RefObject } from 'react';
 import { useSidebarStore } from '@/packages/core-ui/sidebar-store';
 import {
@@ -12,6 +13,8 @@ import type { SessionChatOptionDispatchReceipt } from './session-chat-option-sta
 import type { SessionChatSelectionOptions } from '@/packages/shared/session-chat';
 import type { ModelPickerRequest, ModelPickerSelection } from './session-chat-model-picker';
 import { QUICK_MODEL_PICKER_ENABLED } from './session-chat-model-picker-platform';
+
+const clientStorage = storageScope(["modelOutbox"]);
 
 // Keep the build-time condition at the import so esbuild never traverses the mobile picker asset graph.
 const SessionChatModelPicker =
@@ -33,7 +36,7 @@ interface OutboxSelection extends ModelPickerSelection {
 
 function readOutbox(key: string): OutboxSelection | null {
   try {
-    const value = JSON.parse(localStorage.getItem(key) ?? 'null');
+    const value = JSON.parse(clientStorage.getItem(key) ?? 'null');
     return value && typeof value.id === 'string' && typeof value.model === 'string' && typeof value.effort === 'string'
       ? value
       : null;
@@ -117,7 +120,7 @@ export function SessionChatModelPickerLauncher(
           if (deliveries.get(storageKey) === operation) deliveries.delete(storageKey);
         }
         if (!accepted) return;
-        if (readOutbox(storageKey)?.id === outbox.id) localStorage.removeItem(storageKey);
+        if (readOutbox(storageKey)?.id === outbox.id) clientStorage.removeItem(storageKey);
         if (cancelled || latestOutbox.current?.id !== outbox.id) return;
         setOutbox(null);
       } catch {
@@ -184,7 +187,7 @@ export function SessionChatModelPickerLauncher(
       const key = `ghostex.model-selection-outbox.${latest.current.controller.sessionKey ?? ''}`;
       const next = { ...selection, options: { ...latestOutbox.current?.options, ...options }, id: crypto.randomUUID() };
       try {
-        localStorage.setItem(key, JSON.stringify(next));
+        clientStorage.setItem(key, JSON.stringify(next));
       } catch {
         // Keep the in-memory intent until the connection accepts it.
       }
@@ -226,7 +229,7 @@ export function SessionChatModelPickerLauncher(
       return;
     const next = { ...selection, options: latestOutbox.current?.options, id: crypto.randomUUID() };
     try {
-      localStorage.setItem(storageKey, JSON.stringify(next));
+      clientStorage.setItem(storageKey, JSON.stringify(next));
     } catch {
       // Keep the in-memory intent until the connection accepts it.
     }

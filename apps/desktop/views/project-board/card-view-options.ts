@@ -1,3 +1,6 @@
+import { storageScope } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["boardCards"]);
 /*
  * CDXC:ProjectBoard 2026-08-24:
  * The Kanban "View" menu lets the user hide every card detail except the
@@ -43,7 +46,7 @@ export const BOARD_CARD_VIEW_STORAGE_KEY = 'ghostexProjectBoardCardView.v1';
 
 export function loadBoardCardViewOptions(): BoardCardViewOptions {
   try {
-    const raw = window.localStorage.getItem(BOARD_CARD_VIEW_STORAGE_KEY);
+    const raw = clientStorage.getItem(BOARD_CARD_VIEW_STORAGE_KEY);
     if (!raw) {
       return { ...BOARD_CARD_VIEW_DEFAULTS };
     }
@@ -62,7 +65,7 @@ export function loadBoardCardViewOptions(): BoardCardViewOptions {
 
 export function saveBoardCardViewOptions(options: BoardCardViewOptions): void {
   try {
-    window.localStorage.setItem(BOARD_CARD_VIEW_STORAGE_KEY, JSON.stringify(options));
+    clientStorage.setItem(BOARD_CARD_VIEW_STORAGE_KEY, JSON.stringify(options));
   } catch {
     // Persistence is best-effort; the in-memory state still applies.
   }

@@ -1,10 +1,13 @@
+import { storageScope } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["hiddenItems"]);
 const STORAGE_KEY = 'ghostex.sidebar.hidden-items.v1';
 
 export type SidebarHiddenItems = { collectionKeys: string[]; groupIds: string[] };
 
 export function readSidebarHiddenItems(): SidebarHiddenItems {
   try {
-    const value = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null') as Partial<SidebarHiddenItems> | null;
+    const value = JSON.parse(clientStorage.getItem(STORAGE_KEY) ?? 'null') as Partial<SidebarHiddenItems> | null;
     return {
       collectionKeys: uniqueStrings(value?.collectionKeys),
       groupIds: uniqueStrings(value?.groupIds),
@@ -15,7 +18,7 @@ export function readSidebarHiddenItems(): SidebarHiddenItems {
 }
 
 export function writeSidebarHiddenItems(value: SidebarHiddenItems): void {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+  clientStorage.setItem(STORAGE_KEY, JSON.stringify(value));
 }
 
 function uniqueStrings(value: unknown): string[] {

@@ -1,3 +1,4 @@
+import { flushClientStorage, storageFailure, subscribeStorage } from '@/packages/client-storage';
 import { saveDraftToDisk, readDraftsFromDisk, removeDraftFromDisk } from './session-chat-draft-disk';
 import type { SessionChatDraftVersion } from '@/packages/shared/session-chat-queue';
 import { SessionChatStorageIndex } from './session-chat-storage-index';
@@ -17,6 +18,7 @@ export type PendingDraft = {
   updatedAt: number;
 };
 const pendingIndex = new SessionChatStorageIndex<PendingDraft>(
+  'draftOutbox',
   PREFIX,
   (raw) => {
     const entry = JSON.parse(raw) as PendingDraft;
@@ -69,11 +71,15 @@ export function hasPendingDraftSaves(sessionKey?: string): boolean {
   return Boolean(workers.get(sessionKey)?.running) || pendingDrafts(sessionKey).length > 0;
 }
 export function draftSaveStatus(sessionKey?: string): string {
-  return sessionKey ? (statuses.get(sessionKey) ?? '') : '';
+  if (!sessionKey) return '';
+  if (['drafts', 'recovery', 'recoveryDismissed', 'draftOutbox', 'composerSelection'].some((id) => storageFailure(id as Parameters<typeof storageFailure>[0])))
+    return 'Draft could not be saved on this computer. Keep this view open until saving succeeds.';
+  return statuses.get(sessionKey) ?? '';
 }
 export function subscribeDraftSaveStatus(callback: () => void): () => void {
   window.addEventListener(EVENT, callback);
-  return () => window.removeEventListener(EVENT, callback);
+  const unsubscribe = subscribeStorage(callback);
+  return () => { window.removeEventListener(EVENT, callback); unsubscribe(); };
 }
 export function reportDraftStorageFailure(sessionKey: string): void {
   status(sessionKey, 'Draft could not be saved on this computer. Keep this view open until saving succeeds.');
@@ -231,6 +237,7 @@ export async function persistDraftsForRelease(sessionKey: string): Promise<Pendi
     observed = diskTail;
     await observed;
   } while (observed !== diskTail);
+  await flushClientStorage(['drafts', 'recovery', 'recoveryDismissed', 'draftOutbox', 'composerSelection', 'questionDrafts']);
   return pendingDrafts(sessionKey);
 }
 

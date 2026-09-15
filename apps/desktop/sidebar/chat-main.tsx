@@ -1,3 +1,4 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
 import '@/packages/core-ui/styles.css';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -18,8 +19,14 @@ let active: ReturnType<typeof activateSessionChatPage> | undefined;
 let activeActivation: SessionChatPageActivation | undefined;
 let bootstrapTimer: number | undefined;
 let awaitingBootstrap = false;
+let storageReady = false;
+let pendingActivation: SessionChatPageActivation | undefined;
 
 function activate(activation: SessionChatPageActivation): void {
+  if (!storageReady) {
+    if (!pendingActivation || BigInt(activation.generation) >= BigInt(pendingActivation.generation)) pendingActivation = activation;
+    return;
+  }
   if (!/^\d+$/.test(activation.generation)) return;
   if (activeActivation && BigInt(activation.generation) < BigInt(activeActivation.generation)) return;
   let params: URLSearchParams;
@@ -57,6 +64,7 @@ function activate(activation: SessionChatPageActivation): void {
 
 namespace.onSessionChatActivate = activate;
 namespace.onSessionChatDeactivate = (generation) => {
+  if (pendingActivation?.generation === generation) pendingActivation = undefined;
   if (activeActivation?.generation !== generation) return;
   flushSync(() => root.render(null));
   active?.dispose();
@@ -78,6 +86,7 @@ namespace.onGxserverBootstrapChanged = (candidate) => {
 
 let bootstrapAttempts = 0;
 function initialize(): void {
+  if (!storageReady) return;
   if (active || awaitingBootstrap) return;
   if (namespace.sessionChatActivation) {
     activate(namespace.sessionChatActivation);
@@ -96,7 +105,11 @@ function initialize(): void {
   bootstrapTimer = window.setTimeout(initialize, 120);
 }
 
-initialize();
+bootClientStorage(() => {
+  storageReady = true;
+  if (pendingActivation) activate(pendingActivation);
+  initialize();
+});
 window.addEventListener('pagehide', () => {
   if (bootstrapTimer !== undefined) window.clearTimeout(bootstrapTimer);
   active?.dispose();

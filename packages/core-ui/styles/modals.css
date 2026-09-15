@@ -3610,15 +3610,11 @@ html:has(body.app-modal-host-native-window-body) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* CDXC:DelayedSend 2026-09-15 WHY:
+   Native modals fit their window once when opened. Reserve room for the date/time input and awake picker before switching triggers so the footer stays reachable. */
 .delayed-send-trigger-detail-slot {
   align-items: center;
   display: grid;
-  min-height: 70px;
-}
-
-/* CDXC:DelayedSend 2026-09-14 WHY:
-   Native modals fit their window once when opened. Reserve the awake picker's height before switching triggers so the footer stays reachable. */
-.delayed-send-has-agent-picker .delayed-send-trigger-detail-slot {
   min-height: 112px;
 }
 

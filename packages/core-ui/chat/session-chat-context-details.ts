@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:SessionChatDetectedOptions 2026-09-04 DECISION:
 User: the context meter popover gets a "More details" section under the Compact
@@ -25,6 +26,8 @@ import {
   type ContextDetailsAgent,
 } from './session-chat-context-details-agents';
 import { formatSessionChatContextTokens } from './session-chat-context-meter';
+
+const clientStorage = storageScope(["claudeContext","codexContext"]);
 
 export type SessionChatContextDetailGroupId = 'usage' | 'context' | 'session';
 
@@ -552,7 +555,7 @@ export function readSessionChatContextDetailsPreferences(
   if (!cachedPreferences[agent]) {
     try {
       cachedPreferences[agent] = normalizeSessionChatContextDetailsPreferences(
-        JSON.parse(window.localStorage.getItem(preferenceKeys[agent]) ?? 'null'),
+        JSON.parse(clientStorage.getItem(preferenceKeys[agent]) ?? 'null'),
         agent
       );
     } catch {
@@ -567,7 +570,7 @@ export function writeSessionChatContextDetailsPreferences(
   agent: ContextDetailsAgent = 'claude'
 ): void {
   const normalized = normalizeSessionChatContextDetailsPreferences(next, agent);
-  window.localStorage.setItem(preferenceKeys[agent], JSON.stringify(normalized));
+  clientStorage.setItem(preferenceKeys[agent], JSON.stringify(normalized));
   cachedPreferences[agent] = normalized;
   window.dispatchEvent(new Event(CHANGED_EVENT));
 }
@@ -586,15 +589,15 @@ function subscribe(listener: () => void): () => void {
     delete cachedPreferences.codex;
     listener();
   };
-  const onStorage = (event: StorageEvent) => {
+  const onStorage = (event: { key: string; newValue: string | null }) => {
     if (event.key === null || Object.values(preferenceKeys).includes(event.key)) reread();
   };
   window.addEventListener(CHANGED_EVENT, reread);
-  window.addEventListener('storage', onStorage);
+  const unsubscribeStorage = clientStorage.subscribe(onStorage);
   window.addEventListener('focus', reread);
   return () => {
     window.removeEventListener(CHANGED_EVENT, reread);
-    window.removeEventListener('storage', onStorage);
+    unsubscribeStorage();
     window.removeEventListener('focus', reread);
   };
 }

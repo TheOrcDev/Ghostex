@@ -635,6 +635,23 @@ export function moveProjectGroupFamilyToEnd(
   return [...groupIds.filter((groupId) => !isFamilyGroup(groupId)), ...groupIds.filter(isFamilyGroup)];
 }
 
+export function moveProjectGroupFamilyToStart(
+  groupIds: readonly string[],
+  sourceGroupId: string,
+  groupsById: SidebarProjectGroupLookup
+): string[] {
+  const sourceProjectId = groupsById[sourceGroupId]?.projectContext?.editor.projectId;
+  if (!sourceProjectId) {
+    return [...groupIds];
+  }
+  const familyProjectIds = new Set(getProjectCollectionFamilyProjectIds(sourceProjectId, groupIds, groupsById));
+  const isFamilyGroup = (groupId: string) => {
+    const projectId = groupsById[groupId]?.projectContext?.editor.projectId;
+    return Boolean(projectId && familyProjectIds.has(projectId));
+  };
+  return [...groupIds.filter(isFamilyGroup), ...groupIds.filter((groupId) => !isFamilyGroup(groupId))];
+}
+
 /*
  * CDXC:Projects 2026-07-21:
  * Collection drags use feedback "none", so dnd-kit's rect-overlap collision

@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { cn } from '@/packages/components/utils';
 import {
@@ -30,6 +31,8 @@ import {
   type GitDiffViewMode,
   type GitFileDiffModalDraft,
 } from './git-file-diff-modal';
+
+const clientStorage = storageScope(["gitDiff"]);
 
 type GitCommitInlineDiffMode = 'all' | 'file';
 
@@ -663,7 +666,7 @@ function readGitCommitDiffPreferences(): GitCommitDiffPreferences {
     return DEFAULT_GIT_COMMIT_DIFF_PREFERENCES;
   }
   try {
-    const rawPreferences = window.localStorage.getItem(GIT_COMMIT_DIFF_PREFERENCES_STORAGE_KEY);
+    const rawPreferences = clientStorage.getItem(GIT_COMMIT_DIFF_PREFERENCES_STORAGE_KEY);
     if (!rawPreferences) {
       return DEFAULT_GIT_COMMIT_DIFF_PREFERENCES;
     }
@@ -690,7 +693,7 @@ function writeGitCommitDiffPreferences(preferences: GitCommitDiffPreferences): v
     return;
   }
   try {
-    window.localStorage.setItem(GIT_COMMIT_DIFF_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    clientStorage.setItem(GIT_COMMIT_DIFF_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
   } catch {
     // localStorage can be unavailable in isolated test/story contexts.
   }

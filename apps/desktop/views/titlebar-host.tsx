@@ -1,3 +1,5 @@
+import { managedStore } from '@/packages/client-storage';
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
 import { retainAppScrollbars } from '@/packages/components/ui/app-scrollbars';
 import { createRoot } from 'react-dom/client';
 import '@/packages/core-ui/styles.css';
@@ -38,8 +40,11 @@ if (titlebarRootElement && initialTitlebarDropdownPanelKind) {
   titlebarRootElement.style.width = '100%';
 }
 if (titlebarRootElement && titlebarRootElement.dataset.ghostexTitlebar !== 'false') {
-  createRoot(titlebarRootElement).render(<App />);
+  bootClientStorage(() => { createRoot(titlebarRootElement).render(<App />); });
 }
 
 const releaseScrollbars = retainAppScrollbars();
 window.addEventListener('pagehide', releaseScrollbars, { once: true });
+
+const tipsStorage = managedStore('tipsRead');
+Object.assign(window, { ghostexReadTips: () => tipsStorage.get() ?? [] });

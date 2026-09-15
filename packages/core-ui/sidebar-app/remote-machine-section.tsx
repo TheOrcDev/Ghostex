@@ -6,11 +6,12 @@ import { createRemoteMachineDragData } from '../sidebar-dnd';
 import { getSidebarReorderActivationConstraints } from '../sidebar-reorder-activation';
 import { SpaceFilterRow } from '../space-filter-row';
 import type { SidebarSpaceSessionSummary } from './space-filtering';
-import { createRemoteSidebarSpaceSectionKey } from './space-filtering';
+import { createRemoteSidebarSpaceSectionKey, resolveSelectedSidebarSpaceId } from './space-filtering';
 import type { SidebarSpacesState } from '../spaces';
 import type { WebviewApi } from '../webview-api';
 import { createRemoteProjectListScopeId } from './drag-drop-geometry';
 import { ProjectListEndUngroupDropZone } from './drag-ghosts';
+import { SidebarEmptyProjectsState } from './empty-projects-state';
 import type { RemoteMachineRuntimeStatus, SidebarProjectCollectionRenderItem } from './types';
 
 /*
@@ -76,6 +77,7 @@ export function RemoteMachineSidebarSection({
   index,
   isDragPreviewSource,
   machine,
+  onAddProject,
   onReorderSpaces,
   onSelectSpace,
   projectCollectionItems,
@@ -102,6 +104,8 @@ export function RemoteMachineSidebarSection({
    * daemon has never delivered one: that machine is Space-incapable and shows
    * no Space row.
    */
+  /** Add Project for this machine; absent while the machine is not connected. */
+  onAddProject?: () => void;
   onReorderSpaces: (orderedSpaceIds: string[]) => void;
   onSelectSpace: (spaceId: string) => void;
   selectedSpaceId?: string;
@@ -192,7 +196,14 @@ export function RemoteMachineSidebarSection({
               />
             </>
           ) : (
-            <div className='reference-sidebar-empty-state'>No projects</div>
+            <SidebarEmptyProjectsState
+              copy={
+                spaces?.spaces[resolveSelectedSidebarSpaceId(spaces, selectedSpaceId)]
+                  ? 'No projects in this Space.'
+                  : 'No projects'
+              }
+              onAddProject={onAddProject}
+            />
           )}
         </div>
       ) : null}

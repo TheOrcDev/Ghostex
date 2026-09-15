@@ -1,3 +1,6 @@
+import { storageScope } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["machineTab"]);
 /*
  * CDXC:RemoteMachines 2026-08-28:
  * Remote machines are top-level sidebar tabs, not sections stacked under the
@@ -24,7 +27,7 @@ export function readSidebarSelectedMachineTabId(windowScopeId: string): string {
   }
 
   try {
-    const storedValue = window.localStorage.getItem(getSidebarMachineTabStorageKey(windowScopeId));
+    const storedValue = clientStorage.getItem(getSidebarMachineTabStorageKey(windowScopeId));
     return storedValue && storedValue.length > 0 ? storedValue : LOCAL_SIDEBAR_MACHINE_TAB_ID;
   } catch {
     return LOCAL_SIDEBAR_MACHINE_TAB_ID;
@@ -37,7 +40,7 @@ export function writeSidebarSelectedMachineTabId(windowScopeId: string, machineT
   }
 
   try {
-    window.localStorage.setItem(getSidebarMachineTabStorageKey(windowScopeId), machineTabId);
+    clientStorage.setItem(getSidebarMachineTabStorageKey(windowScopeId), machineTabId);
   } catch {
     // Ignore storage failures; the in-memory selection still applies.
   }

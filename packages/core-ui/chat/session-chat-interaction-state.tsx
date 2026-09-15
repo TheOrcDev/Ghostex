@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import {
   createContext,
   useCallback,
@@ -9,6 +10,8 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
+
+const clientStorage = storageScope(["interactions"]);
 
 export interface SessionChatScrollSnapshot {
   top: number;
@@ -43,7 +46,7 @@ export function sessionChatInteractionState(sessionKey?: string): InteractionSta
   if (!sessionKey) return { disclosures: {} };
   let state = states.get(sessionKey);
   try {
-    const saved = localStorage.getItem(STORAGE_PREFIX + sessionKey);
+    const saved = clientStorage.getItem(STORAGE_PREFIX + sessionKey);
     if (!state || saved !== savedValues.get(sessionKey)) {
       const parsed = JSON.parse(saved ?? 'null');
       if (parsed?.state?.disclosures && typeof parsed.state.disclosures === 'object') state = parsed.state;
@@ -69,19 +72,19 @@ export function persistSessionChatInteractions(state: InteractionState): void {
   if (!sessionKey) return;
   try {
     const storageKey = STORAGE_PREFIX + sessionKey;
-    const isNew = localStorage.getItem(storageKey) === null;
+    const isNew = clientStorage.getItem(storageKey) === null;
     const saved = JSON.stringify({ updatedAt: Date.now(), state });
-    localStorage.setItem(storageKey, saved);
+    clientStorage.setItem(storageKey, saved);
     savedValues.set(sessionKey, saved);
     if (isNew) {
       const entries: { key: string; updatedAt: number }[] = [];
-      for (let index = 0; index < localStorage.length; index++) {
-        const key = localStorage.key(index);
+      for (let index = 0; index < clientStorage.length; index++) {
+        const key = clientStorage.key(index);
         if (key?.startsWith(STORAGE_PREFIX))
-          entries.push({ key, updatedAt: JSON.parse(localStorage.getItem(key) ?? '{}').updatedAt ?? 0 });
+          entries.push({ key, updatedAt: JSON.parse(clientStorage.getItem(key) ?? '{}').updatedAt ?? 0 });
       }
       entries.sort((left, right) => right.updatedAt - left.updatedAt);
-      for (const entry of entries.slice(MAX_SESSIONS)) localStorage.removeItem(entry.key);
+      for (const entry of entries.slice(MAX_SESSIONS)) clientStorage.removeItem(entry.key);
     }
   } catch {
     /* The in-page cache still owns the active interactions. */

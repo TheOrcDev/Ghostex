@@ -1,3 +1,6 @@
+import { storageScope } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["workspaceGroups"]);
 /*
  * CDXC:Workarea 2026-07-02-03:49:
  * GPUI needs the sidebar's named session-group controls before gxserver has durable group storage.
@@ -339,7 +342,7 @@ export function isEmptyGpuiWorkspaceSessionGroupsState(state: GpuiWorkspaceSessi
 
 export function readStoredGpuiWorkspaceSessionGroupsState(): GpuiWorkspaceSessionGroupsState {
   try {
-    const raw = window.localStorage.getItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY);
+    const raw = clientStorage.getItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY);
     if (!raw) {
       return createEmptyGpuiWorkspaceSessionGroupsState();
     }
@@ -352,10 +355,10 @@ export function readStoredGpuiWorkspaceSessionGroupsState(): GpuiWorkspaceSessio
 export function writeStoredGpuiWorkspaceSessionGroupsState(state: GpuiWorkspaceSessionGroupsState): void {
   try {
     if (state.projectOrder.length === 0 && Object.keys(state.projects).length === 0) {
-      window.localStorage.removeItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY);
+      clientStorage.removeItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY, JSON.stringify(state));
+    clientStorage.setItem(GPUI_WORKSPACE_SESSION_GROUPS_STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Storage availability must never gate sidebar group behavior.
   }

@@ -183,7 +183,7 @@ How to use this file:
 - **Enable Experimental Features** `showBetaFeatures` (boolean, default false) [advanced]: Show experimental surfaces: OS Integration settings, Browser color scheme, and Keep Awake.
 #### Debugging
 
-- **Show debug UI controls** `debuggingMode` (boolean, default false) [advanced]: Show debug-only UI controls and allow enabled routine diagnostic logs.
+- **Show debug UI controls** `debuggingMode` (boolean, default false) [advanced]: Show debug-only controls, inspect storage usage and budgets, and allow enabled routine diagnostic logs.
 - **Diagnostic disk logging scenarios** `diagnosticLogging` (structured value; change it in Settings, not with `ghostex settings set`) [advanced]: Choose routine repro log areas while Show debug UI controls is on. Important warnings, errors, and crashes remain captured when it is off.
 - **Show command copy actions** `showSessionCommandCopyActions` (boolean, default false) [advanced]: Show Copy resume and Copy attach command in session context menus.
 - **Show Copy Details option** `showSessionDetailsCopyAction` (boolean, default false) [advanced]: Show Copy Details in session context menus.

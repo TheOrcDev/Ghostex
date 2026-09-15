@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { getWorkareaTheme } from '../workarea-theme';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { IconMessagePlus } from '@tabler/icons-react';
@@ -32,6 +33,7 @@ import {
   Search as MeoSearchIcon,
   Strikethrough as MeoStrikethroughIcon,
   Table2 as MeoTable2Icon,
+  Type as MeoTypeIcon,
   Terminal as MeoTerminalIcon,
   WholeWord as MeoWholeWordIcon,
   X as MeoXIcon,
@@ -39,7 +41,13 @@ import {
 import { RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MANAGE_MEO_CODE_COLOR, MANAGE_MEO_HEADING_COLOR, MANAGE_MEO_VARIABLE_COLOR } from './constants';
+import {
+  MANAGE_FORMATTING_BAR_COLLAPSED_STORAGE_KEY,
+  MANAGE_FORMATTING_BAR_INSET,
+  MANAGE_MEO_CODE_COLOR,
+  MANAGE_MEO_HEADING_COLOR,
+  MANAGE_MEO_VARIABLE_COLOR,
+} from './constants';
 import {
   ManageAnnotation,
   ManageAnnotationPreview,
@@ -60,6 +68,8 @@ import {
   normalizeAnnotationQuote,
 } from './annotation-store';
 import { applyThemeSettings as applyMeoThemeSettings } from '../meo/helpers/theme';
+
+const clientStorage = storageScope(["docsFormatting"]);
 
 export const MANAGE_MEO_THEME = {
   backgroundColor: '#0e0e0e',
@@ -195,6 +205,17 @@ export function ManageMeoTopToolbar({
   const fullToolbarWidthRef = useRef(0);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [hideOptionalControls, setHideOptionalControls] = useState(false);
+  /**
+   * CDXC:Docs 2026-09-15 DECISION:
+   * User: the formatting bar floats near the bottom of the document with padding and rounded corners, so the Docs view no longer carries a tall stacked header, and it collapses to a single pill.
+   * The collapsed state is remembered across documents and restarts; Find keeps working from the pill because the panel stays mounted inside the bar.
+   */
+  const [collapsed, setCollapsed] = useState(
+    () => clientStorage.getItem(MANAGE_FORMATTING_BAR_COLLAPSED_STORAGE_KEY) === 'true'
+  );
+  useEffect(() => {
+    clientStorage.setItem(MANAGE_FORMATTING_BAR_COLLAPSED_STORAGE_KEY, String(collapsed));
+  }, [collapsed]);
   const headingIcons = [
     MeoHeading1Icon,
     MeoHeading2Icon,
@@ -238,10 +259,15 @@ export function ManageMeoTopToolbar({
      * CDXC:Docs 2026-06-30-13:45:
      * The three secondary right-side Markdown toolbar buttons should stay visible until the rendered toolbar actually overflows. Measure the full toolbar while those buttons are visible, then restore them only after the available width can fit that measured full row again.
      */
+    if (collapsed) {
+      return undefined;
+    }
+    /* The bar floats at its content width, so the room it may take is the editor's width minus its insets, not its own box. */
+    const host = toolbar.parentElement;
     let animationFrame: number | undefined;
     const measureToolbar = () => {
       animationFrame = undefined;
-      const availableWidth = toolbar.clientWidth;
+      const availableWidth = (host?.clientWidth ?? 0) - MANAGE_FORMATTING_BAR_INSET * 2;
       if (availableWidth <= 0) {
         return;
       }
@@ -276,8 +302,8 @@ export function ManageMeoTopToolbar({
     };
     scheduleMeasure();
     const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(scheduleMeasure);
-    if (resizeObserver) {
-      resizeObserver.observe(toolbar);
+    if (resizeObserver && host) {
+      resizeObserver.observe(host);
     } else {
       window.addEventListener('resize', scheduleMeasure);
     }
@@ -290,12 +316,13 @@ export function ManageMeoTopToolbar({
         window.removeEventListener('resize', scheduleMeasure);
       }
     };
-  }, [currentMode, hideOptionalControls]);
+  }, [collapsed, currentMode, hideOptionalControls]);
 
   return (
     <div
       aria-label='Editor toolbar'
       className='mode-toolbar'
+      data-collapsed={String(collapsed)}
       data-optional-controls-hidden={String(hideOptionalControls)}
       ref={toolbarRef}
       role='toolbar'
@@ -517,6 +544,16 @@ export function ManageMeoTopToolbar({
           {currentMode === 'live' ? 'Live' : 'Source'}
         </ManageTooltipButton>
       </div>
+      <ManageTooltipButton
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? 'Show formatting bar' : 'Hide formatting bar'}
+        className='format-button manage-formatting-bar-toggle'
+        onClick={() => setCollapsed((current) => !current)}
+        tooltip={collapsed ? 'Show formatting bar' : 'Hide formatting bar'}
+        type='button'
+      >
+        {collapsed ? <MeoTypeIcon aria-hidden='true' size={18} /> : <MeoChevronDownIcon aria-hidden='true' size={18} />}
+      </ManageTooltipButton>
       <div aria-label='Find and replace' className={`find-panel${findOpen ? ' is-visible' : ''}`} role='search'>
         <div className='find-row'>
           <div className='find-input-wrap'>

@@ -351,6 +351,19 @@ export function toggleSpaceProjectMembership(
   return withToggledMember(state, spaceId, 'memberProjectIds', projectId);
 }
 
+/** Adds a direct project membership; a project that is already a member leaves the state untouched. */
+export function addSpaceProjectMember(
+  state: SidebarSpacesState,
+  spaceId: string,
+  projectId: string
+): SidebarSpacesState {
+  const trimmedProjectId = projectId.trim();
+  if (!trimmedProjectId || state.spaces[spaceId]?.memberProjectIds.includes(trimmedProjectId) !== false) {
+    return state;
+  }
+  return withToggledMember(state, spaceId, 'memberProjectIds', trimmedProjectId);
+}
+
 function withToggledMember(
   state: SidebarSpacesState,
   spaceId: string,

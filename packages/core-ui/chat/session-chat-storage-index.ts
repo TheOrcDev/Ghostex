@@ -1,3 +1,4 @@
+import { storageScope, type ScopedStorage, type StoreId } from '@/packages/client-storage';
 /**
  * CDXC:Drafts 2026-09-11 WHY:
  * Enumerating all localStorage keys on every save, acknowledgement, and recovery receipt multiplied a small text history into millions of synchronous reads.
@@ -8,11 +9,14 @@ export class SessionChatStorageIndex<T> {
   private groups = new Map<string, Map<string, T>>();
   private listening = false;
 
+  private readonly storage: ScopedStorage;
+
   constructor(
+    store: StoreId,
     private readonly prefix: string,
     private readonly decode: (raw: string) => T | null,
     private readonly groupKey: (entry: T) => string
-  ) {}
+  ) { this.storage = storageScope([store]); }
 
   private update(key: string, raw: string | null): void {
     if (!this.rows) return;
@@ -40,24 +44,9 @@ export class SessionChatStorageIndex<T> {
   private ensureLoaded(): void {
     if (this.rows) return;
     if (!this.listening) {
-      window.addEventListener(
-        'storage',
-        (event) => {
-          if (event.storageArea !== window.localStorage) return;
-          if (event.key === null) {
-            this.reset();
-          } else if (event.key.startsWith(this.prefix)) {
-            try {
-              // Read the current value: an older queued event must not undo a
-              // newer write this page has already made to the same key.
-              this.update(event.key, window.localStorage.getItem(event.key));
-            } catch {
-              this.reset();
-            }
-          }
-        },
-        { capture: true }
-      );
+      this.storage.subscribe((event) => {
+        this.update(event.key, this.storage.getItem(event.key));
+      });
       window.addEventListener('pageshow', (event) => {
         if (event.persisted) this.reset();
       });
@@ -65,8 +54,8 @@ export class SessionChatStorageIndex<T> {
     }
     this.rows = new Map();
     try {
-      const storage = window.localStorage;
-      for (const key of Object.keys(storage)) {
+      const storage = this.storage;
+      for (const key of storage.keys()) {
         if (key.startsWith(this.prefix)) this.update(key, storage.getItem(key));
       }
     } catch (error) {
@@ -82,16 +71,16 @@ export class SessionChatStorageIndex<T> {
 
   set(key: string, value: T): void {
     const raw = JSON.stringify(value);
-    window.localStorage.setItem(key, raw);
+    this.storage.setItem(key, raw);
     this.update(key, raw);
   }
 
   refresh(key: string): void {
-    this.update(key, window.localStorage.getItem(key));
+    this.update(key, this.storage.getItem(key));
   }
 
   remove(key: string): void {
-    window.localStorage.removeItem(key);
+    this.storage.removeItem(key);
     this.update(key, null);
   }
 }

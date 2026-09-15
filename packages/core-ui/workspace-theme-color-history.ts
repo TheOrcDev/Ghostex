@@ -1,4 +1,7 @@
+import { storageScope } from '@/packages/client-storage';
 import { normalizeWorkspaceThemeColorHistory } from '../shared/workspace-project-appearance';
+
+const clientStorage = storageScope(["themeHistory"]);
 
 const WORKSPACE_THEME_COLOR_HISTORY_STORAGE_KEY = 'ghostex-workspace-theme-color-history';
 
@@ -9,7 +12,7 @@ Shared helpers must stay side-effect free after the gxserver/native ownership sp
 export function readWorkspaceThemeColorHistory(): string[] {
   try {
     return normalizeWorkspaceThemeColorHistory(
-      JSON.parse(localStorage.getItem(WORKSPACE_THEME_COLOR_HISTORY_STORAGE_KEY) ?? '[]')
+      JSON.parse(clientStorage.getItem(WORKSPACE_THEME_COLOR_HISTORY_STORAGE_KEY) ?? '[]')
     );
   } catch {
     return [];
@@ -18,7 +21,7 @@ export function readWorkspaceThemeColorHistory(): string[] {
 
 export function writeWorkspaceThemeColorHistory(history: readonly string[]): void {
   try {
-    localStorage.setItem(
+    clientStorage.setItem(
       WORKSPACE_THEME_COLOR_HISTORY_STORAGE_KEY,
       JSON.stringify(normalizeWorkspaceThemeColorHistory([...history]))
     );

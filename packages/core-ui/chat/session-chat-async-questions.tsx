@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { IconChevronDown, IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import { useId, useMemo, useRef, useState } from 'react';
 import { Button } from '@/packages/components/ui/button';
@@ -9,6 +10,8 @@ import { useSessionChatQuestionDrafts } from './session-chat-question-drafts';
 import { SessionChatAnswerInput } from './session-chat-answer-input';
 import type { SaveSessionChatImage } from './session-chat-image-attachments';
 import './session-chat-async-questions.css';
+
+const clientStorage = storageScope(["retiredQuestions"]);
 
 /**
  * CDXC:SessionChat 2026-09-12 DECISION:
@@ -38,7 +41,7 @@ export function SessionChatAsyncQuestions({
   const [retired, setRetired] = useState<string[]>(() => {
     if (!storageKey) return [];
     try {
-      const value: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
+      const value: unknown = JSON.parse(clientStorage.getItem(storageKey) ?? '[]');
       return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
     } catch {
       return [];
@@ -72,7 +75,7 @@ export function SessionChatAsyncQuestions({
       const next = [...current, key].slice(-1000);
       if (storageKey) {
         try {
-          localStorage.setItem(storageKey, JSON.stringify(next));
+          clientStorage.setItem(storageKey, JSON.stringify(next));
         } catch {
           /* The mounted view still retains accepted answers. */
         }

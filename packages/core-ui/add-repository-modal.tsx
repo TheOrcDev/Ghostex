@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { IconFolderOpen, IconInfoCircle } from '@tabler/icons-react';
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { Button } from '@/packages/components/ui/button';
@@ -21,6 +22,8 @@ import type {
   RemoteFilesystemBrowseInput,
   RemoteFilesystemBrowseResult,
 } from './remote-project-picker/remote-filesystem';
+
+const clientStorage = storageScope(["addRepository"]);
 
 const ADD_REPOSITORY_LAST_LOCATION_STORAGE_KEY = 'ghostex.addRepository.lastLocation';
 const ADD_REPOSITORY_OPTION_HELP_TOOLTIP_STYLE = {
@@ -541,7 +544,7 @@ export function AddRepositoryModal({
 }
 
 function readLastRepositoryLocation(): string {
-  const storedLocation = localStorage.getItem(ADD_REPOSITORY_LAST_LOCATION_STORAGE_KEY)?.trim();
+  const storedLocation = clientStorage.getItem(ADD_REPOSITORY_LAST_LOCATION_STORAGE_KEY)?.trim();
   if (storedLocation) {
     return storedLocation;
   }
@@ -551,7 +554,7 @@ function readLastRepositoryLocation(): string {
 }
 
 function rememberLastRepositoryLocation(path: string): void {
-  localStorage.setItem(ADD_REPOSITORY_LAST_LOCATION_STORAGE_KEY, path);
+  clientStorage.setItem(ADD_REPOSITORY_LAST_LOCATION_STORAGE_KEY, path);
 }
 
 function isRepositoryFolderPickedMessage(message: object): message is RepositoryFolderPickedMessage {
