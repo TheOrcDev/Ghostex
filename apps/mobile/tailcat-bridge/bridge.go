@@ -162,7 +162,7 @@ func Ping(token string, timeoutMs int) (int, error) {
 	if timeoutMs <= 0 {
 		timeoutMs = 15000
 	}
-	client := tailcat.NewClient(tailcat.ConnBlob(token))
+	client := tailcat.NewClient(tailcat.Addr(token))
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
@@ -195,8 +195,11 @@ func ensureForward(id, token string, remotePort int) (*forward, int, error) {
 		token:      token,
 		remotePort: remotePort,
 		listener:   listener,
+		// CDXC:RemotePairing 2026-09-15 WHY:
+		// The tailcat library must be newer than v0.5.0: gxserver installs the tailcat v0.6.0 helper, which serves addresses carrying a WireGuard pre-shared key, and an older client still passes the reachability ping but never completes the handshake, so every dial hangs and the phone reports "Reached the computer, but Ghostex there did not answer".
+		// SEE-ALSO: server/src/tailcat/install.rs (TAILCAT_MODULE) and the go.mod pin next to this file.
 		client: &tailcat.Client{
-			Server: tailcat.ConnBlob(token),
+			Server: tailcat.Addr(token),
 			Logf:   forwardLogf(id),
 		},
 		closed: make(chan struct{}),

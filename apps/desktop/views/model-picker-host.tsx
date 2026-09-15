@@ -1,3 +1,5 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
+import { storageScope } from '@/packages/client-storage';
 import { retainAppScrollbars } from '@/packages/components/ui/app-scrollbars';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useRef, useState } from 'react';
@@ -21,6 +23,8 @@ import {
 import type { GxserverReadSessionChatResult } from '@/packages/shared/session-chat';
 import type { GxserverSelectSessionChatModelResult } from '@/packages/shared/gxserver-protocol';
 import './model-picker-host.css';
+
+const clientStorage = storageScope(["terminalModel"]);
 
 interface PickerOpen {
   type: 'open';
@@ -61,7 +65,7 @@ function cacheKey(context: PickerOpen) {
 }
 function readSelection(context: PickerOpen): Partial<ModelPickerSelection> {
   try {
-    const value = JSON.parse(localStorage.getItem(cacheKey(context)) ?? 'null');
+    const value = JSON.parse(clientStorage.getItem(cacheKey(context)) ?? 'null');
     return value && typeof value.model === 'string' && typeof value.effort === 'string' ? value : {};
   } catch {
     return {};
@@ -69,7 +73,7 @@ function readSelection(context: PickerOpen): Partial<ModelPickerSelection> {
 }
 function remember(context: PickerOpen, value: Partial<ModelPickerSelection>) {
   try {
-    localStorage.setItem(cacheKey(context), JSON.stringify(value));
+    clientStorage.setItem(cacheKey(context), JSON.stringify(value));
   } catch {
     /* Cache is optional. */
   }
@@ -204,7 +208,7 @@ function ModelPickerHost() {
   ) : null;
 }
 
-createRoot(document.getElementById('root')!).render(<ModelPickerHost />);
+bootClientStorage(() => { createRoot(document.getElementById('root')!).render(<ModelPickerHost />); });
 
 const releaseScrollbars = retainAppScrollbars();
 window.addEventListener('pagehide', releaseScrollbars, { once: true });

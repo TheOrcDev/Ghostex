@@ -1,3 +1,4 @@
+import { initializeClientStorage, storageScope, type ScopedStorage } from '@/packages/client-storage';
 /*
 CDXC:AgentProviders 2026-09-02:
 Where a client's current agent model catalog comes from, in order:
@@ -30,6 +31,8 @@ import {
   type AgentModelCatalog,
 } from './agent-model-catalog';
 
+const clientStorage = storageScope(["modelCatalog"]);
+
 const STORAGE_KEY = 'ghostex.agentModelCatalog.v1';
 
 const bundledCatalog: AgentModelCatalog = (() => {
@@ -40,9 +43,9 @@ const bundledCatalog: AgentModelCatalog = (() => {
   return parsed;
 })();
 
-function storage(): Storage | null {
+function storage(): ScopedStorage | null {
   try {
-    return typeof window === 'undefined' ? null : window.localStorage;
+    return typeof window === 'undefined' ? null : clientStorage;
   } catch {
     return null;
   }
@@ -68,10 +71,11 @@ function writeCachedCatalog(catalog: AgentModelCatalog): void {
   }
 }
 
-let current: AgentModelCatalog = (() => {
+let current: AgentModelCatalog = bundledCatalog;
+if (typeof window !== 'undefined') void initializeClientStorage().then(() => {
   const cached = readCachedCatalog();
-  return cached === null ? bundledCatalog : newerAgentModelCatalog(bundledCatalog, cached);
-})();
+  if (cached) replaceCatalog(newerAgentModelCatalog(current, cached));
+}).catch(() => {});
 
 const listeners = new Set<() => void>();
 

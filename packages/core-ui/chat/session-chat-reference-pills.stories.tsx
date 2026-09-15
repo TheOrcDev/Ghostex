@@ -1,7 +1,10 @@
+import { storageScope } from '@/packages/client-storage';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useRef, useState } from 'react';
 import { expect, fireEvent, waitFor } from 'storybook/test';
 import { SessionChatComposer, type SessionChatComposerHandle } from './session-chat-composer';
+
+const clientStorage = storageScope(["drafts"]);
 
 const SESSION_KEY = 'storybook-reference-pills';
 const DRAFT = [
@@ -16,7 +19,7 @@ function SessionChatReferencePillsStory() {
   const composerRef = useRef<SessionChatComposerHandle | null>(null);
   const [sentMessages, setSentMessages] = useState<string[]>([]);
   const [sessionKey] = useState(() => {
-    window.localStorage.setItem(`ghostex.sessionChat.draft.${SESSION_KEY}`, DRAFT);
+    clientStorage.setItem(`ghostex.sessionChat.draft.${SESSION_KEY}`, DRAFT);
     return SESSION_KEY;
   });
 

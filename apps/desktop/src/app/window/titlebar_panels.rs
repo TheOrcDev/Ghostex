@@ -900,10 +900,8 @@ impl GpuiTitlebarTipsPanel {
 
     pub(crate) fn install_unread_count_probe(&mut self, cx: &mut gpui::Context<Self>) {
         let tip_ids = serde_json::to_string(TITLEBAR_TIP_IDS).expect("titlebar tip ids serialize");
-        let storage_key = serde_json::to_string(TITLEBAR_TIPS_READ_STORAGE_KEY)
-            .expect("titlebar tips storage key serializes");
         let script = format!(
-            "(function(){{const tipIds={tip_ids};const storageKey={storage_key};const post=()=>{{let readIds=[];try{{const parsed=JSON.parse(localStorage.getItem(storageKey)||'[]');if(Array.isArray(parsed)){{readIds=parsed.filter((id)=>typeof id==='string'&&id.length>0);}}}}catch(_error){{readIds=[];}}const readSet=new Set(readIds);const unreadCount=tipIds.filter((id)=>!readSet.has(id)).length;const bridge=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.ghostexAppModalHost;if(bridge&&typeof bridge.postMessage==='function'){{bridge.postMessage({{type:'gpuiTitlebarTipsUnreadCount',unreadCount}});}}}};if(!window.__ghostexGpuiTitlebarTipsUnreadProbeInstalled){{window.__ghostexGpuiTitlebarTipsUnreadProbeInstalled=true;window.setInterval(post,750);window.addEventListener('storage',post);}}post();}})(); undefined;"
+            "(function(){{const tipIds={tip_ids};const post=()=>{{let readIds=[];try{{const parsed=window.ghostexReadTips();if(Array.isArray(parsed)){{readIds=parsed.filter((id)=>typeof id==='string'&&id.length>0);}}}}catch(_error){{readIds=[];}}const readSet=new Set(readIds);const unreadCount=tipIds.filter((id)=>!readSet.has(id)).length;const bridge=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.ghostexAppModalHost;if(bridge&&typeof bridge.postMessage==='function'){{bridge.postMessage({{type:'gpuiTitlebarTipsUnreadCount',unreadCount}});}}}};if(!window.__ghostexGpuiTitlebarTipsUnreadProbeInstalled){{window.__ghostexGpuiTitlebarTipsUnreadProbeInstalled=true;window.setInterval(post,750);window.addEventListener('storage',post);}}post();}})(); undefined;"
         );
         self.surface.update(cx, |surface, _| {
             surface.execute_app_owned_script(&script);

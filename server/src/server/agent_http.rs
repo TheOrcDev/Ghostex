@@ -445,13 +445,7 @@ pub(crate) fn log_agent_hook_passive_identity_conflict(
             })),
         },
     );
-    let hook_activity = normalize_agent_hook_activity(
-        params.get("status"),
-        params
-            .get("eventName")
-            .or_else(|| params.get("rawEventName")),
-        params.get("agentName"),
-    );
+    let hook_activity = normalize_agent_hook_event_activity(params);
     let _ = state.logger.log(GxserverLogInput {
         level: LogLevel::Warn,
         event: "sessionIdentity.passiveEventRejected".to_string(),

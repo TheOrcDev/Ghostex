@@ -1,3 +1,6 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["codeWrap"]);
 /*
  * The wrap-lines default for fenced code blocks.
  *
@@ -15,9 +18,9 @@
 
 const STORAGE_KEY = 'ghostex.sessionChat.codeWrap';
 
-function storage(): Storage | null {
+function storage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     // Storage disabled by the embedder: the toggle still works, per-block only.
     return null;

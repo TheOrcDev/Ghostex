@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Stabilization
+
+  - Pairing a phone with Easy Connect works again with the current Easy Connect helper. The phone app now tunnels with the same tailcat version the computer serves, so update the phone app and scan the code on the computer again.
+
 ## 9.6.0 - 2026-09-15
 
 - New Features

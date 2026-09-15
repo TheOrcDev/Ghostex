@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { checkClientStorage } from './client-storage/check.mjs';
+checkClientStorage();
 /*
 CDXC:Mobile 2026-07-31:
 Builds apps/mobile/views/chat/session-chat-main.tsx (the shared Session Chat page the

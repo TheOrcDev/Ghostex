@@ -87,12 +87,11 @@ impl GpuiCommandCloseAfterDoneTimer {
 
 pub(crate) fn gpui_command_delayed_send_duration_from_millis(delay_ms: u64) -> Option<Duration> {
     /*
-    CDXC:DelayedSend 2026-06-25-15:11:
-    The shared Delayed Send modal posts only a session id and delay duration. GPUI must keep the same whole-minute, one-minute-minimum, 24-day JavaScript-timer-compatible bounds as native before arming a command-pane timer.
+    CDXC:DelayedSend 2026-09-15 WHY:
+    Specific time uses the ordinary timer with a computed wait, which includes partial minutes. Accept positive millisecond durations within the same 24-day bound; the After a delay inputs still use whole hours and minutes.
     */
     if !(COMMAND_PANE_DELAYED_SEND_MIN_DELAY_MS..=COMMAND_PANE_DELAYED_SEND_MAX_DELAY_MS)
         .contains(&delay_ms)
-        || delay_ms % COMMAND_PANE_DELAYED_SEND_MIN_DELAY_MS != 0
     {
         return None;
     }

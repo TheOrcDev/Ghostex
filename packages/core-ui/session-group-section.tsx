@@ -1150,7 +1150,7 @@ export function SessionGroupSection({
     ? getPinnedSessionDropGapKey({
         dropTarget: pinnedSessionDropIndicator,
         groupId: group.groupId,
-        visibleSessionIds,
+        visibleSessionIds: renderedSessionIds,
       })
     : undefined;
   const visibleGroupSessions = visibleSessionIds
@@ -2595,8 +2595,9 @@ export function SessionGroupSection({
                             projectSessionSection === 'snoozed'))) &&
                       collapsedProjectSessionSections[projectSessionSection];
                     /*
-                     * CDXC:Sessions 2026-09-10 WHY:
+                     * CDXC:Sessions 2026-09-15 WHY:
                      * The gap after the last pinned row is keyed to the next session, but belongs above that session's section heading, even when the next section is collapsed.
+                     * Resolve the gap key against renderedSessionIds, matching this loop: visibleSessionIds skips collapsed and Compact-hidden rows that still own headings, which moved the line below Drafts and Sessions.
                      */
                     const isPinnedSectionEndGap =
                       Boolean(projectContext) &&

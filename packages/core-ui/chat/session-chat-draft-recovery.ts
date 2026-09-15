@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import type { SessionChatDraftVersion, SessionChatRecoveryDraft } from '@/packages/shared/session-chat-queue';
 import { reportDraftStorageFailure } from './session-chat-draft-outbox';
 import { SessionChatStorageIndex } from './session-chat-storage-index';
@@ -6,6 +7,8 @@ import {
   draftRecoveryDismissalMarker,
   isDraftRecoveryDismissed,
 } from './session-chat-draft-dismissals';
+
+const clientStorage = storageScope(["recovery"]);
 
 const PREFIX = 'ghostex.sessionChat.recovery.';
 export type LocalRecoveryDraft = {
@@ -16,6 +19,7 @@ export type LocalRecoveryDraft = {
   dismissed?: boolean;
 };
 const recoveryIndex = new SessionChatStorageIndex<LocalRecoveryDraft>(
+  'recovery',
   PREFIX,
   (raw) => {
     const entry = JSON.parse(raw) as LocalRecoveryDraft;
@@ -30,7 +34,7 @@ export function preserveDraftRevision(entry: LocalRecoveryDraft): void {
   if (entry.text === '') return;
   try {
     const name = PREFIX + identity(entry);
-    if (localStorage.getItem(name) === null && !isDraftRecoveryDismissed(entry.sessionKey, entry.version)) {
+    if (clientStorage.getItem(name) === null && !isDraftRecoveryDismissed(entry.sessionKey, entry.version)) {
       recoveryIndex.set(name, entry);
     }
   } catch {
@@ -62,11 +66,11 @@ export function recoveryDraftEntries(sessionKey?: string): [string, LocalRecover
 }
 export function dismissDraftRecovery(id: string): void {
   prepareDraftRecoveryStorage();
-  const raw = localStorage.getItem(PREFIX + id);
+  const raw = clientStorage.getItem(PREFIX + id);
   if (!raw) return;
   const entry = JSON.parse(raw) as LocalRecoveryDraft | null;
   if (!entry || typeof entry.text !== 'string') return;
-  localStorage.setItem(PREFIX + id, draftRecoveryDismissalMarker(entry.sessionKey, entry.version));
+  clientStorage.setItem(PREFIX + id, draftRecoveryDismissalMarker(entry.sessionKey, entry.version));
   // Refresh this page's index too: storage events only notify other pages.
   recoveryIndex.refresh(PREFIX + id);
   void compactDraftRecoveryDismissals((name) => recoveryIndex.remove(name), PREFIX + id).catch(() =>

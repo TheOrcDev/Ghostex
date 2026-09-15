@@ -1,5 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { storageScope, storageFailure, subscribeStorage } from '@/packages/client-storage';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { SessionChatStorageIndex } from './session-chat-storage-index';
+
+const clientStorage = storageScope(["questionDrafts"]);
 
 export interface SessionChatAnswerDraft {
   indices: number[];
@@ -8,7 +11,9 @@ export interface SessionChatAnswerDraft {
 
 type AnswerDrafts = Record<string, SessionChatAnswerDraft>;
 const PREFIX = 'ghostex.sessionChat.questionDraft.';
-const draftIndex = new SessionChatStorageIndex<AnswerDrafts>(PREFIX, decodeDrafts, () => '');
+const draftIndex = new SessionChatStorageIndex<AnswerDrafts>(
+  'questionDrafts',
+  PREFIX, decodeDrafts, () => '');
 
 function decodeDrafts(raw: string): AnswerDrafts | null {
   try {
@@ -31,7 +36,7 @@ function decodeDrafts(raw: string): AnswerDrafts | null {
 function readDrafts(key: string | null): AnswerDrafts {
   if (!key) return {};
   try {
-    return decodeDrafts(window.localStorage.getItem(key) ?? '{}') ?? {};
+    return decodeDrafts(clientStorage.getItem(key) ?? '{}') ?? {};
   } catch {
     return {};
   }
@@ -43,6 +48,7 @@ function readDrafts(key: string | null): AnswerDrafts {
  * Save each edit through the same local storage index, scoped to the session and question, and clear only after successful delivery or explicit dismissal.
  */
 export function useSessionChatQuestionDrafts(sessionKey: string | undefined, promptKey: string) {
+  const persistenceError = useSyncExternalStore(subscribeStorage, () => storageFailure('questionDrafts'), () => undefined);
   const scope = JSON.stringify([sessionKey, promptKey]);
   const key = sessionKey ? `${PREFIX}${scope}` : null;
   const [state, setState] = useState(() => ({ scope, drafts: readDrafts(key), error: '' }));
@@ -103,5 +109,5 @@ export function useSessionChatQuestionDrafts(sessionKey: string | undefined, pro
     [key, scope, saveDrafts]
   );
 
-  return { drafts: state.drafts, saveDrafts, updateDraft, clearDrafts, saveError: state.error };
+  return { drafts: state.drafts, saveDrafts, updateDraft, clearDrafts, saveError: state.error || (persistenceError ? 'Your answer could not be saved on this computer. Keep this view open until saving succeeds.' : '') };
 }

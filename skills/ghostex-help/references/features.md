@@ -98,6 +98,11 @@ filter cannot be saved as a Space. Create one with the "Create space" button
 that fills the Space row while you have none, by right-clicking the Other
 button or a Space icon and choosing New Space, or from the More menu when
 Spaces overflow.
+A project added with Add Project (from the More menu, from the "Add Project"
+button that an empty project list or empty Space shows, or by right-clicking
+the empty sidebar area) joins the Space that is open at the time and appears at
+the top of it; add a project while Other is selected to leave it out of every
+Space.
 Space icons keep their normal glyph and show amber working-session and blue
 attention-session counts in extra-bold text near the bottom of each icon, including
 the selected Space.
@@ -136,9 +141,14 @@ session replaces that active pane's session and leaves the other pane in place.
   width of 388px.
 - Presets: Settings > General > Sidebar > Preset switches groups of card
   details at once; the individual rows below it are marked Advanced.
-- Timed Delayed Send: right-click an agent with a timed send scheduled, choose
-  **Postpone by**, then **10 minutes**, **30 minutes**, **1 hour**, **2 hours**,
-  or **5 hours**. The duration is added to its existing send time.
+- Timed Delayed Send: open **Delayed Send** from an agent's right-click menu
+  under **Advanced**. Choose **After a delay** for hours and minutes, or
+  **Specific time** for a future date and time on your computer, then **Save changes**.
+  Specific time calculates the remaining wait and uses the same timed send.
+  For an active timed send, right-click the agent and choose **Postpone by**, then
+  **10 minutes**, **30 minutes**, **1 hour**, **2 hours**, or **5 hours** to add
+  that duration to its existing send time. The same submenu has **Edit delayed send**
+  to reopen its settings and **Disable delayed send** to cancel the pending send.
 - Session cards: agent icon, favicon, last-active time, git stats, colored
   icons, and rename-on-double-click are all toggles.
 - Session hover buttons (click to toggle, drag to reorder), under General >
@@ -707,6 +717,10 @@ finishes, an attention state on the session card, OS notifications on macOS,
 menu bar badges with running and done counts (click one to jump to the
 session), terminal bell detection, and push notifications on the mobile app.
 The optional status pet in the sidebar mirrors session state.
+Claude progress updates do not trigger completion notifications while Claude
+reports background work still running. Completion notifications arrive when
+Claude finishes after that work completes; requests for your input or permission
+still get your attention.
 Copy Sound is off by default. Enable it under Settings > Notifications > Sounds
 to hear a short sound when copying from a terminal, a chat message, the chat
 composer (including its right-click Copy menu), a copy button, or a menu
@@ -831,6 +845,9 @@ Keep Awake (Power)
 prevents sleep while agents work.
 Advanced holds Enable Experimental Features and the Debugging rows (Show debug
 UI controls gates diagnostic disk logging; leave these to the user).
+To see what is using local space, enable Show debug UI controls and open Storage
+usage in the same section. It lists usage by feature and lets you clear disposable
+caches; unsaved drafts and pending work are protected. The setting is `debuggingMode`.
 Settings that depend on a setting above them have an indented ↳ before their
 name. They appear when the parent setting enables them.
 In the Settings table of contents, click a page or section title to go there.

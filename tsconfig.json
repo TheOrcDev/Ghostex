@@ -22,6 +22,7 @@
     "types": ["node"]
   },
   "include": [
+    "packages/client-storage/**/*",
     "packages/shared/**/*",
     "packages/core-ui/**/*",
     "packages/components/**/*",

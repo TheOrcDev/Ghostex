@@ -1,13 +1,16 @@
+import { storageScope } from '@/packages/client-storage';
 import { getAccountsConnections, showAccountFlowToast } from './transport';
 import { openAppModal } from '../app-modal-host-bridge';
+
+const clientStorage = storageScope(["accountOwner"]);
 
 export function accountSetupOwner(): string {
   const bridge = (window as unknown as { ghostexGpui?: { gxserverBootstrap?: { clientId?: string } } }).ghostexGpui;
   if (bridge?.gxserverBootstrap) return bridge.gxserverBootstrap.clientId ?? 'desktop';
-  let id = localStorage.getItem('ghostex.accountSetupOwner');
+  let id = clientStorage.getItem('ghostex.accountSetupOwner');
   if (!id) {
     id = crypto.randomUUID();
-    localStorage.setItem('ghostex.accountSetupOwner', id);
+    clientStorage.setItem('ghostex.accountSetupOwner', id);
   }
   return id;
 }

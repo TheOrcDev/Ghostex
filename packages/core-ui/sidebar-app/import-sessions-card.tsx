@@ -1,17 +1,20 @@
+import { storageScope } from '@/packages/client-storage';
 import { useState } from 'react';
 import { IconHistoryToggle } from '@tabler/icons-react';
 import { Button } from '@/packages/components/ui/button';
 import './import-sessions-card.css';
 
+const clientStorage = storageScope(["importIntro"]);
+
 const IMPORT_SESSIONS_INTRO_SEEN_KEY = 'ghostex.sidebar.import-sessions-intro-seen.v1';
 
 export function useImportSessionsIntro(openExternalSessions: () => void) {
   const [isVisible, setIsVisible] = useState(
-    () => window.localStorage.getItem(IMPORT_SESSIONS_INTRO_SEEN_KEY) !== 'true'
+    () => clientStorage.getItem(IMPORT_SESSIONS_INTRO_SEEN_KEY) !== 'true'
   );
   const openImportSessions = () => {
     openExternalSessions();
-    window.localStorage.setItem(IMPORT_SESSIONS_INTRO_SEEN_KEY, 'true');
+    clientStorage.setItem(IMPORT_SESSIONS_INTRO_SEEN_KEY, 'true');
     setIsVisible(false);
   };
   return { isVisible, openImportSessions };

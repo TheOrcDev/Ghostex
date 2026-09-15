@@ -1,3 +1,4 @@
+import { initializeClientStorage } from '@/packages/client-storage';
 import { createRoot } from 'react-dom/client';
 import '@/packages/core-ui/styles.css';
 import { GXSERVER_PROTOCOL_VERSION } from '@/packages/shared/gxserver-protocol';
@@ -235,7 +236,7 @@ if (findTheme === 'dark') {
 applyDocumentFindTheme(findTheme);
 applyDocumentFindFontFamily(searchParams.get('fontFamily') ?? '');
 
-waitForBootstrap()
+initializeClientStorage().then(() => waitForBootstrap())
   .then((bootstrap) => {
     root.render(
       <div className='native-sidebar-shell gpui-find-prompts'>

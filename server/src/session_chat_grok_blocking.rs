@@ -416,7 +416,9 @@ pub fn detect_grok_blocking_screen(text: &str) -> Option<GrokBlockingScreen> {
             "Approve the plan or send revision feedback from the terminal before sending a normal message.",
         ),
         (
-            &["ctrl+o:always-approve", "always-approve"],
+            // CDXC:AgentScreenDetection 2026-09-15 WHY:
+            // Grok's normal composer shows `always-approve` above `Ctrl+c:cancel` during every turn, so only the permission card's explicit shortcut can anchor this match.
+            &["ctrl+o:always-approve"],
             &["ctrl+c:cancel", "next option", "edit pattern"],
             "Grok Build is waiting for permission",
             "Approve, reject, edit, or cancel the pending tool permission in the terminal before sending a message.",

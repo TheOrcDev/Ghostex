@@ -1,3 +1,4 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
 import { resolveSessionChatTheme, subscribeSystemChatTheme } from '@/packages/core-ui/chat/session-chat-theme';
 import type { GxserverSetSessionChatDraftResult } from '@/packages/shared/session-chat-queue';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -1128,7 +1129,8 @@ function MobileSessionChat({
 }
 
 const root = createRoot(rootElement);
-void waitForConfig().then((config) => {
+bootClientStorage(async () => {
+  const config = await waitForConfig();
   const agentId = config.agentId?.trim() ?? '';
   const agentLabel = agentId ? (resolveSessionChatDisplayAgent(agentId) ?? agentId) : null;
   const projectId = config.projectId?.trim() || undefined;

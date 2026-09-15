@@ -1,10 +1,9 @@
-//! Open, close, data, and sidebar bridge plumbing for the native Handoff / Export dialog.
-//! SEE-ALSO: apps/desktop/src/app/window/export_transcript_modal.rs (the window entity and its decision record).
+//! Open, data, and sidebar bridge plumbing for the native Handoff / Export dialog.
+//! SEE-ALSO: apps/desktop/src/app/window/export_transcript_modal.rs (the window entity and its decision record), apps/desktop/src/app/native_app_modal_lifecycle.rs (the shared window path).
 use crate::app::helpers::*;
 use crate::app::window::*;
 use crate::*;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 /// GPUI-owned replacement for the React dialog's `ghostex.exportTranscript.mode`
 /// and `ghostex.exportTranscript.includeOptions` localStorage keys.
@@ -46,61 +45,25 @@ impl GhostexGpuiApp {
             .map(str::trim)
             .filter(|agent_id| !agent_id.is_empty())
             .map(str::to_string);
-        // One app modal at a time, like the shared React host window.
-        self.remove_gpui_app_modal_window_without_focus_restore(cx);
-        self.remove_gpui_export_transcript_modal_window(cx);
-        let settings = shared_settings::shared_sidebar_settings_snapshot();
         let config = ExportTranscriptModalConfig {
             agents: self.gpui_export_transcript_prompt_agents(),
             default_agent_id,
-            light: CHROME_LIGHT_APPEARANCE.load(std::sync::atomic::Ordering::Relaxed),
-            sidebar_theme: settings
-                .object()
-                .get("sidebarTheme")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
+            palette: self.gpui_native_modal_palette(),
             prefs_path: Some(gpui_export_transcript_modal_prefs_path()),
             initial_mode: None,
         };
-        let main_app = cx.weak_entity();
-        // The dialog sends commands from inside its own window update, and the
-        // result path reaches it from inside an app update, so the app is
-        // always re-entered through `defer` rather than borrowed twice.
-        let host: ExportTranscriptModalHost = Rc::new(move |command, cx: &mut App| {
-            let main_app = main_app.clone();
-            let request_id = request_id.clone();
-            cx.defer(move |cx| {
-                let _ = main_app.update(cx, |app, cx| {
-                    app.handle_gpui_export_transcript_modal_command(&request_id, command, cx);
-                });
-            });
+        let host = self.native_app_modal_host(cx, move |app, command, cx| {
+            app.handle_gpui_export_transcript_modal_command(&request_id, command, cx);
         });
-        let window_size = size(
-            px(EXPORT_TRANSCRIPT_MODAL_WIDTH),
-            px(EXPORT_TRANSCRIPT_MODAL_INITIAL_HEIGHT),
-        );
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(gpui::Bounds::centered_at(
-                self.main_window_bounds.center(),
-                window_size,
-            ))),
-            app_id: gpui_platform_window_app_id(),
-            focus: true,
-            icon: gpui_platform_window_icon(),
-            show: true,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: self.main_window_display_id,
-            titlebar: None,
-            ..Default::default()
-        };
-        self.export_transcript_modal_window = cx
-            .open_window(options, move |window, cx| {
-                window.set_window_title("");
-                window.activate_window();
+        self.open_native_app_modal(
+            GpuiAppModalKind::ExportTranscriptResult,
+            EXPORT_TRANSCRIPT_MODAL_WIDTH,
+            EXPORT_TRANSCRIPT_MODAL_INITIAL_HEIGHT,
+            move |window, cx| {
                 cx.new(|cx| GpuiExportTranscriptModalWindow::new(config, host, window, cx))
-            })
-            .ok();
+            },
+            cx,
+        );
         // The cached HUD agents open the dialog instantly; a fresh read follows
         // and is pushed into the open dialog when it lands.
         self.refresh_gpui_new_thread_picker_agents(cx);
@@ -112,6 +75,7 @@ impl GhostexGpuiApp {
         command: ExportTranscriptModalCommand,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind = GpuiAppModalKind::ExportTranscriptResult;
         let mut message = serde_json::Map::new();
         message.insert("requestId".to_string(), serde_json::json!(request_id));
         match command {
@@ -154,7 +118,8 @@ impl GhostexGpuiApp {
                     &message,
                     cx,
                 );
-                self.release_gpui_export_transcript_modal_window();
+                self.pending_export_transcript_reveal_path = None;
+                self.release_native_app_modal_window(kind, cx);
             }
             ExportTranscriptModalCommand::Cancel => {
                 self.forward_gpui_export_transcript_modal_command_to_sidebar(
@@ -162,36 +127,15 @@ impl GhostexGpuiApp {
                     &message,
                     cx,
                 );
-                self.release_gpui_export_transcript_modal_window();
+                self.pending_export_transcript_reveal_path = None;
+                self.release_native_app_modal_window(kind, cx);
             }
             ExportTranscriptModalCommand::Reveal => {
                 self.reveal_gpui_exported_transcript(cx);
-                self.release_gpui_export_transcript_modal_window();
+                self.pending_export_transcript_reveal_path = None;
+                self.release_native_app_modal_window(kind, cx);
             }
         }
-    }
-
-    /// Drops the handle after the dialog removed its own window.
-    pub(crate) fn release_gpui_export_transcript_modal_window(&mut self) {
-        self.export_transcript_modal_window = None;
-        self.pending_export_transcript_reveal_path = None;
-    }
-
-    /// Removes a live dialog window: another app modal is opening, or a new
-    /// export request replaces the current one.
-    pub(crate) fn remove_gpui_export_transcript_modal_window(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(handle) = self.export_transcript_modal_window.take() else {
-            return false;
-        };
-        self.pending_export_transcript_reveal_path = None;
-        handle
-            .update(cx, |_modal, window, _cx| {
-                window.remove_window();
-            })
-            .is_ok()
     }
 
     /// Delivers the sidebar runtime's sanitized `exportSessionTranscriptResult`
@@ -202,9 +146,6 @@ impl GhostexGpuiApp {
         result: &serde_json::Value,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(handle) = self.export_transcript_modal_window else {
-            return false;
-        };
         let text = |key: &str| {
             result
                 .get(key)
@@ -216,15 +157,14 @@ impl GhostexGpuiApp {
         let ok = result.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
         let can_reveal = result.get("canReveal").and_then(serde_json::Value::as_bool) == Some(true);
         let (path, agent_id, error) = (text("path"), text("agentId"), text("error"));
-        let delivered = handle
-            .update(cx, |modal, window, cx| {
+        self.update_native_app_modal(
+            GpuiAppModalKind::ExportTranscriptResult,
+            cx,
+            |modal: &mut GpuiExportTranscriptModalWindow, window, cx| {
                 modal.receive_result(ok, path, can_reveal, agent_id, error, window, cx);
-            })
-            .is_ok();
-        if !delivered {
-            self.release_gpui_export_transcript_modal_window();
-        }
-        delivered
+            },
+        )
+        .is_some()
     }
 
     /// The configured agents that can take the handoff: the sidebar HUD
@@ -257,15 +197,11 @@ impl GhostexGpuiApp {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(handle) = self.export_transcript_modal_window else {
-            return;
-        };
         let agents = self.gpui_export_transcript_prompt_agents();
-        if handle
-            .update(cx, |modal, _window, cx| modal.set_agents(agents, cx))
-            .is_err()
-        {
-            self.release_gpui_export_transcript_modal_window();
-        }
+        self.update_native_app_modal(
+            GpuiAppModalKind::ExportTranscriptResult,
+            cx,
+            |modal: &mut GpuiExportTranscriptModalWindow, _window, cx| modal.set_agents(agents, cx),
+        );
     }
 }

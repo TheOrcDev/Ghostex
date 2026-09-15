@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { checkClientStorage } from './client-storage/check.mjs';
+checkClientStorage();
 
 import { spawn, spawnSync } from 'node:child_process';
 import {

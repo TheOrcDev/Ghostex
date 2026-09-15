@@ -424,7 +424,7 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
    */
   const resyncFailuresRef = useRef(0);
   const resyncRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadEarlierEpochRef = useRef<number | null>(null);
+  const loadEarlierRequestRef = useRef<{ epoch: number | null; beforeOffset: number } | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workingRef = useRef(false);
   const workingStartedAtRef = useRef<number | null>(null);
@@ -619,6 +619,7 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
         invalidateDeferredSessionChatWork(transport.readHistory);
         historyEpochRef.current = null;
         historyPrefixCountRef.current = 0;
+        boundaryAttemptRef.current = null;
       }
       replaceSessionChatMergerList(mergerRef.current, nextMessages);
       setTranscript(mergerRef.current.list);
@@ -652,9 +653,19 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
       }
       applyQueueCarriage(result);
       setError(result.status === 'error' ? (result.error ?? 'Conversation could not be loaded.') : null);
-      // A fresh authoritative generation cancels an in-flight older page.
-      loadEarlierEpochRef.current = null;
-      setLoadingEarlier(false);
+      /** CDXC:SessionChat 2026-09-15 WHY:
+       * A seed read and its socket snapshot can overlap the request for a long turn's prompt. Cancelling that request on every snapshot left the partial turn hidden behind "Load earlier turns".
+       * Preserve requests for the same epoch and history boundary; request identity prevents a cancelled response from completing a newer request in the same epoch.
+       */
+      const earlierRequest = loadEarlierRequestRef.current;
+      if (
+        earlierRequest &&
+        (earlierRequest.epoch !== result.epoch || earlierRequest.beforeOffset !== beforeOffsetRef.current)
+      ) {
+        loadEarlierRequestRef.current = null;
+        boundaryAttemptRef.current = null;
+        setLoadingEarlier(false);
+      }
     },
     [applyAgentIdentity, applyQueueCarriage, applySelectedOptions, applyTerminalActivity, transport.readHistory]
   );
@@ -791,6 +802,7 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
     historyEpochRef.current = null;
     historyPrefixCountRef.current = 0;
     boundaryAttemptRef.current = null;
+    loadEarlierRequestRef.current = null;
     resyncInFlightRef.current = false;
     resyncSeenInFlightRef.current = null;
     resyncFollowUpsRef.current = 0;
@@ -1369,14 +1381,15 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
 
   // --- Actions ----------------------------------------------------------------
   const loadEarlier = useCallback((): void => {
-    if (loadingEarlier || loadEarlierEpochRef.current !== null || !hasMore || closedRef.current) {
+    if (loadingEarlier || loadEarlierRequestRef.current !== null || !hasMore || closedRef.current) {
       return;
     }
     setLoadingEarlier(true);
     const requestEpoch = frameStateRef.current.epoch;
     const requestGeneration = generationRef.current;
     const requestedBeforeOffset = beforeOffsetRef.current;
-    loadEarlierEpochRef.current = requestEpoch;
+    const request = { epoch: requestEpoch, beforeOffset: requestedBeforeOffset };
+    loadEarlierRequestRef.current = request;
     const historyRead = transport.readHistory;
     const read = historyRead
       ? historyRead({
@@ -1390,7 +1403,7 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
         if (
           closedRef.current ||
           generationRef.current !== requestGeneration ||
-          loadEarlierEpochRef.current !== requestEpoch
+          loadEarlierRequestRef.current !== request
         ) {
           return;
         }
@@ -1436,10 +1449,10 @@ export function useSessionChat(options: UseSessionChatOptions): UseSessionChatRe
         if (
           !closedRef.current &&
           generationRef.current === requestGeneration &&
-          loadEarlierEpochRef.current === requestEpoch
+          loadEarlierRequestRef.current === request
         ) {
           setLoadingEarlier(false);
-          loadEarlierEpochRef.current = null;
+          loadEarlierRequestRef.current = null;
         }
       });
   }, [hasMore, loadingEarlier, transport]);

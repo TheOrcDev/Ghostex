@@ -85,6 +85,69 @@
 .gx-onboarding .opt:hover:not(.sel) {
   border-color: rgba(255, 255, 255, 0.18);
 }
+/* Get started card (see MAX_TILE_ROW in panels/get-started.tsx): flow layout so the card grows with its content. */
+.gx-onboarding .pcol {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  z-index: 2;
+}
+.gx-onboarding .pcol .pcard {
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px 20px;
+}
+.gx-onboarding .pcol .label {
+  margin-bottom: 14px;
+}
+.gx-onboarding .pcol .pfield {
+  position: relative;
+  height: 50px;
+  margin-bottom: 24px;
+}
+.gx-onboarding .pcol .pfield .path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gx-onboarding .pcol .opts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.gx-onboarding .pcol .opts:last-child {
+  margin-bottom: 0;
+}
+.gx-onboarding .pcol .opt {
+  position: relative;
+  height: 72px;
+  min-width: 0;
+}
+.gx-onboarding .pcol .opt .nm,
+.gx-onboarding .pcol .opt .ss {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gx-onboarding .pcol .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.gx-onboarding .pcol .opt.chip {
+  flex-direction: row;
+  align-items: center;
+  height: 40px;
+  padding: 0 14px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: #eef1f7;
+  white-space: nowrap;
+}
+.gx-onboarding .pcol .pnote-flow {
+  font-size: 15px;
+}
 .gx-onboarding .okg {
   margin-left: auto;
   color: #fff;

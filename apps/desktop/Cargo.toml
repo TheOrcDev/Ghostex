@@ -38,10 +38,10 @@ path = "src/bin/terminal_model_smoke.rs"
 name = "terminal-element-demo"
 path = "src/bin/terminal_element_demo.rs"
 
-# CDXC:TranscriptExport 2026-09-15: standalone preview of the native Handoff / Export dialog (see src/bin/export_transcript_modal_demo.rs) so its look can be checked against the React stories without launching Ghostex.
+# CDXC:AppModal 2026-09-15: standalone preview of the native GPUI app modals (see src/bin/native_modal_demo.rs) so their look can be checked against the React stories without launching Ghostex.
 [[bin]]
-name = "export-transcript-modal-demo"
-path = "src/bin/export_transcript_modal_demo.rs"
+name = "native-modal-demo"
+path = "src/bin/native_modal_demo.rs"
 
 [dependencies]
 anyhow = "1"
@@ -57,10 +57,15 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 gpui-component = { path = "../../.dependencies/gpui-component/crates/ui" }
 gpui-component-assets = { path = "../../.dependencies/gpui-component/crates/assets" }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# CDXC:SessionTitles 2026-09-15 WHY: the native Rename Session dialog ports `normalizeSessionRenameTitle` (NFKC + a Unicode-class glyph filter); both crates were already in the graph through gpui and url, so this is a direct-dependency promotion, not a new download.
+icu_normalizer = "2"
 libc = "0.2"
 portable-pty = "0.9"
+# CDXC:RemotePairing 2026-09-15: the native Remote Setup dialog draws the Android install QR code itself (src/app/window/remote_setup_modal.rs); no image or svg render features, the modules are painted as gpui squares.
+qrcode = { version = "0.14", default-features = false }
 percent-encoding = "2"
 raw-window-handle = "0.6"
+regex = "1"
 rust-embed = { version = "8.7.2", features = ["include-exclude"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

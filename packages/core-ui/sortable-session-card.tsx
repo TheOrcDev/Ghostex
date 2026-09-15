@@ -163,7 +163,7 @@ const sessionCardSensors = [
 
 /**
  * CDXC:DelayedSend 2026-09-15 DECISION:
- * User: agents with a timed Delayed Send show "Postpone by" in their right-click menu, with 10 minutes, 30 minutes, 1 hour, 2 hours, and 5 hours.
+ * User: agents with a timed Delayed Send show "Postpone by" in their right-click menu, with 10 minutes, 30 minutes, 1 hour, 2 hours, and 5 hours, plus "Edit delayed send" and "Disable delayed send".
  */
 const DELAYED_SEND_POSTPONE_PRESETS = [
   { label: '10 minutes', delayMs: 10 * 60_000 },
@@ -2197,7 +2197,9 @@ export function SortableSessionCard({
     setSnoozeSubmenuPosition(undefined);
     const bounds = event.currentTarget.getBoundingClientRect();
     const submenuHeight =
-      CONTEXT_MENU_VERTICAL_PADDING_PX + DELAYED_SEND_POSTPONE_PRESETS.length * CONTEXT_MENU_ITEM_HEIGHT_PX;
+      CONTEXT_MENU_VERTICAL_PADDING_PX +
+      (DELAYED_SEND_POSTPONE_PRESETS.length + 2) * CONTEXT_MENU_ITEM_HEIGHT_PX +
+      CONTEXT_MENU_DIVIDER_HEIGHT_PX;
     setPostponeSubmenuPosition({
       x: getCenteredSidebarMenuX(204),
       y: Math.max(
@@ -3517,6 +3519,27 @@ export function SortableSessionCard({
                   {preset.label}
                 </button>
               ))}
+              <div className='session-context-menu-divider' role='separator' />
+              <button
+                className='session-context-menu-item'
+                role='menuitem'
+                type='button'
+                onClick={requestDelayedSend}
+              >
+                Edit delayed send
+              </button>
+              <button
+                className='session-context-menu-item'
+                role='menuitem'
+                type='button'
+                onClick={() => {
+                  setContextMenuPosition(undefined);
+                  setPostponeSubmenuPosition(undefined);
+                  vscode.postMessage({ type: 'cancelDelayedSend', sessionId: session.sessionId });
+                }}
+              >
+                Disable delayed send
+              </button>
             </div>,
             document.body
           )

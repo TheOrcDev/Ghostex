@@ -162,14 +162,25 @@ pub(crate) fn activity_for_hook_event(
     // tables (which have no PostCompact trigger check and no StopFailure arm).
     if matches!(agent_key, "claude" | "openclaude") {
         /*
-        CDXC:Notifications 2026-09-04 DECISION:
-        User: a Claude turn that finishes must show the blue dot and play the attention sound, like Codex does.
-        Claude's Stop used to settle to idle and the dot came from the 60-second "waiting for your input" Notification, which SessionChat 2026-08-24 reclassified as idle, so from release 8.2.0 no Claude turn rang at all.
-        Stop is Claude's authoritative completed-turn boundary, so it enters attention exactly like Codex's Stop.
-        SEE-ALSO: normalize_agent_hook_activity in server/src/agents/activity.rs, the turn-complete attention rule in server/src/session_status.rs, and the queue release in server/src/session_chat_queue_runtime.rs.
+        CDXC:Notifications 2026-09-15 DECISION:
+        User: suppress completion attention while Claude reports background work remaining; notify when Claude finishes after that work completes, and preserve question/permission alerts.
+        This narrows the 2026-09-04 decision to ring on every finished Claude turn: Stop also fires after progress updates while background agents and monitors continue.
+        Claude's background_tasks array contains in-flight tasks; an empty or absent array retains ordinary completion attention.
+        SEE-ALSO: normalize_agent_hook_event_activity in server/src/agents/activity.rs and background_tasks forwarding in server/src/agent_hooks/notify_runtime.rs.
         */
         if lower == "stop" {
-            return Some("attention".to_string());
+            return Some(
+                if payload
+                    .get("background_tasks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tasks| !tasks.is_empty())
+                {
+                    "working"
+                } else {
+                    "attention"
+                }
+                .to_string(),
+            );
         }
         /*
         CDXC:AgentHooks 2026-08-27:

@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import {
   useCallback,
   useEffect,
@@ -126,6 +127,8 @@ import type {
   TitlebarRgbColor,
   TitlebarTip,
 } from './types';
+
+const clientStorage = storageScope(["openTarget","keepAwake","keepAwakeSync","lidSleep"]);
 
 export function GhostexTitlebarHost() {
   return <App />;
@@ -945,7 +948,7 @@ export function App() {
       return;
     }
     setSelectedTargetId(target.id);
-    localStorage.setItem(LAST_OPEN_TARGET_STORAGE_KEY, target.id);
+    clientStorage.setItem(LAST_OPEN_TARGET_STORAGE_KEY, target.id);
     if (target.id === 'finder') {
       postNative({ type: 'openWorkspaceInFinder', workspacePath: projectState.projectPath });
       return;
@@ -1190,7 +1193,7 @@ export function App() {
     async (options: { suppressAutoStart?: boolean } = {}) => {
       const runtime = keepAwakeRuntime;
       setKeepAwakeRuntime(undefined);
-      localStorage.removeItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY);
+      clientStorage.removeItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY);
       if (options.suppressAutoStart !== false) {
         setKeepAwakeAutoStartSuppressed(true);
       }
@@ -1249,7 +1252,7 @@ export function App() {
         startedAtMs: Date.now(),
       };
       setKeepAwakeRuntime(nextRuntime);
-      localStorage.setItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY, JSON.stringify(nextRuntime));
+      clientStorage.setItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY, JSON.stringify(nextRuntime));
       const syncState = { runtime: nextRuntime, suppressAutoStart: false };
       publishKeepAwakeRuntimeSync(syncState);
       syncKeepAwakeRuntimeToMainTitlebar(syncState);
@@ -1346,7 +1349,7 @@ export function App() {
   };
 
   useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
+    const handleStorage = (event: { key: string; newValue: string | null }) => {
       if (event.key !== KEEP_AWAKE_RUNTIME_STORAGE_KEY && event.key !== KEEP_AWAKE_RUNTIME_SYNC_STORAGE_KEY) {
         return;
       }
@@ -1364,10 +1367,10 @@ export function App() {
      * CDXC:KeepAwake 2026-06-15-10:12:
      * The keep-awake dropdown renders in a native child titlebar window. Runtime changes from that child must update the main titlebar immediately and explicit Don't keep awake must suppress launch/display auto-start for this app run until the user starts keep-awake again.
      */
-    window.addEventListener('storage', handleStorage);
+    const unsubscribeStorage = clientStorage.subscribe(handleStorage);
     window.addEventListener(KEEP_AWAKE_RUNTIME_CHANGED_EVENT, handleLocalSync);
     return () => {
-      window.removeEventListener('storage', handleStorage);
+      unsubscribeStorage();
       window.removeEventListener(KEEP_AWAKE_RUNTIME_CHANGED_EVENT, handleLocalSync);
     };
   }, [syncKeepAwakeRuntimeState]);
@@ -1480,7 +1483,7 @@ export function App() {
 
   useEffect(() => {
     const desired = Boolean(keepAwakeFeatureEnabled && keepAwakeRuntime && projectState.keepAwake.preventLidSleep);
-    const ghostexEnabledLidSleepPrevention = localStorage.getItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY) === 'enabled';
+    const ghostexEnabledLidSleepPrevention = clientStorage.getItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY) === 'enabled';
     if (!desired && !ghostexEnabledLidSleepPrevention) {
       return;
     }
@@ -1493,7 +1496,7 @@ export function App() {
       if (!applied || cancelled) {
         return;
       }
-      localStorage.setItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY, desired ? 'enabled' : 'disabled');
+      clientStorage.setItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY, desired ? 'enabled' : 'disabled');
     };
     if (needsPolicyChange) {
       void applyPolicy();
@@ -1503,7 +1506,7 @@ export function App() {
       interval = window.setInterval(() => {
         void applyKeepAwakeLidSleepPrevention(true, { installIfNeeded: false }).then((applied) => {
           if (applied && !cancelled) {
-            localStorage.setItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY, 'enabled');
+            clientStorage.setItem(KEEP_AWAKE_LID_SLEEP_STORAGE_KEY, 'enabled');
           }
         });
       }, 10_000);
@@ -1528,7 +1531,7 @@ export function App() {
       const pidCheck = await runNativeProcess('/bin/kill', ['-0', String(keepAwakeRuntime.pid)]);
       if (pidCheck.exitCode !== 0) {
         setKeepAwakeRuntime(undefined);
-        localStorage.removeItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY);
+        clientStorage.removeItem(KEEP_AWAKE_RUNTIME_STORAGE_KEY);
         publishKeepAwakeRuntimeSync({ suppressAutoStart: false });
       }
     };

@@ -143,8 +143,6 @@ impl GhostexGpuiApp {
                         .then(|| message.get("path").and_then(serde_json::Value::as_str))
                         .flatten()
                         .map(str::to_string);
-                    self.open_gpui_export_transcript_modal(&message, cx);
-                    return;
                 }
                 if modal == GpuiAppModalKind::GitFileDiff
                     && self.gpui_app_modal_current_modal(cx) == Some(GpuiAppModalKind::GitCommit)
@@ -349,6 +347,9 @@ impl GhostexGpuiApp {
                     CDXC:AddProject 2026-06-24-19:35:
                     The shared Clone Repository modal clears its React dialog immediately after submit. While a GPUI remote clone is pending, keep the native app-modal host alive so the real daemon job can show cancel/final toasts; close the host only after the final toast dismisses instead of dropping visible progress.
                     */
+                    return;
+                }
+                if self.app_modal_window.is_none() && self.close_native_app_modal_from_bridge(cx) {
                     return;
                 }
                 let closing_modal_id = self.app_modal_window.clone().and_then(|handle| {

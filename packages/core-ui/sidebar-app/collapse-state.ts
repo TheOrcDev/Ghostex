@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { KEEP_AWAKE_DURATION_OPTIONS, type KeepAwakeDurationMinutes } from '../../shared/ghostex-settings';
 import { readLegacyCollapsedSidebarProjectCollectionIds } from '../project-collections';
 import type { ProjectSessionListExpandedState } from '../project-session-list-toggle';
@@ -7,6 +8,8 @@ import {
   persistedProjectSessionSectionCollapseState,
   type ProjectSessionSectionCollapseStateById,
 } from './project-session-section-state';
+
+const clientStorage = storageScope(["collapse","keepAwake"]);
 
 export const SIDEBAR_KEEP_AWAKE_RUNTIME_STORAGE_KEY = 'ghostex.titlebar.keepAwakeRuntime';
 export function isSidebarRecord(value: unknown): value is Record<string, unknown> {
@@ -21,7 +24,7 @@ export function readSidebarKeepAwakeRuntime(): SidebarKeepAwakeRuntimeState | un
   }
 
   try {
-    const rawRuntime = window.localStorage.getItem(SIDEBAR_KEEP_AWAKE_RUNTIME_STORAGE_KEY);
+    const rawRuntime = clientStorage.getItem(SIDEBAR_KEEP_AWAKE_RUNTIME_STORAGE_KEY);
     if (!rawRuntime) {
       return undefined;
     }
@@ -254,7 +257,7 @@ export function readSidebarUiCollapseState(windowScopeId: string): SidebarUiColl
   }
 
   try {
-    const scopedStoredValue = window.localStorage.getItem(getSidebarUiCollapseStateStorageKey(windowScopeId));
+    const scopedStoredValue = clientStorage.getItem(getSidebarUiCollapseStateStorageKey(windowScopeId));
     if (scopedStoredValue !== null) {
       const scopedCandidate = JSON.parse(scopedStoredValue) as { state?: unknown; version?: unknown };
       if (
@@ -275,7 +278,7 @@ export function readSidebarUiCollapseState(windowScopeId: string): SidebarUiColl
       };
     }
 
-    const legacyStoredValue = window.localStorage.getItem(SIDEBAR_UI_COLLAPSE_STATE_STORAGE_KEY);
+    const legacyStoredValue = clientStorage.getItem(SIDEBAR_UI_COLLAPSE_STATE_STORAGE_KEY);
     const candidate = JSON.parse(legacyStoredValue ?? 'null');
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       const state = createDefaultSidebarUiCollapseState();
@@ -356,7 +359,7 @@ export function writeSidebarUiCollapseState(
       },
       version: 3,
     } satisfies SidebarUiCollapseStorage);
-    window.localStorage.setItem(getSidebarUiCollapseStateStorageKey(windowScopeId), serialized);
+    clientStorage.setItem(getSidebarUiCollapseStateStorageKey(windowScopeId), serialized);
     return { ok: true, storedByteLength: serialized.length };
   } catch {
     // Ignore storage failures; the in-memory collapse state should still update.

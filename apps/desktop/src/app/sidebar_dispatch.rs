@@ -456,6 +456,38 @@ impl GhostexGpuiApp {
         self.dispatch_gpui_sidebar_host_message(serde_json::Value::Object(message), cx)
     }
 
+    /// CDXC:Spaces 2026-09-15 DECISION:
+    /// User: a project added through the Add Project dialog joins the Space that is open in the sidebar and goes to the top of it.
+    /// SidebarApp owns the Space document and the selected Space, so only the added project's raw id and the owning machine id cross, under the inbound `assignAddedProjectToSelectedSpace` type, and nothing is applied here.
+    /// It must be dispatched before the project activation so the membership exists when the activation reveal resolves the project's Space.
+    pub(crate) fn forward_gpui_added_project_to_sidebar(
+        &mut self,
+        project_id: &str,
+        remote_machine_id: Option<&str>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let bounded = |value: &str| {
+            let value = value.trim();
+            (!value.is_empty()
+                && value.chars().count() <= 256
+                && !value.chars().any(char::is_control))
+            .then(|| value.to_string())
+        };
+        let Some(project_id) = bounded(project_id) else {
+            return false;
+        };
+        let mut message = serde_json::Map::new();
+        message.insert("projectId".to_string(), serde_json::json!(project_id));
+        message.insert(
+            "type".to_string(),
+            serde_json::json!("assignAddedProjectToSelectedSpace"),
+        );
+        if let Some(machine_id) = remote_machine_id.and_then(bounded) {
+            message.insert("remoteMachineId".to_string(), serde_json::json!(machine_id));
+        }
+        self.dispatch_gpui_sidebar_host_message(serde_json::Value::Object(message), cx)
+    }
+
     /// Forward an `updateCustomSessionTags` catalog write issued from an
     /// app-modal window (Settings) to the sidebar runtime, which performs the
     /// gxserver write exactly as it does for the same message posted by the

@@ -36,7 +36,7 @@ export const TOOLCHAIN = Object.freeze({
    * apps/mobile/tailcat-bridge before Gradle compiles against it. Both pins are
    * asserted against that module's go.mod and against the workflow file below.
    */
-  tailcatBridgeGo: '1.27.0',
+  tailcatBridgeGo: '1.27.1',
   tailcatBridgeGomobile: 'v0.0.0-20260821190718-4776eadac327',
   vpk: '1.2.0',
   /*

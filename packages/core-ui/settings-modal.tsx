@@ -1,3 +1,4 @@
+import { StorageInspector } from './settings-modal/storage-inspector';
 import { WindowsTerminalFields } from './settings-modal/tabs/windows-terminal-fields';
 import { useSystemColorScheme } from './use-system-color-scheme';
 import {
@@ -2857,6 +2858,7 @@ export function SettingsModal({
 
                         {mainSubsectionVisible('debugging', settingsSearch.debugging) ? (
                           <SettingsSection sectionRef={debuggingSectionRef} title='Debugging'>
+                            {draft.debuggingMode ? <StorageInspector /> : null}
                             {debuggingSettingVisible('debuggingMode') ? (
                               <ToggleField
                                 checked={draft.debuggingMode}

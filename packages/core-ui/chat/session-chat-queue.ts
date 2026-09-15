@@ -1,3 +1,4 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
 // Client logic for Ghostex's prompt queue and the synced composer draft
 // (plan 016 §4). Pure functions plus the per-client id: the row strip
 // (session-chat-queue-rows.tsx) and the composer stay presentation, this file
@@ -10,6 +11,8 @@
 import type { SessionChatDraft, SessionChatQueuedPrompt } from '../../shared/session-chat';
 import type { SessionChatDraftVersion } from '@/packages/shared/session-chat-queue';
 import { PointerActivationConstraints } from '@dnd-kit/dom';
+
+const clientStorage = storageScope(["chatClient"]);
 
 /**
  * How many rows the strip shows before it scrolls. The composer must stay the
@@ -145,9 +148,9 @@ export function sessionChatQueueCapabilities(params: {
 
 const SESSION_CHAT_CLIENT_ID_STORAGE_KEY = 'ghostex.sessionChat.clientId';
 
-function draftClientIdStorage(): Storage | null {
+function draftClientIdStorage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     return null;
   }

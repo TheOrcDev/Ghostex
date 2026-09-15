@@ -1,3 +1,4 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
 import { createRoot } from 'react-dom/client';
 import '@/packages/core-ui/styles.css';
 import { SidebarApp } from '@/packages/core-ui/sidebar-app';
@@ -82,6 +83,7 @@ window.ghostexGpui.onNativeScrollGestureBegan = () => {
   reportSidebarNativeScrollGestureBegan();
 };
 
+bootClientStorage(() => {
 installSessionChatRuntimeBroker();
 const gpuiSidebarRuntime = createGpuiSidebarRuntime();
 const root = createRoot(rootElement);
@@ -121,3 +123,5 @@ root.render(
 );
 
 gpuiSidebarRuntime.start();
+
+});

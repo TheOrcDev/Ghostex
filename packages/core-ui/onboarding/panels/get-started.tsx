@@ -13,9 +13,17 @@ const SESSION_VIEWS: readonly (readonly [PreferredAgentInterface, string, string
   ['chat', 'Chat', 'Cleaner agent conversation'],
   ['terminal', 'Terminal', 'Raw CLI interface'],
 ];
-const CARD_LEFT = 506;
-const CARD_WIDTH = 660;
-const TILE_GAP = 8;
+const CARD_LEFT = 486;
+const CARD_TOP = 310;
+const CARD_WIDTH = 700;
+/**
+ * CDXC:Onboarding 2026-09-15 WHY:
+ * The prototype laid the "Start with" tiles out at a fixed pitch of card width over tile count, which squeezed
+ * fifteen installed agent CLIs into 36px tiles with every name overlapping. The card is flow layout now: up to
+ * this many choices keep the name-and-detail tiles in one row, more become name-only chips that wrap, and the
+ * card grows with them.
+ */
+const MAX_TILE_ROW = 4;
 
 export function GetStartedPanel({ props, flow, setFlow }: PanelProps) {
   const { settings, agents, pickedProjectFolder, hasProjects } = props;
@@ -42,9 +50,6 @@ export function GetStartedPanel({ props, flow, setFlow }: PanelProps) {
   /** "Open Ghostex" is a host round trip: busy until the project and session exist, error stays on the panel. */
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string>();
-
-  const tilePitch = (CARD_WIDTH + TILE_GAP) / tiles.length;
-  const viewPitch = (CARD_WIDTH + TILE_GAP) / SESSION_VIEWS.length;
 
   const setSessionView = (view: PreferredAgentInterface) => {
     if (!settings) return;
@@ -80,47 +85,75 @@ export function GetStartedPanel({ props, flow, setFlow }: PanelProps) {
       <Sub x={486} y={252} w={700} size={16.5} center>
         One folder, one agent, one default view. Everything else can change later.
       </Sub>
-      <div className='glass pcard' style={box(486, 310, 700, 350)} />
-      <div className='label' style={{ position: 'absolute', left: CARD_LEFT, top: 328 }}>
-        Project folder
+      <div className='pcol' style={box(CARD_LEFT, CARD_TOP, CARD_WIDTH)}>
+        <div className='glass pcard'>
+          <div className='label'>Project folder</div>
+          <div className='pfield'>
+            <Icon n='folder' size={22} className='dimc2' />
+            <span className={'path' + (folder ? '' : ' dim')}>{folder || 'Choose a folder to start in'}</span>
+            <button type='button' className='choose' onClick={props.onPickProjectFolder}>
+              Choose folder
+            </button>
+          </div>
+          <div className='label'>Start with</div>
+          {tiles.length <= MAX_TILE_ROW ? (
+            <div className='opts' style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}>
+              {tiles.map((tile) => (
+                <button
+                  key={tile.id}
+                  type='button'
+                  className={'opt' + (startWith === tile.id ? ' sel' : '')}
+                  onClick={() => setFlow({ startWith: tile.id })}
+                >
+                  <span className='nm'>{tile.name}</span>
+                  <span className='ss'>{tile.detail}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className='chips'>
+              {tiles.map((tile) => (
+                <button
+                  key={tile.id}
+                  type='button'
+                  className={'opt chip' + (startWith === tile.id ? ' sel' : '')}
+                  title={tile.detail}
+                  onClick={() => setFlow({ startWith: tile.id })}
+                >
+                  {tile.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className='label'>Default session view</div>
+          <div className='opts' style={{ gridTemplateColumns: `repeat(${SESSION_VIEWS.length}, minmax(0, 1fr))` }}>
+            {SESSION_VIEWS.map(([id, name, detail]) => (
+              <button
+                key={id}
+                type='button'
+                className={'opt' + (sessionView === id ? ' sel' : '')}
+                onClick={() => setSessionView(id)}
+              >
+                <span className='nm'>{name}</span>
+                <span className='ss'>{detail}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className='sub center pnote-flow'>
+          {openError ? (
+            <span style={{ color: '#ff6b62' }} role='alert'>
+              {openError}
+            </span>
+          ) : opening ? (
+            'Adding the project and opening its first session…'
+          ) : canOpen ? (
+            "That's it. The workspace teaches the deeper features once you are inside."
+          ) : (
+            'Choose a folder above to open your first project.'
+          )}
+        </p>
       </div>
-      <div className='pfield' style={box(CARD_LEFT, 354, CARD_WIDTH, 50)}>
-        <Icon n='folder' size={22} className='dimc2' />
-        <span className={'path' + (folder ? '' : ' dim')}>{folder || 'Choose a folder to start in'}</span>
-        <button type='button' className='choose' onClick={props.onPickProjectFolder}>
-          Choose folder
-        </button>
-      </div>
-      <div className='label' style={{ position: 'absolute', left: CARD_LEFT, top: 428 }}>
-        Start with
-      </div>
-      {tiles.map((tile, index) => (
-        <button
-          key={tile.id}
-          type='button'
-          className={'opt' + (startWith === tile.id ? ' sel' : '')}
-          style={box(CARD_LEFT + index * tilePitch, 452, tilePitch - TILE_GAP, 72)}
-          onClick={() => setFlow({ startWith: tile.id })}
-        >
-          <span className='nm'>{tile.name}</span>
-          <span className='ss'>{tile.detail}</span>
-        </button>
-      ))}
-      <div className='label' style={{ position: 'absolute', left: CARD_LEFT, top: 544 }}>
-        Default session view
-      </div>
-      {SESSION_VIEWS.map(([id, name, detail], index) => (
-        <button
-          key={id}
-          type='button'
-          className={'opt' + (sessionView === id ? ' sel' : '')}
-          style={box(CARD_LEFT + index * viewPitch, 568, viewPitch - TILE_GAP, 72)}
-          onClick={() => setSessionView(id)}
-        >
-          <span className='nm'>{name}</span>
-          <span className='ss'>{detail}</span>
-        </button>
-      ))}
       <FootActions panel={5}>
         <button type='button' className='ghost' onClick={advancedLater} disabled={opening}>
           Advanced settings later
@@ -135,19 +168,6 @@ export function GetStartedPanel({ props, flow, setFlow }: PanelProps) {
           )}
         </Cta>
       </FootActions>
-      <Sub x={486} y={700} w={700} size={15} center>
-        {openError ? (
-          <span style={{ color: '#ff6b62' }} role='alert'>
-            {openError}
-          </span>
-        ) : opening ? (
-          'Adding the project and opening its first session…'
-        ) : canOpen ? (
-          "That's it. The workspace teaches the deeper features once you are inside."
-        ) : (
-          'Choose a folder above to open your first project.'
-        )}
-      </Sub>
     </>
   );
 }

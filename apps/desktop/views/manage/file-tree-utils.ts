@@ -483,8 +483,9 @@ export function isExcalidrawPath(path: string): boolean {
   return /\.excalidraw$/iu.test(path);
 }
 
+/** Only drawings autosave; Markdown and text wait for an explicit save (CDXC:Docs 2026-09-15 in constants.ts). */
 export function shouldAutosaveManageFile(path: string): boolean {
-  return (isMarkdownPath(path) || isExcalidrawPath(path)) && !isManageReviewDocumentPath(path);
+  return isExcalidrawPath(path) && !isManageReviewDocumentPath(path);
 }
 
 export function isManageReviewDocumentPath(path: string | undefined): boolean {

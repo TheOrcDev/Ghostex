@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import { DEFAULT_ghostex_SETTINGS, normalizeghostexSettings } from '@/packages/shared/ghostex-settings';
 import {
   BOARD_SORT_OPTIONS,
@@ -13,6 +14,8 @@ import {
   type TshirtSize,
 } from '../project-board-shared';
 import { type ProjectBoardStartLocation } from '@/packages/shared/bead-conversation-links';
+
+const clientStorage = storageScope(["nativeSettings","boardView"]);
 
 export const PROJECT_BOARD_COMMAND_COMPLETED_EVENT = 'ghostex-project-board-command-completed';
 export const PROJECT_BOARD_AUTO_REFRESH_INTERVAL_MS = 8_000;
@@ -39,7 +42,7 @@ export function readExperimentalFeaturesEnabled(searchParams: URLSearchParams): 
   if (searchParams.get('automationExperimental') === 'false') {
     return true;
   }
-  const storedSettingsJson = window.localStorage.getItem(NATIVE_SETTINGS_STORAGE_KEY);
+  const storedSettingsJson = clientStorage.getItem(NATIVE_SETTINGS_STORAGE_KEY);
   if (storedSettingsJson) {
     try {
       return normalizeghostexSettings(JSON.parse(storedSettingsJson)).showBetaFeatures;
@@ -60,7 +63,7 @@ export function readExperimentalFeaturesEnabled(searchParams: URLSearchParams): 
 export function readProjectBoardViewPreferences(): ProjectBoardViewPreferences {
   try {
     return normalizeProjectBoardViewPreferences(
-      JSON.parse(window.localStorage.getItem(PROJECT_BOARD_VIEW_PREFERENCES_STORAGE_KEY) || 'null')
+      JSON.parse(clientStorage.getItem(PROJECT_BOARD_VIEW_PREFERENCES_STORAGE_KEY) || 'null')
     );
   } catch {
     return DEFAULT_PROJECT_BOARD_VIEW_PREFERENCES;

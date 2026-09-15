@@ -16,10 +16,16 @@ export const MANAGE_ANNOTATION_SCHEMA_VERSION = 1;
 export const MANAGE_ANNOTATION_IMAGE_MAX_BYTES = 512 * 1024;
 export const MANAGE_ANNOTATION_MAX_IMAGES = 4;
 /*
- * CDXC:Docs 2026-06-28-02:36:
- * Markdown and Excalidraw edits should persist automatically shortly after the user stops changing content because those artifact surfaces do not expose a visible Save button. Debounce saves for one second so normal typing and drawing gestures coalesce into a single bridge write.
+ * CDXC:Docs 2026-09-15 DECISION:
+ * User: Markdown and text files no longer save on their own; edits stay unsaved until Cmd+S, with the unsaved state shown on the header icon and the open-files row.
+ * Excalidraw drawings keep the one-second autosave from 2026-06-28 because drawing gestures have no natural save moment.
  */
 export const MANAGE_CONTENT_AUTOSAVE_DELAY_MS = 1_000;
+/** Unsaved drafts are written to local storage this long after the last keystroke so a quit or reload keeps them. */
+export const MANAGE_DRAFT_PERSIST_DELAY_MS = 400;
+export const MANAGE_OPEN_FILES_STORAGE_KEY_PREFIX = 'ghostex.manage.openFiles.';
+export const MANAGE_DRAFTS_STORAGE_KEY_PREFIX = 'ghostex.manage.drafts.';
+export const MANAGE_ACTIVE_FILE_STORAGE_KEY_PREFIX = 'ghostex.manage.activeFile.';
 export const MANAGE_GPUI_FILE_CHANGE_POLL_INTERVAL_MS = 400;
 export const MANAGE_GPUI_FILE_CHANGE_DEBOUNCE_MS = 500;
 export const MANAGE_SIDEBAR_DEFAULT_WIDTH = 292;
@@ -30,6 +36,9 @@ export const MANAGE_FLOATING_SIDEBAR_MAX_WIDTH = 800;
 export const MANAGE_SIDEBAR_SIDE_STORAGE_KEY = 'ghostex.manage.sidebarSide';
 export const MANAGE_SIDEBAR_WIDTH_STORAGE_KEY = 'ghostex.manage.sidebarWidth';
 export const MANAGE_SIDEBAR_PINNED_STORAGE_KEY = 'ghostex.manage.sidebarPinned';
+export const MANAGE_FORMATTING_BAR_COLLAPSED_STORAGE_KEY = 'ghostex.manage.formattingBarCollapsed';
+/** Distance between the floating Markdown formatting bar and the editor's edges. */
+export const MANAGE_FORMATTING_BAR_INSET = 14;
 /**
  * CDXC:Docs 2026-09-12 DECISION:
  * User: hovering the corner button peeks the files list; a short open delay stops the list flashing open when the cursor merely crosses the corner, and a short close grace stops a slight overshoot from collapsing it.

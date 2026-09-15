@@ -1,5 +1,8 @@
+import { storageScope } from '@/packages/client-storage';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { ProjectDocsFileEntry, ProjectDocsRequest, ProjectDocsResponse } from '@/packages/shared/project-docs';
+
+const clientStorage = storageScope(["docsIndex"]);
 
 type Entry = ProjectDocsFileEntry;
 type Request = (request: Omit<ProjectDocsRequest, 'requestId'>) => Promise<ProjectDocsResponse>;
@@ -67,7 +70,7 @@ export class ManageFileIndex {
   ) {
     this.key = CACHE_PREFIX + JSON.stringify([projectId, projectEditorId]);
     try {
-      const cached = JSON.parse(sessionStorage.getItem(this.key) ?? 'null');
+      const cached = JSON.parse(clientStorage.getItem(this.key) ?? 'null');
       if (cached && typeof cached.scope === 'string' && Array.isArray(cached.directories)) {
         const directories = cached.directories as [string, Directory][];
         if (
@@ -338,11 +341,7 @@ export class ManageFileIndex {
           legacyFullList: this.legacyFullList,
           directories: [...this.directories],
         });
-        if (serialized.length < 1500000) {
-          const keys = Object.keys(sessionStorage).filter((key) => key.startsWith(CACHE_PREFIX) && key !== this.key);
-          while (keys.length >= 2) sessionStorage.removeItem(keys.shift()!);
-          sessionStorage.setItem(this.key, serialized);
-        } else sessionStorage.removeItem(this.key);
+        clientStorage.setItem(this.key, serialized);
       } catch {
         /* Storage quotas do not affect the live index. */
       }

@@ -1,3 +1,5 @@
+import { bootClientStorage } from '@/packages/client-storage/bootstrap';
+import { storageScope } from '@/packages/client-storage';
 import { useDesktopDelayedSendAgents } from './delayed-send-agents';
 import { useAppScrollbars } from '@/packages/components/ui/app-scrollbars';
 import type { DelayedSendAgentReference } from '@/packages/shared/delayed-send';
@@ -100,6 +102,8 @@ import {
 } from '@/packages/shared/ghostex-settings';
 import type { WebviewApi } from '@/packages/core-ui/webview-api';
 import '@/packages/core-ui/styles.css';
+
+const clientStorage = storageScope(["commitAgent","renameAgent"]);
 
 type AppModalKind =
   | 'addProject'
@@ -789,22 +793,22 @@ function isSettingsModalTab(value: unknown): value is SettingsModalTab {
 }
 
 function readPromptAgentModalOverride(modal: PromptAgentModalKey): string | undefined {
-  const value = localStorage.getItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal])?.trim();
+  const value = clientStorage.getItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal])?.trim();
   return value || undefined;
 }
 
 function writePromptAgentModalOverride(modal: PromptAgentModalKey, agentId: string): void {
   const normalizedAgentId = agentId.trim();
   if (!normalizedAgentId) {
-    localStorage.removeItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal]);
+    clientStorage.removeItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal]);
     return;
   }
-  localStorage.setItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal], normalizedAgentId);
+  clientStorage.setItem(PROMPT_AGENT_MODAL_STORAGE_KEYS[modal], normalizedAgentId);
 }
 
 function clearPromptAgentModalOverrides(): void {
   for (const key of Object.values(PROMPT_AGENT_MODAL_STORAGE_KEYS)) {
-    localStorage.removeItem(key);
+    clientStorage.removeItem(key);
   }
 }
 
@@ -1833,9 +1837,16 @@ function AppModalHost() {
   }, [activeModal, ghostexCliStatus, ghostexCliStatusLoading]);
 
   useEffect(() => {
-    document.body.dataset.sidebarTheme = theme;
+    /**
+     * CDXC:Onboarding 2026-09-15 WHY:
+     * The onboarding is a dark-only design that fills its window, so that window publishes the dark theme even
+     * when the app theme is light. Without this the toasts stacked over it took the light modal background and
+     * rendered as pale green and pink cards with white text.
+     */
+    const pageTheme: typeof theme = isOnboardingModal ? 'dark-2' : theme;
+    document.body.dataset.sidebarTheme = pageTheme;
     document.documentElement.dataset.appAppearance =
-      theme === 'plain-light' || theme.startsWith('light-') ? 'light' : 'dark';
+      pageTheme === 'plain-light' || pageTheme.startsWith('light-') ? 'light' : 'dark';
     /**
      * CDXC:Theming 2026-08-24:
      * Modals read their accent from --ghostex-accent, so publish the setting
@@ -1864,7 +1875,7 @@ function AppModalHost() {
       document.body.style.removeProperty('--workspace-sidebar-theme-foreground');
       document.body.style.removeProperty('--ghostex-accent');
     };
-  }, [customThemeColor, settings?.accentColor, theme]);
+  }, [customThemeColor, isOnboardingModal, settings?.accentColor, theme]);
 
   return (
     <>
@@ -4254,4 +4265,4 @@ const accountsBootstrapBridge = window as unknown as {
 };
 accountsBootstrapBridge.ghostexGpui ??= {};
 accountsBootstrapBridge.ghostexGpui.onGxserverBootstrapChanged = notifyAccountsConnectionsChanged;
-createRoot(document.getElementById('root')!).render(<AppModalHost />);
+bootClientStorage(() => { createRoot(document.getElementById('root')!).render(<AppModalHost />); });

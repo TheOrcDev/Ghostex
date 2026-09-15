@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 import {
   BUILT_IN_WORKSPACE_OPEN_TARGETS,
   type WorkspaceOpenTargetAvailability,
@@ -5,6 +6,8 @@ import {
 } from '@/packages/shared/workspace-open-targets';
 import { LAST_ACTION_COMMAND_STORAGE_PREFIX, LAST_OPEN_TARGET_STORAGE_KEY } from './constants';
 import type { ResolvedOpenTarget, TitlebarMode, TitlebarOpenTargetsSettings, TitlebarProjectState } from './types';
+
+const clientStorage = storageScope(["openTarget","lastAction"]);
 
 export function normalizeTitlebarMode(candidate: unknown): TitlebarMode {
   /**
@@ -105,14 +108,14 @@ export function resolveVisibleOpenTargets(
 }
 
 export function readLastOpenTargetId(): string {
-  return localStorage.getItem(LAST_OPEN_TARGET_STORAGE_KEY) || 'finder';
+  return clientStorage.getItem(LAST_OPEN_TARGET_STORAGE_KEY) || 'finder';
 }
 
 export function readLastActionCommandId(
   state: Pick<TitlebarProjectState, 'projectId' | 'projectPath'>
 ): string | undefined {
   const storageKey = getLastActionCommandStorageKey(state);
-  return storageKey ? localStorage.getItem(storageKey)?.trim() || undefined : undefined;
+  return storageKey ? clientStorage.getItem(storageKey)?.trim() || undefined : undefined;
 }
 
 export function persistLastActionCommandId(
@@ -123,7 +126,7 @@ export function persistLastActionCommandId(
   if (!storageKey) {
     return;
   }
-  localStorage.setItem(storageKey, commandId);
+  clientStorage.setItem(storageKey, commandId);
 }
 
 export function getLastActionCommandStorageKey(

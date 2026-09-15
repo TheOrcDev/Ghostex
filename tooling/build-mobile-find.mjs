@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { checkClientStorage } from './client-storage/check.mjs';
+checkClientStorage();
 /*
 CDXC:PromptSearch 2026-08-20:
 Bundles apps/mobile/views/find/find-prompts-main.tsx (the shared Find page — the GUI for

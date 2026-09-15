@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:SessionChat 2026-09-03:
 Claude Code's task list, the block its TUI pins under the transcript:
@@ -35,6 +36,8 @@ import { IconChevronDown, IconCircleCheckFilled, IconLoader2, IconListCheck } fr
 import type { SessionChatAgentTask, SessionChatAgentTasks } from '../../shared/session-chat';
 import { cn } from '@/packages/components/utils';
 
+const clientStorage = storageScope(["tasksCollapsed"]);
+
 const COLLAPSED_STORAGE_KEY = 'ghostex.chat.agentTasks.collapsed';
 
 export interface SessionChatAgentTasksPanelProps {
@@ -62,7 +65,7 @@ function byCliOrder(left: SessionChatAgentTask, right: SessionChatAgentTask): nu
 
 function readCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
+    return clientStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
   } catch {
     return false;
   }
@@ -71,9 +74,9 @@ function readCollapsed(): boolean {
 function writeCollapsed(collapsed: boolean): void {
   try {
     if (collapsed) {
-      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, '1');
+      clientStorage.setItem(COLLAPSED_STORAGE_KEY, '1');
     } else {
-      window.localStorage.removeItem(COLLAPSED_STORAGE_KEY);
+      clientStorage.removeItem(COLLAPSED_STORAGE_KEY);
     }
   } catch {
     // Storage may be unavailable (private mode); the fold still works for the session.

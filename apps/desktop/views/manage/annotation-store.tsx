@@ -103,9 +103,9 @@ export function meoSelectionToolbarPosition(
       : fallbackAnchor.top;
   const rawLeft = selectionState.align === 'start' ? anchorX : anchorX - estimatedWidth / 2;
   const maxLeft = Math.max(margin, window.innerWidth - estimatedWidth - margin);
+  /* The formatting bar floats at the bottom, so the document header is the top chrome a selection toolbar must clear. */
   const toolbarBottom =
-    (document.querySelector('.manage-meo-markdown-editor .mode-toolbar') as HTMLElement | null)?.getBoundingClientRect()
-      .bottom ?? 0;
+    (document.querySelector('.manage-preview-header') as HTMLElement | null)?.getBoundingClientRect().bottom ?? 0;
   const aboveTop = anchorY - margin - estimatedHeight;
   const isBelow = aboveTop < toolbarBottom + margin;
   return {

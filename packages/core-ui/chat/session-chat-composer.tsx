@@ -1,3 +1,4 @@
+import { flushClientStorage } from '@/packages/client-storage';
 import { SessionChatAttachmentPreviews } from './session-chat-attachment-previews';
 import {
   clipboardImageFiles,
@@ -11,7 +12,7 @@ import {
   type PastedImagePreview,
 } from './session-chat-image-attachments';
 import { persistDraftsForRelease, type PendingDraft } from './session-chat-draft-outbox';
-import { readSessionChatComposerSelection, saveSessionChatComposerSelection } from './session-chat-composer-parking';
+import { readSessionChatComposerSelection, saveSessionChatComposerSelection, isSessionChatComposerSelectionDurable } from './session-chat-composer-parking';
 import type { SessionChatDraftHandoff } from '@/packages/shared/session-chat-queue';
 import {
   registerDraftWriter,
@@ -926,7 +927,7 @@ export const SessionChatComposer = forwardRef<SessionChatComposerHandle, Session
      */
     const releasePreparedTextRef = useRef<string | null>(null);
     const releasePreparedVersionRef = useRef<string | undefined>(undefined);
-    const canRelease = (): boolean => {
+    const canRelease = (requireDurableSelection = true): boolean => {
       const input = getInputApi();
       const allowed =
         input !== null &&
@@ -944,6 +945,7 @@ export const SessionChatComposer = forwardRef<SessionChatComposerHandle, Session
       if (allowed && sessionKey && input) {
         try {
           saveSessionChatComposerSelection(sessionKey, { text: input.getValue(), ...input.getSelection() });
+          if (requireDurableSelection && !isSessionChatComposerSelectionDurable(sessionKey)) return false;
         } catch {
           return false;
         }
@@ -966,7 +968,7 @@ export const SessionChatComposer = forwardRef<SessionChatComposerHandle, Session
       const content = input.getValue();
       releasePreparedTextRef.current = content;
       releasePreparedVersionRef.current = JSON.stringify(draftVersionRef.current);
-      if (!canRelease()) {
+      if (!canRelease(false)) {
         releasePreparedTextRef.current = null;
         return null;
       }
@@ -976,8 +978,10 @@ export const SessionChatComposer = forwardRef<SessionChatComposerHandle, Session
       releasePreparedVersionRef.current = JSON.stringify(draftVersionRef.current);
       try {
         const revisions = await persistDraftsForRelease(sessionKey);
-        if (!canRelease() || readStoredSessionChatDraftEntry(sessionKey)?.text !== content) return null;
+        if (!canRelease(false) || readStoredSessionChatDraftEntry(sessionKey)?.text !== content) return null;
         saveSessionChatComposerSelection(sessionKey, { text: content, ...input.getSelection() });
+        await flushClientStorage(['drafts', 'recovery', 'recoveryDismissed', 'draftOutbox', 'composerSelection', 'questionDrafts']);
+        if (!canRelease() || input.getValue() !== content) return null;
         return revisions;
       } catch {
         releasePreparedTextRef.current = null;
@@ -1098,6 +1102,10 @@ export const SessionChatComposer = forwardRef<SessionChatComposerHandle, Session
           // Moving an editor is not sending its draft. Keep its identity and durable text.
           preserveDraftRevision({ sessionKey, text: content, updatedAt: saved.updatedAt ?? Date.now(), version });
           writeStoredSessionChatDraft(sessionKey, content, saved.updatedAt, version, false, true);
+          await flushClientStorage(['drafts', 'recovery', 'draftOutbox']);
+          if ((getInputApi()?.getValue() ?? draftRef.current) !== content ||
+              draftVersionRef.current?.draftId !== version.draftId || draftVersionRef.current?.revision !== version.revision)
+            throw new Error('The draft changed during transfer. It has been kept in Chat.');
           parkedDraftRef.current = true;
           composerTouchedRef.current = false;
           draftVersionRef.current = undefined;

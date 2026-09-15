@@ -6,7 +6,6 @@ changed. See `core.ts` for how the runtime's methods are re-attached.
 import {
   GPUI_CLOSE_AFTER_DONE_DELAY_MS,
   GPUI_DELAYED_SEND_MAX_DELAY_MS,
-  GPUI_DELAYED_SEND_MIN_DELAY_MS,
 } from './constants';
 import type { GpuiSidebarRuntime } from './core';
 import {
@@ -39,7 +38,7 @@ export interface GpuiSidebarRuntimeCloseAfterDoneMethods {
     message: Extract<SidebarToExtensionMessage, { type: 'scheduleDelayedSend' }>
   ): Promise<void>;
   postponeDelayedSend(sessionId: string, delayMs: number): Promise<void>;
-  cancelRemoteDelayedSend(sessionId: string): Promise<void>;
+  cancelDelayedSend(sessionId: string): Promise<void>;
   toggleCloseAfterDone(sessionId: string): void;
   findPresentationSessionRowForSidebarSessionId(sessionId: string): GxserverPresentationSession | undefined;
   refreshCloseAfterDoneTimers(): void;
@@ -97,11 +96,10 @@ export const gpuiSidebarRuntimeCloseAfterDoneMethods = {
       if (
         delayMs === undefined ||
         !Number.isSafeInteger(delayMs) ||
-        delayMs < GPUI_DELAYED_SEND_MIN_DELAY_MS ||
-        delayMs > GPUI_DELAYED_SEND_MAX_DELAY_MS ||
-        delayMs % GPUI_DELAYED_SEND_MIN_DELAY_MS !== 0
+        delayMs <= 0 ||
+        delayMs > GPUI_DELAYED_SEND_MAX_DELAY_MS
       ) {
-        this.postSidebarActionToast('warning', 'Choose a Delayed Send timer between 1 minute and 24 days.');
+        this.postSidebarActionToast('warning', 'Choose a future send time within 24 days.');
         return;
       }
       description = `Presses Enter in ${formatGpuiDelayedSendDelay(delayMs)}.`;
@@ -160,26 +158,29 @@ export const gpuiSidebarRuntimeCloseAfterDoneMethods = {
     }
   },
 
-  async cancelRemoteDelayedSend(this: GpuiSidebarRuntime, sessionId: string): Promise<void> {
-    const reference = parseGpuiRemotePresentationSessionId(sessionId);
-    if (!reference) {
-      return;
-    }
+  async cancelDelayedSend(this: GpuiSidebarRuntime, sessionId: string): Promise<void> {
+    const remote = parseGpuiRemotePresentationSessionId(sessionId);
+    const reference = remote ?? parseGxserverPresentationProjectSessionId(sessionId);
     try {
-      const result = await this.requestRemoteGxserver<{ changed?: boolean }>(
-        reference.machineId,
-        '/api/cancelDelayedSend',
-        {
-          projectId: reference.projectId,
-          sessionId: reference.sessionId,
+      if (!reference) {
+        throw new Error('The selected agent session is unavailable.');
+      }
+      const params = { projectId: reference.projectId, sessionId: reference.sessionId };
+      let result: { changed?: boolean };
+      if (remote) {
+        result = await this.requestRemoteGxserver(remote.machineId, '/api/cancelDelayedSend', params);
+      } else {
+        if (!this.client) {
+          throw new Error('The local gxserver is disconnected.');
         }
-      );
+        result = await this.client.rpc('/api/cancelDelayedSend', params);
+      }
       this.postSidebarActionToast(
         'info',
         result.changed === true ? 'Delayed Send canceled' : 'No Delayed Send timer is active'
       );
     } catch (error) {
-      this.postRemoteToast('error', 'Delayed Send could not be canceled', {
+      this.postSidebarActionToast('error', 'Delayed Send could not be canceled', {
         description: error instanceof Error ? error.message : String(error),
       });
     }

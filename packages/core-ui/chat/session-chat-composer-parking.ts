@@ -1,3 +1,6 @@
+import { storageScope, isStoragePending } from '@/packages/client-storage';
+
+const clientStorage = storageScope(["composerSelection"]);
 interface ParkedComposerSelection {
   text: string;
   start: number;
@@ -7,9 +10,8 @@ const prefix = 'ghostex.sessionChat.composerSelection.';
 
 export function saveSessionChatComposerSelection(sessionKey: string, state: ParkedComposerSelection): void {
   const serialized = JSON.stringify(state);
-  localStorage.setItem(prefix + sessionKey, serialized);
-  if (localStorage.getItem(prefix + sessionKey) !== serialized)
-    throw new Error('The draft selection could not be saved.');
+  clientStorage.setItem(prefix + sessionKey, serialized);
+
 }
 export function readSessionChatComposerSelection(
   sessionKey: string | undefined,
@@ -17,7 +19,7 @@ export function readSessionChatComposerSelection(
 ): ParkedComposerSelection | undefined {
   if (!sessionKey) return undefined;
   try {
-    const state = JSON.parse(localStorage.getItem(prefix + sessionKey) ?? 'null') as ParkedComposerSelection | null;
+    const state = JSON.parse(clientStorage.getItem(prefix + sessionKey) ?? 'null') as ParkedComposerSelection | null;
     if (state?.text !== text || !Number.isInteger(state.start) || !Number.isInteger(state.end)) return undefined;
     return {
       text,
@@ -27,4 +29,8 @@ export function readSessionChatComposerSelection(
   } catch {
     return undefined;
   }
+}
+
+export function isSessionChatComposerSelectionDurable(sessionKey: string): boolean {
+  return !isStoragePending('composerSelection', prefix + sessionKey);
 }

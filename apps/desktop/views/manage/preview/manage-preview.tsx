@@ -593,6 +593,7 @@ export function ManagePreview({
     >
       <header className='manage-preview-header'>
         <ManageDocumentTitle
+          dirty={isDirty && !isReview}
           key={preview.path}
           title={previewTitle}
           icon={

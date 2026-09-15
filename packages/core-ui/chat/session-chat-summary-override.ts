@@ -1,7 +1,10 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
 // Per-session Summary Mode state. Summary mode is opt-in for each chat and
 // survives page reloads without becoming a global presentation default.
 
 import { detectghostexHotkeyPlatform } from '../../shared/ghostex-hotkeys';
+
+const clientStorage = storageScope(["summary"]);
 
 const STORAGE_PREFIX = 'ghostex.sessionChat.summary.';
 
@@ -9,9 +12,9 @@ export function sessionChatSummaryToggleHotkey(): string {
   return detectghostexHotkeyPlatform() === 'mac' ? 'cmd+ctrl+shift+s' : 'cmd+alt+shift+s';
 }
 
-function storage(): Storage | null {
+function storage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     // Storage disabled by the embedder: the toggle still works per mount.
     return null;

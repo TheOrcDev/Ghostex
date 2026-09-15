@@ -104,7 +104,15 @@ jobs:
     # package); each phase gets its own restart-once-on-wedge, and the same
     # arithmetic still fits because a wedge in both phases of one job has
     # never been observed and the compile phase is now sccache-warm.
-    timeout-minutes: 90
+    #
+    # CDXC:Release 2026-09-15 WHY:
+    # 9.6.0's Windows ARM64 job was killed by the 90-minute budget while still
+    # making steady progress: 21 min compile, then the native editor build
+    # inside the packaging phase ran past minute 90. x64 finishes in about 60
+    # minutes; ARM64 needs more. That is a slow job, not a wedge, and the
+    # silence watchdog still catches wedges, so the budget only has to cover
+    # real work.
+    timeout-minutes: ${{ inputs.arch == 'arm64' && 150 || 100 }}
     env:
       GHOSTEX_RELEASE_SOURCE_SHA: ${{ github.sha }}
       GHOSTEX_RELEASE_WORKFLOW_SHA: ${{ github.sha }}

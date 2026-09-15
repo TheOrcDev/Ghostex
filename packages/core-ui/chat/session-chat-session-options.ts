@@ -1,3 +1,4 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
 // Per-agent session-option catalogs for the composer footer pills
 // (upstream chat spec §1.2-§1.4 port).
 //
@@ -23,6 +24,8 @@ import {
 import { currentAgentModelCatalog } from '../../shared/agent-model-catalog-store';
 import type { SessionChatDetectedChoice, SessionChatSendKey } from '../../shared/session-chat';
 import type { SidebarAgentIcon } from '../../shared/sidebar-agents';
+
+const clientStorage = storageScope(["sessionOptions"]);
 
 export type SessionChatOptionCategory = 'model' | 'thought_level' | 'model_config' | 'mode';
 
@@ -1101,9 +1104,9 @@ session key — is documented at that call site.
 */
 const STORAGE_PREFIX = 'ghostex.sessionChat.options.';
 
-function storage(): Storage | null {
+function storage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     // Storage disabled by the embedder: pills still work, just per-mount.
     return null;

@@ -585,7 +585,9 @@ export const MANAGE_STYLES = `
    * Pulling it inside the toolbar instead lines its right edge up with the last toolbar button above it, and this stays scoped to Docs so the editor app's own copy of the panel is untouched.
    */
   .manage-shell .find-panel {
-    right: 14px;
+    bottom: calc(100% + 8px);
+    right: 0;
+    top: auto;
   }
 
   .manage-search {
@@ -653,6 +655,108 @@ export const MANAGE_STYLES = `
   .manage-search-clear-button:focus-visible {
     color: var(--manage-text);
     outline: none;
+  }
+
+  /*
+   * CDXC:Docs 2026-09-15 DECISION:
+   * User: the open-files list sits under Search and is as tall as the number of open files; it only scrolls once it would take more than a third of the sidebar.
+   * Rows share the tree's type and hover language. The close control appears on hover, and an unsaved row shows a dot in its place until hovered.
+   */
+  .manage-open-files {
+    border-bottom: 1px solid light-dark(#e5e5e5, #292929);
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    margin: -4px 0 0;
+    max-height: 34%;
+    overflow: auto;
+    padding: 3px 0;
+    scrollbar-width: thin;
+  }
+
+  .manage-open-file-row {
+    align-items: center;
+    color: light-dark(#52525b, #b4b8c0);
+    cursor: default;
+    display: grid;
+    flex: 0 0 auto;
+    gap: 9px;
+    grid-template-columns: 16px minmax(0, 1fr) 20px;
+    height: 28px;
+    padding: 0 7px 0 14px;
+  }
+
+  .manage-open-file-row:hover,
+  .manage-open-file-row:focus-visible {
+    background: var(--app-context-menu-hover-background);
+    color: light-dark(#3f3f46, #d8d8d8);
+    outline: none;
+  }
+
+  .manage-open-file-row[data-selected="true"] {
+    background: var(--manage-row-surface);
+    color: light-dark(#3f3f46, #d8d8d8);
+  }
+
+  .manage-open-file-name {
+    font-size: 15.55px;
+    font-weight: 300;
+    line-height: 20px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .manage-open-file-close {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    display: inline-flex;
+    height: 20px;
+    justify-content: center;
+    padding: 0;
+    position: relative;
+    width: 20px;
+  }
+
+  .manage-open-file-close svg {
+    opacity: 0;
+  }
+
+  .manage-open-file-row:hover .manage-open-file-close svg,
+  .manage-open-file-row:focus-within .manage-open-file-close svg {
+    opacity: 1;
+  }
+
+  .manage-open-file-close:hover,
+  .manage-open-file-close:focus-visible {
+    background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+    outline: none;
+  }
+
+  .manage-open-file-dot {
+    background: currentColor;
+    border-radius: 999px;
+    display: none;
+    height: 8px;
+    position: absolute;
+    width: 8px;
+  }
+
+  .manage-open-file-row[data-dirty="true"]:not(:hover):not(:focus-within) .manage-open-file-dot {
+    display: block;
+  }
+
+  .manage-preview-title-unsaved {
+    background: currentColor;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    height: 9px;
+    margin: 0 3px;
+    width: 9px;
   }
 
   .manage-index-status {
@@ -1298,20 +1402,63 @@ export const MANAGE_STYLES = `
    * The embedded Meo editor must keep both its toolbar and CodeMirror surface owned by the Manage preview column after heading formatting changes remeasure live Markdown content.
    * Keep Meo's single-row toolbar layout, measure before hiding the three secondary right-side utility buttons, and use one Live/Source toggle button instead of a two-option segmented control.
    */
+  /*
+   * CDXC:Docs 2026-09-15 DECISION:
+   * User: the formatting bar is a floating, rounded bar near the bottom of the document instead of a second header row, and it can collapse to one pill.
+   * The bar sits at its content width, centred over the editor, and the editor keeps extra bottom padding so the last lines can scroll out from under it. The inset is MANAGE_FORMATTING_BAR_INSET in constants.ts.
+   */
   .manage-meo-markdown-editor .mode-toolbar {
     background: light-dark(#f4f4f5, #0b0b0b);
-    box-shadow: inset 0 -1px 0 var(--manage-border);
+    border: 1px solid var(--manage-border);
+    border-radius: 10px;
+    bottom: 14px;
+    box-shadow:
+      0 8px 24px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.45)),
+      0 1px 2px light-dark(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.3));
     box-sizing: border-box;
     display: flex;
-    flex: 0 0 auto;
     gap: 8px;
-    height: 35px;
-    inline-size: 100%;
-    max-inline-size: 100%;
+    height: 37px;
+    left: 50%;
+    max-width: calc(100% - 28px);
     min-width: 0;
     overflow: visible;
-    padding-block: 3px;
-    padding-right: 3px;
+    padding: 3px;
+    position: absolute;
+    transform: translateX(-50%);
+    width: max-content;
+    z-index: 500;
+  }
+
+  .manage-meo-markdown-editor .mode-toolbar .format-group {
+    margin-left: 0;
+  }
+
+  /* Meo pads the bar's left edge to line up with the gutter; a centred floating bar keeps its own 3px. Outranks Meo's :has() rule for hidden line numbers. */
+  .manage-shell .manage-preview .manage-meo-markdown-editor.editor-root .mode-toolbar {
+    padding-left: 3px;
+  }
+
+  .manage-meo-markdown-editor .mode-toolbar .manage-formatting-bar-toggle {
+    border-radius: 4px;
+    color: var(--manage-toolbar-icon-color);
+    flex: 0 0 var(--manage-header-button-size);
+    height: var(--manage-header-button-size);
+    width: var(--manage-header-button-size);
+  }
+
+  .manage-meo-markdown-editor .mode-toolbar .manage-formatting-bar-toggle:hover,
+  .manage-meo-markdown-editor .mode-toolbar .manage-formatting-bar-toggle:focus-visible {
+    background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+    color: var(--manage-text);
+  }
+
+  .manage-meo-markdown-editor .mode-toolbar[data-collapsed="true"] > :is(.format-group, .right-group, .mode-group) {
+    display: none;
+  }
+
+  .manage-meo-markdown-editor .mode-toolbar[data-collapsed="true"] {
+    gap: 0;
   }
 
   .manage-meo-markdown-editor .mode-toolbar .format-group,
@@ -1521,6 +1668,7 @@ export const MANAGE_STYLES = `
   .manage-meo-markdown-editor .cm-content {
     margin-left: 0;
     margin-right: 0;
+    padding-bottom: 72px;
     padding-right: 12px;
   }
 

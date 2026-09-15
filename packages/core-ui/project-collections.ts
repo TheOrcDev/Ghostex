@@ -1,4 +1,7 @@
+import { storageScope } from '@/packages/client-storage';
 import type { GxserverSidebarProjectCollectionsState } from '../shared/gxserver-protocol';
+
+const clientStorage = storageScope(["collections"]);
 
 export type SidebarProjectCollection = {
   color: string;
@@ -19,7 +22,7 @@ export function readLegacyCollapsedSidebarProjectCollectionIds(): Record<string,
     return {};
   }
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
+    const parsed = JSON.parse(clientStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return {};
     }
@@ -86,7 +89,7 @@ export function readSidebarProjectCollections(): SidebarProjectCollectionsState 
     return empty;
   }
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
+    const parsed = JSON.parse(clientStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
     if (!parsed || typeof parsed !== 'object') {
       return empty;
     }
@@ -158,7 +161,7 @@ export function writeSidebarProjectCollections(state: SidebarProjectCollectionsS
     return;
   }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    clientStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Persistence can be unavailable while the in-memory grouping remains usable.
   }

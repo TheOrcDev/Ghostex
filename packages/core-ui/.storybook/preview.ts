@@ -1,3 +1,4 @@
+import { initializeClientStorage } from '@/packages/client-storage';
 import { createElement } from 'react';
 import { ModalStorySurface, ModalStoryTheme } from '../modal-gallery/modal-story-surface';
 import type { Preview } from '@storybook/react-vite';
@@ -5,6 +6,7 @@ import '../styles.css';
 import './preview.css';
 
 const preview: Preview = {
+  loaders: [async () => { await initializeClientStorage(); return {}; }],
   decorators: [
     (Story, context) =>
       createElement(

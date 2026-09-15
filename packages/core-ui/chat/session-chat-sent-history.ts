@@ -1,11 +1,15 @@
+import { storageScope } from '@/packages/client-storage';
 import type { GxserverStashedPrompt } from '@/packages/shared/gxserver-protocol';
 import type { SessionChatDeliveredDraft } from '@/packages/shared/session-chat-queue';
 import { SessionChatStorageIndex } from './session-chat-storage-index';
+
+const clientStorage = storageScope(["sentHistory","deliveryReceipts"]);
 
 const STORAGE_PREFIX = 'ghostex.sessionChat.sent.';
 const CHANGED_EVENT = 'ghostex-session-chat-sent-changed';
 const MAX_SENT_MESSAGES = 50;
 const sentIndex = new SessionChatStorageIndex<GxserverStashedPrompt>(
+  'sentHistory',
   STORAGE_PREFIX,
   (raw) => JSON.parse(raw) as GxserverStashedPrompt,
   () => ''
@@ -63,10 +67,10 @@ export function recordDeliveredSessionChatDrafts(deliveries: readonly SessionCha
     const sessionKey = `${delivery.projectId}:${delivery.sessionId}`;
     const seenKey = `ghostex.sessionChat.delivered.${sessionKey}`;
     try {
-      const seen = JSON.parse(window.localStorage.getItem(seenKey) ?? '[]') as string[];
+      const seen = JSON.parse(clientStorage.getItem(seenKey) ?? '[]') as string[];
       if (seen.includes(delivery.id)) continue;
       if (recordSentSessionChatMessage(delivery.text, sessionKey, delivery)) {
-        window.localStorage.setItem(seenKey, JSON.stringify([...seen, delivery.id].slice(-MAX_SENT_MESSAGES)));
+        clientStorage.setItem(seenKey, JSON.stringify([...seen, delivery.id].slice(-MAX_SENT_MESSAGES)));
       }
     } catch (error) {
       console.error('[session-chat] Could not import delivered-message history.', error);
@@ -80,13 +84,13 @@ export function deleteSentSessionChatMessage(promptId: string): void {
 }
 
 export function subscribeSentSessionChatMessages(onChange: () => void): () => void {
-  const onStorage = (event: StorageEvent): void => {
+  const onStorage = (event: { key: string; newValue: string | null }): void => {
     if (event.key === null || event.key.startsWith(STORAGE_PREFIX)) onChange();
   };
-  window.addEventListener('storage', onStorage);
+  const unsubscribeStorage = clientStorage.subscribe(onStorage);
   window.addEventListener(CHANGED_EVENT, onChange);
   return () => {
-    window.removeEventListener('storage', onStorage);
+    unsubscribeStorage();
     window.removeEventListener(CHANGED_EVENT, onChange);
   };
 }

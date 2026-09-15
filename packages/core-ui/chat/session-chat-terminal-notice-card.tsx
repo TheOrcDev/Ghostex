@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:AgentScreenDetection 2026-08-19:
 Banner for state the agent paints only on its TERMINAL SCREEN — an expired
@@ -62,6 +63,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '../../co
 import { SessionChatChoiceRows } from './session-chat-choice-rows';
 import { SessionChatNoticeCard } from './session-chat-notice-card';
 import { SessionChatTerminalDialogCard } from './session-chat-terminal-dialog';
+
+const clientStorage = storageScope(["notices"]);
 
 const SEND_FAILED_NOTICE = "Couldn't deliver those keys. Switch to Terminal View to act there.";
 const READ_ONLY_HINT = 'Input is held by another device.';
@@ -140,7 +143,7 @@ function readStoredDismissedNotice(sessionKey: string | undefined): DismissedNot
     return null;
   }
   try {
-    const raw = window.localStorage.getItem(`${DISMISS_STORAGE_PREFIX}${sessionKey}`);
+    const raw = clientStorage.getItem(`${DISMISS_STORAGE_PREFIX}${sessionKey}`);
     if (!raw) {
       return null;
     }
@@ -169,7 +172,7 @@ function writeStoredDismissedNotice(sessionKey: string | undefined, dismissed: D
     return;
   }
   try {
-    window.localStorage.setItem(`${DISMISS_STORAGE_PREFIX}${sessionKey}`, JSON.stringify(dismissed));
+    clientStorage.setItem(`${DISMISS_STORAGE_PREFIX}${sessionKey}`, JSON.stringify(dismissed));
   } catch {
     // Quota/private-mode failures must not break the dismiss button.
   }

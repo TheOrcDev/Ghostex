@@ -1,3 +1,4 @@
+import { storageScope, type ScopedStorage } from '@/packages/client-storage';
 /*
 CDXC:SessionChat 2026-09-04 WHY:
 Client half of the returned-prompt flow (server: session_chat_returned_prompt.rs).
@@ -17,6 +18,8 @@ turn interrupted mid-response, its transcript row supersedes the marker.
 import type { SessionChatMessage } from '../../shared/session-chat';
 import type { SessionChatCommandMarker } from './session-chat-pending';
 
+const clientStorage = storageScope(["returnedPrompts"]);
+
 const APPLIED_STORAGE_KEY = 'ghostex.sessionChat.returnedPrompts.applied';
 const APPLIED_LIMIT = 32;
 
@@ -28,9 +31,9 @@ const TRANSCRIPT_INTERRUPTED_TEXT = 'conversation interrupted';
 /** Clock slack between the client marker and the transcript's own row. */
 const INTERRUPT_MARKER_MATCH_SLACK_MS = 15_000;
 
-function appliedStorage(): Storage | null {
+function appliedStorage(): ScopedStorage | null {
   try {
-    return window.localStorage;
+    return clientStorage;
   } catch {
     return null;
   }

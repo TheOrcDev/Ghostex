@@ -456,6 +456,18 @@ fn post_gxserver_hook_event(
             }
         }
     }
+    // CDXC:Notifications 2026-09-15 SEE-ALSO:
+    // The server re-derives Stop activity, so it needs the same background-work evidence as activity_for_hook_event.
+    if matches!(agent_key, "claude" | "openclaude")
+        && event_name.trim().eq_ignore_ascii_case("stop")
+    {
+        if let Some(tasks) = payload
+            .get("background_tasks")
+            .filter(|value| value.is_array())
+        {
+            params.insert("background_tasks".to_string(), tasks.clone());
+        }
+    }
     params.insert("agentName".to_string(), json!(agent_key));
     params.insert("eventName".to_string(), json!(event_name));
     params.insert("projectId".to_string(), json!(project_id));

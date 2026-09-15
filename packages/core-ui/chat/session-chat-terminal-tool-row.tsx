@@ -1,3 +1,4 @@
+import { storageScope } from '@/packages/client-storage';
 /*
 CDXC:SessionChat 2026-09-09 DECISION:
 User: the pending tool card's header and command text use the same font as regular chat, superseding the earlier monospace command area.
@@ -12,11 +13,13 @@ import { IconChevronRight } from '@tabler/icons-react';
 import type { SessionChatTerminalActivity } from '../../shared/session-chat';
 import { cn } from '@/packages/components/utils';
 
+const clientStorage = storageScope(["terminalExpanded"]);
+
 const TERMINAL_TOOL_EXPANDED_STORAGE_KEY = 'ghostex.sessionChat.terminalToolExpanded';
 
 function readTerminalToolExpanded(): boolean {
   try {
-    return window.localStorage.getItem(TERMINAL_TOOL_EXPANDED_STORAGE_KEY) === 'true';
+    return clientStorage.getItem(TERMINAL_TOOL_EXPANDED_STORAGE_KEY) === 'true';
   } catch {
     // localStorage can be unavailable in isolated story contexts.
     return false;
@@ -25,7 +28,7 @@ function readTerminalToolExpanded(): boolean {
 
 function writeTerminalToolExpanded(expanded: boolean): void {
   try {
-    window.localStorage.setItem(TERMINAL_TOOL_EXPANDED_STORAGE_KEY, expanded ? 'true' : 'false');
+    clientStorage.setItem(TERMINAL_TOOL_EXPANDED_STORAGE_KEY, expanded ? 'true' : 'false');
   } catch {
     // Same as above: the preference simply does not persist.
   }
