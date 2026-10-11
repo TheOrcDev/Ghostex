@@ -223,6 +223,7 @@ pub fn handle(state: &mut ChatState, action: &UserAction, context: &ChatContext)
                         .collect()
                 })
                 .unwrap_or_default(),
+            action.param("interrupt").and_then(Value::as_bool) == Some(true),
         ),
         ActionKind::Handoff => crate::composer::send::handoff(
             state,

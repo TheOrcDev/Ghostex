@@ -46,7 +46,13 @@ impl NativeChatView {
         self.submit(if queued { "queue" } else { "send" }, window, cx);
     }
 
+    /// `mode` is `send`, `queue`, `compact`, or `interrupt` for interrupt and send (a send the core
+    /// marks to stop the agent's running turn first).
     pub(crate) fn submit(&mut self, mode: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let (mode, interrupt) = match mode {
+            "interrupt" => ("send", true),
+            mode => (mode, false),
+        };
         crate::support_logs::append_for_scenario(
             crate::support_logs::GpuiSupportLog::SessionChat,
             "gpui.sessionChat.viewState",
@@ -88,7 +94,7 @@ impl NativeChatView {
         };
         self.close_maximized(cx);
         self.pending_send = true;
-        let submission = json!({"type":mode,"text":self.draft,
+        let submission = json!({"type":mode,"text":self.draft,"interrupt":interrupt,
             "draftVersion":{"draftId":self.draft_id,"revision":self.draft_revision.max(1)}});
         self.draft.clear();
         self.draft_id = next_id;

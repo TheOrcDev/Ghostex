@@ -1102,6 +1102,12 @@ in the same place for 2 seconds. If a Claude message is cancelled before it is
 accepted, its text returns to the chat composer for editing. Rewind to here
 also returns the selected text when the message was never accepted, keeping
 anything already in the composer (`ghostex interrupt-session-chat <session>`).
+To stop the agent and send a new message at once, press Ctrl+Enter in the chat box
+(on every platform, the same key Claude Code uses in the terminal), or right-click
+Send and choose Interrupt & Send; on the phone, choose Interrupt & Send in More
+actions. It is offered while the agent is working; Claude Code stops its turn and
+takes the message the way its own Ctrl+Enter does, and other agents are stopped as
+with Escape before the message is sent. While the agent is idle, Ctrl+Enter just sends.
 Codex rewind continues in a new conversation before the selected prompt and
 returns that prompt for editing. If the chat cannot reconnect after the rewind,
 choose Retry synchronization in the dialog to reconnect without rewinding again

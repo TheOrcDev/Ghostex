@@ -184,6 +184,7 @@ pub(crate) async fn deliver_when_started(
         image_paths,
         crate::session_chat_queue_runtime::SessionChatMessageSource::Composer,
         draft_version,
+        false,
     )
     .await
     {

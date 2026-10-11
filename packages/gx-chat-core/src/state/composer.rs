@@ -189,6 +189,8 @@ pub struct Submission {
     /// The `sendRequestId` gxserver delivers this submission under at most once; `None` when the
     /// host supplied no random ids, which leaves naming the send to gxserver.
     pub send_request_id: Option<String>,
+    /// Interrupt and send: gxserver stops the agent's running turn and sends this one now.
+    pub interrupt: bool,
 }
 
 /// A submission whose send or queue call failed, kept so pressing Enter again on the same text

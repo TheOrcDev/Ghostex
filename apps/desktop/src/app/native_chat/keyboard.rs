@@ -44,6 +44,8 @@ pub(super) fn register(cx: &mut gpui::App) {
             ("enter", "enter"),
             ("shift-enter", "enter"),
             ("secondary-enter", "enter"),
+            // Interrupt and send; on Windows and Linux this is `secondary-enter` too.
+            ("ctrl-enter", "enter"),
             ("alt-enter", "enter"),
             ("up", "up"),
             ("shift-up", "up"),
@@ -421,7 +423,12 @@ impl NativeChatView {
             cx.stop_propagation();
             window.prevent_default();
         } else if key.key == "enter" && !key.modifiers.shift {
-            this.send(false, window, cx);
+            // Ctrl+Enter is Claude Code's own "send now" key in the terminal, on every platform.
+            if key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform {
+                this.submit("interrupt", window, cx);
+            } else {
+                this.send(false, window, cx);
+            }
             cx.stop_propagation();
             window.prevent_default();
         } else if key.key == "tab"
