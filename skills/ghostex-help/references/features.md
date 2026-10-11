@@ -2632,8 +2632,9 @@ backend: `ghostex team deploy|join|invite|identity|status|ping|leave`. Slack:
   that installs any other supported agent, the Ghostex helper (agent hooks)
   and Computer Use; which views to show (Browser and Files are on by default
   on a first run) and the browser skill; phone pairing and notifications;
-  and the first project folder with the default agent and session view,
-  next to the look: Appearance, the theme colour squares (Dark and Light tabs),
+  and the first project folder with the default agent, session view and
+  Agent approvals (Keep default or Skip permissions, the same setting as
+  Settings > Agents, `agentAcceptAllEnabled`), next to the look: Appearance, the theme colour squares (Dark and Light tabs),
   Colourfulness and one Transparency row (the simple choices from Settings >
   Theme), with a "More theme options in Settings > Theme" link that opens the
   Theme page. Turning transparency on there also switches Appearance to Dark. The very first run opens on a short
