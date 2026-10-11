@@ -40,6 +40,27 @@ pub(super) fn space_tile_selected_colors(
     }
 }
 
+/// The padding between the Spaces row's track and the buttons inside it.
+const SPACE_TRACK_PADDING: f32 = 3.0;
+/// What the track adds to the row's width: its padding and hairline on both sides.
+const SPACE_TRACK_CHROME: f32 = 2.0 * (SPACE_TRACK_PADDING + 1.0);
+
+/// The fill of the track behind the Spaces row.
+///
+/// CDXC:Spaces 2026-10-11 DECISION:
+/// User: give the Spaces row a rounded background so it does not look like it is floating, align it to the left instead of centring it, and make Create a space fit its content. The row is a left-aligned pill that hugs its buttons (the workspace tile, the Spaces, More, Hermes); this supersedes the 2026-09-21 rule that the buttons are centred.
+fn space_track_fill(appearance: &SidebarAppearance) -> gpui::Hsla {
+    appearance
+        .foreground
+        .opacity(if appearance.light { 0.045 } else { 0.04 })
+}
+
+fn space_track_outline(appearance: &SidebarAppearance) -> gpui::Hsla {
+    appearance
+        .foreground
+        .opacity(if appearance.light { 0.06 } else { 0.05 })
+}
+
 impl GhostexGpuiApp {
     pub(crate) fn render_native_sidebar_selectors(
         &self,
@@ -64,7 +85,9 @@ impl GhostexGpuiApp {
         } else {
             0.0
         };
-        let capacity = (((self.sidebar_width / scale - 13.0) + 4.0 - bots_room - workspace_room)
+        let capacity = (((self.sidebar_width / scale - 13.0 - SPACE_TRACK_CHROME) + 4.0
+            - bots_room
+            - workspace_room)
             / 32.0)
             .floor()
             .max(2.0) as usize;
@@ -98,10 +121,10 @@ impl GhostexGpuiApp {
             .collect();
         v_flex().w_full().flex_shrink_0()
             .children(self.render_native_machine_tabs(snapshot, appearance, cx))
-            .child(div().h(px(13.0 * scale)).flex_shrink_0())
-            .when(snapshot.spaces_enabled || shows_workspace_tile, |column| column.child(h_flex().id("native-sidebar-space-track").sidebar_drop_target("space-row", String::new(), None, cx).w_full().h(px(40.0 * scale)).pb(px(12.0 * scale)).px(px(6.5 * scale)).justify_center().gap(px(4.0 * scale))
+            .child(div().h(px(10.0 * scale)).flex_shrink_0())
+            .when(snapshot.spaces_enabled || shows_workspace_tile, |column| column.child(h_flex().id("native-sidebar-space-track").sidebar_drop_target("space-row", String::new(), None, cx).w_full().h(px((28.0 + SPACE_TRACK_CHROME + 8.0) * scale)).pb(px(8.0 * scale)).px(px(6.5 * scale)).justify_start().child(h_flex().id("native-sidebar-space-pill").max_w_full().p(px(SPACE_TRACK_PADDING * scale)).gap(px(4.0 * scale)).rounded(px((6.0 + SPACE_TRACK_PADDING + 1.0) * scale)).border_1().border_color(space_track_outline(appearance)).bg(space_track_fill(appearance))
                 .when(shows_workspace_tile, |row| row.children(self.render_native_sidebar_workspace_tile(appearance, cx)))
-                .when(snapshot.spaces_enabled && user_spaces.is_empty(), |row| row.child(h_flex().id("native-sidebar-create-space").role(gpui::Role::Button).aria_label("Create space").flex_1().h(px(28.0 * scale)).px(px(10.0 * scale)).gap(px(6.0 * scale)).rounded(px(6.0 * scale)).border_1().border_color(appearance.muted.opacity(0.25)).text_size(px(12.0 * scale))
+                .when(snapshot.spaces_enabled && user_spaces.is_empty(), |row| row.child(h_flex().id("native-sidebar-create-space").role(gpui::Role::Button).aria_label("Create space").flex_shrink_0().h(px(28.0 * scale)).px(px(10.0 * scale)).gap(px(6.0 * scale)).rounded(px(6.0 * scale)).border_1().border_color(appearance.muted.opacity(0.25)).text_size(px(12.0 * scale))
                     .child(titlebar_svg_icon("titlebar/plus.svg", 14.0 * scale, appearance.muted)).child("Create space")
                     .on_click(cx.listener(|app, _, _, cx| { cx.stop_propagation(); app.dispatch_native_sidebar_ui(json!({"type": "editSpace"}), cx); }))))
                 .children(visible.into_iter().chain(snapshot.spaces.iter().filter(|space| space.id == "other")).map(|space| self.render_native_sidebar_space(space, &visible_ids, appearance, cx)))
@@ -114,7 +137,7 @@ impl GhostexGpuiApp {
                         items.push(json!({"label": "New Space", "icon": "plus", "command": {"type": "editSpace"}}));
                         Self::show_native_sidebar_menu(&json!(items), event.position(), scale, window, cx);
                     }))))
-                .when(snapshot.spaces_enabled && snapshot.bots_enabled, |row| row.child(self.render_native_sidebar_bots_space_slot(snapshot.bots_mode, appearance, cx)))))
+                .when(snapshot.spaces_enabled && snapshot.bots_enabled, |row| row.child(self.render_native_sidebar_bots_space_slot(snapshot.bots_mode, appearance, cx))))))
             .into_any_element()
     }
 
@@ -178,8 +201,8 @@ impl GhostexGpuiApp {
             .opacity(if has_status { 0.8 } else { 1.0 });
         /*
         CDXC:Spaces 2026-09-21 DECISION:
-        User: the Spaces row's buttons are centred in the sidebar, and every Space's icon has a very
-        light outline. A selected Space, or one holding the active session, keeps its stronger outline.
+        User: every Space's icon has a very light outline. A selected Space, or one holding the active
+        session, keeps its stronger outline.
         */
         v_flex().id(format!("native-sidebar-space-{id}")).role(gpui::Role::Button).aria_label(format!("Space {name}")).aria_selected(space.selected).relative().size(px(28.0 * scale)).flex_shrink_0().items_center().justify_center().rounded(px(6.0 * scale)).border_1().border_color(appearance.foreground.opacity(0.08)).cursor_pointer()
             .when(self.native_sidebar.is_dragging("space", &id), |row| row.opacity(0.3))
