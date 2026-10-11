@@ -1150,7 +1150,11 @@ is available in the conversation. It clears when the turn ends, you stop the
 agent, or the agent asks for input. Completed searches and commands stay in
 that turn's expandable work details; changing model or effort does not bring
 them back. Background commands that are still running, compaction, and
-requests for approval keep their own status cards.
+requests for approval keep their own status cards. For Claude Code, the
+background card lists each command still running on its own row, named the way
+the agent described it, with how long it has been running; hover a row (press
+and hold on the phone) to see the command itself. When one finishes, its row in
+the chat also says how long it ran.
 Chat follows the app theme by default. In Settings > Theme > Advanced, set Chat theme to Light, Dark, or System for a separate appearance, or choose Follow app to use the main Appearance (`sessionChatTheme`, `sidebarTheme`).
 
 Set Default Chat Zoom (%) in Settings > Chat to scale the desktop chat interface, including messages, controls, and the prompt composer. Choose 70% to 200% in 5% steps; the initial default is 100%. The saved level applies to open chats and when chats open again (`sessionChatZoomPercent`). With a chat focused, Cmd+= and Cmd+- (Ctrl on Windows and Linux) resize that chat for as long as it is open, and Cmd+0 returns it to the saved level.

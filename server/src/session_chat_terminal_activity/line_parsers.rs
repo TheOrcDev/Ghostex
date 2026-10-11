@@ -128,7 +128,15 @@ fn running_shells_activity(label: &str) -> Option<SessionChatTerminalActivity> {
         return None;
     }
 
-    let activity = if let Some(completed_at) = completed_at {
+    let background = SessionChatBackgroundWork {
+        count,
+        reply_done_at: completed_at
+            .and_then(|done| done.strip_prefix("done "))
+            .map(|done| done.trim().to_string())
+            .filter(|done| !done.is_empty()),
+        tasks: Vec::new(),
+    };
+    let mut activity = if let Some(completed_at) = completed_at {
         SessionChatTerminalActivity::new(
             SESSION_CHAT_ACTIVITY_SHELLS_RUNNING,
             format!(
@@ -144,6 +152,7 @@ fn running_shells_activity(label: &str) -> Option<SessionChatTerminalActivity> {
         activity.elapsed_seconds = Some(elapsed_seconds);
         activity
     };
+    activity.background = Some(background);
     Some(activity)
 }
 

@@ -14,6 +14,7 @@ mod approval;
 mod async_questions;
 mod attachment_previews;
 mod attachments;
+mod background_tasks;
 mod binding;
 mod cards;
 mod chat_hotkeys;

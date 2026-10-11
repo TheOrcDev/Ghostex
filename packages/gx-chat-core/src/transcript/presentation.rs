@@ -101,6 +101,7 @@ fn message_keys(message: &ChatMessage) -> Map<String, Value> {
 /// re-parsing markdown.
 pub fn project_message(
     message: &ChatMessage,
+    messages: &[ChatMessage],
     agent_path: &str,
     working_directory: Option<&str>,
     line_breaks: AgentLineBreaks,
@@ -144,7 +145,7 @@ pub fn project_message(
         .then(|| collapsed_prompt(&displayed_body))
         .flatten()
         .map(|preview| without_question_forms(native_markdown(&user_line_breaks(&preview), true)));
-    let suppressed = suppressed_turn_presentation(message);
+    let suppressed = suppressed_turn_presentation(message, messages);
     let rows = tool_rows(&tool_pairs, agent_path, working_directory);
     let system_card = classify_system_card(message, &displayed_body);
     let reasoning = split_reasoning_headline(&body);
@@ -432,6 +433,7 @@ pub fn project_cached(
     }
     let model = project_message(
         message,
+        scope.messages,
         scope.agent_path,
         scope.working_directory,
         scope.line_breaks,

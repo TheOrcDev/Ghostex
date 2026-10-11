@@ -160,6 +160,9 @@ impl NativeChatView {
 
     fn render_working_activity(&self, p: &ChatAppearance, reduced_motion: bool) -> AnyElement {
         let activity = &self.snapshot["workingStrip"]["presentation"];
+        if activity["backgroundTasks"].is_object() {
+            return self.render_background_tasks(&activity["backgroundTasks"], p, reduced_motion);
+        }
         let s = p.scale;
         let lead = if activity["shellsRunning"] == true {
             let glyph = svg()
