@@ -4,7 +4,7 @@
  * User: revoke the CI-made development certificates before the iOS archive and the one the run created afterwards (also on failure), so the account's certificate limit never fills. Only revoke certificates whose name shows the API made them for CI; never touch certificates named after a person, distribution certificates, or anything that cannot be positively identified as CI-made. Log what is revoked.
  *
  * CDXC:Release 2026-10-11 WHY:
- * `xcodebuild -allowProvisioningUpdates` with the App Store Connect API key finds no development identity on a fresh runner, so every run creates an "Apple Development: Created via API (<team>)" certificate whose private key dies with the runner. The 10.19.0 TestFlight run (38025945451) failed on "Your account has reached the maximum number of certificates". A certificate is CI-made only when all of these hold: its type is DEVELOPMENT or IOS_DEVELOPMENT, and the X.509 subject inside its content (not only the portal's display name) has exactly that CN and OU = the team.
+ * `xcodebuild -allowProvisioningUpdates` with the App Store Connect API key finds no development identity on a fresh runner, so every run creates an "Apple Development: Created via API (<API key ID>)" certificate whose private key dies with the runner. The 10.19.0 TestFlight run (38025945451) failed on "Your account has reached the maximum number of certificates". A certificate is CI-made only when all of these hold: its type is DEVELOPMENT or IOS_DEVELOPMENT, and the X.509 subject inside its content (not only the portal's display name) has a CN of exactly "Apple Development: Created via API (" + 10 uppercase letters or digits + ")" and OU = the team. The parenthesised value is the key ID, not the team: run 38099870415 kept every certificate when the CN was matched against the team ID, and older keys' certificates carry their own IDs.
  *
  * Usage: asc-revoke-ci-certificates.mjs <teamId> [--dry-run]
  * Env: GHOSTEX_ASC_KEY_PATH, GHOSTEX_ASC_KEY_ID, GHOSTEX_ASC_ISSUER_ID (the workflow's key step).
@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 
 const API = "https://api.appstoreconnect.apple.com";
 const DEVELOPMENT_TYPES = new Set(["DEVELOPMENT", "IOS_DEVELOPMENT"]);
+/** The parenthesised value is the ID of the API key that made the certificate. */
+const CI_COMMON_NAME = /^Apple Development: Created via API \([A-Z0-9]{10}\)$/;
 
 function base64url(value) {
   return Buffer.from(value).toString("base64url");
@@ -83,12 +85,14 @@ export function classifyCertificate(resource, teamId) {
     return { ci: false, reason: `unreadable certificate (${error.message})` };
   }
   if (!fields) return { ci: false, reason: "unreadable subject" };
-  if (fields.CN !== `Apple Development: Created via API (${teamId})`) {
-    return { ci: false, reason: `subject CN "${fields.CN ?? ""}"` };
+  const subject = `CN "${fields.CN ?? ""}" OU "${fields.OU ?? ""}"`;
+  if (!CI_COMMON_NAME.test(fields.CN ?? "")) {
+    return { ci: false, subject, reason: "CN is not a Created via API one" };
   }
-  if (fields.OU !== teamId)
-    return { ci: false, reason: `subject OU "${fields.OU ?? ""}"` };
-  return { ci: true, cn: fields.CN };
+  if (fields.OU !== teamId) {
+    return { ci: false, subject, reason: `OU is not team ${teamId}` };
+  }
+  return { ci: true, subject };
 }
 
 async function ascRequest(token, method, url) {
@@ -149,11 +153,13 @@ async function main(argv) {
     const label = `${resource.id} "${attributes.name ?? ""}" serial ${attributes.serialNumber ?? "?"} expires ${attributes.expirationDate ?? "?"}`;
     const verdict = classifyCertificate(resource, teamId);
     if (!verdict.ci) {
-      console.log(`kept ${label}: ${verdict.reason}`);
+      console.log(
+        `kept ${label}${verdict.subject ? ` ${verdict.subject}` : ""}: ${verdict.reason}`,
+      );
       continue;
     }
     if (dryRun) {
-      console.log(`would revoke ${label} (${verdict.cn})`);
+      console.log(`would revoke ${label} ${verdict.subject}`);
       continue;
     }
     await ascRequest(
@@ -162,7 +168,7 @@ async function main(argv) {
       `/v1/certificates/${encodeURIComponent(resource.id)}`,
     );
     revoked += 1;
-    console.log(`revoked ${label} (${verdict.cn})`);
+    console.log(`revoked ${label} ${verdict.subject}`);
   }
   console.log(
     `${dryRun ? "Dry run: " : ""}${revoked} CI development certificate(s) revoked, ${certificates.length} development certificate(s) seen.`,
