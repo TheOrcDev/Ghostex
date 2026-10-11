@@ -31,7 +31,7 @@ use crate::transcript::message_time::message_time;
 use crate::transcript::native_markdown::{native_markdown, without_question_forms};
 use crate::transcript::noise::suppressed_turn_presentation;
 use crate::transcript::page_answers::{
-    page_answers_in, parse_page_answers, project_page_answers, PageAnswers,
+    page_answers_in, project_page_answers, split_page_answers, PageAnswers,
 };
 use crate::transcript::prose::prose_markdown;
 use crate::transcript::question_exchange::answered_question_exchange;
@@ -111,8 +111,15 @@ pub fn project_message(
     let images = image_blocks(&prose);
     let body = js_trim(&prose_markdown(&message.blocks)).to_string();
     let is_user = message.role == ChatRole::User;
+    // Answers a page or question form sent: the card stands for the envelope, and the bubble below
+    // it shows only what the user wrote besides (`page_answers.rs`).
+    let page_answers = is_user.then(|| split_page_answers(&body)).flatten();
+    let user_words = match &page_answers {
+        Some((_, rest)) if !rest.is_empty() => rest.as_str(),
+        _ => body.as_str(),
+    };
     let displayed_body = if is_user {
-        normalize_user_message_markdown(&body)
+        normalize_user_message_markdown(user_words)
     } else if matches!(message.role, ChatRole::Assistant | ChatRole::Reasoning) {
         agent_line_breaks(&body, line_breaks)
     } else {
@@ -120,7 +127,6 @@ pub fn project_message(
     };
     let agent_message = parse_agent_message(&body);
     let inter_agent_message = is_user.then(|| parse_inter_agent_message(&body)).flatten();
-    let page_answers = is_user.then(|| parse_page_answers(&body)).flatten();
     let (remaining, changes) = split_file_changes(tools);
     let tool_pairs = pair_tool_blocks(remaining);
     let copy_text = if is_user {
@@ -231,7 +237,11 @@ pub fn project_message(
         "pageAnswers".to_string(),
         page_answers
             .as_ref()
-            .map_or(Value::Null, project_page_answers),
+            .map_or(Value::Null, |(answers, rest)| {
+                let mut card = project_page_answers(answers);
+                card["withText"] = Value::Bool(!rest.is_empty());
+                card
+            }),
     );
     projected.insert("questions".to_string(), Value::Array(questions));
     projected.insert(

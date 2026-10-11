@@ -51,6 +51,28 @@ fn is_page_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// The answers envelope a user message holds and the text written around it (empty when the
+/// message is only the envelope).
+///
+/// CDXC:SessionChat 2026-10-11 WHY:
+/// The envelope is not always the whole message: answers that went out while Claude could not
+/// take them came back into its input box, Ghostex handed them to the chat's composer, and the
+/// user's next message carried them with their own words below. The chat draws the answers card
+/// for the envelope and the rest as the user's text, and the form still reads Answered.
+pub fn split_page_answers(text: &str) -> Option<(PageAnswers, String)> {
+    let open = text.find(OPEN)?;
+    let close = text[open..].find(CLOSE)? + open + CLOSE.len();
+    let answers = parse_page_answers(&text[open..close])?;
+    let before = js_trim(&text[..open]);
+    let after = js_trim(&text[close..]);
+    let rest = match (before.is_empty(), after.is_empty()) {
+        (true, _) => after.to_string(),
+        (false, true) => before.to_string(),
+        (false, false) => format!("{before}\n\n{after}"),
+    };
+    Some((answers, rest))
+}
+
 /// The answers a message holds, when the whole message is one answers envelope.
 pub fn parse_page_answers(text: &str) -> Option<PageAnswers> {
     let text = js_trim(text);
@@ -80,7 +102,7 @@ pub fn page_answers_in(messages: &[ChatMessage]) -> Vec<PageAnswers> {
         .iter()
         .filter(|message| message.role == ChatRole::User)
     {
-        if let Some(answers) = parse_page_answers(&prose_markdown(&message.blocks)) {
+        if let Some((answers, _)) = split_page_answers(&prose_markdown(&message.blocks)) {
             if !found.iter().any(|known| known.page_id == answers.page_id) {
                 found.push(answers);
             }
@@ -152,7 +174,9 @@ fn display_label(key: &str) -> String {
     }
 }
 
-/// The message's `pageAnswers` key: `{pageId, title, rows: [{label, value, note?}], more}`. The
+/// The message's `pageAnswers` key: `{pageId, title, rows: [{label, value, note?}], more,
+/// withText}`, `withText` when the message has the user's own words besides (drawn below the card
+/// as an ordinary message). The
 /// question kit sends a question's note as `"<key> (note)"`; it is shown under that question's
 /// answer instead of as a row of its own.
 pub fn project_page_answers(answers: &PageAnswers) -> Value {
