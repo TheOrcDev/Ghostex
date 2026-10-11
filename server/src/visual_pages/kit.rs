@@ -83,8 +83,10 @@ gx-question{display:block;border:1px solid var(--border);background:var(--card);
 .gx-note[readonly],.gx-text[readonly]{resize:none}
 .gx-note[hidden],.gx-text[hidden]{display:none}
 .gx-pick{display:inline-flex;align-items:center;gap:4px;margin-left:10px;padding:2px 10px;vertical-align:middle;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--foreground);font:500 12px/1.5 var(--font-sans);cursor:pointer}
-.gx-pick:hover:not(:disabled){background:var(--accent)}
+.gx-pick:hover:not(:disabled):not([aria-pressed=true]){background:var(--accent);color:var(--accent-foreground)}
 .gx-pick[aria-pressed=true]{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+.gx-pick[aria-pressed=true]:hover:not(:disabled),.gx-pick[aria-pressed=true]:active:not(:disabled){background:color-mix(in srgb,var(--primary) 85%,var(--foreground));border-color:color-mix(in srgb,var(--primary) 85%,var(--foreground));color:var(--primary-foreground)}
+.gx-pick:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 35%,transparent)}
 .gx-pick:disabled{cursor:default}
 .gx-pick:disabled:not([aria-pressed=true]){opacity:.5}
 .gx-option-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;font-weight:600}
