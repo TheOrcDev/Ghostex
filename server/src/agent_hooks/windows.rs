@@ -6,22 +6,19 @@ use std::{io::Read, path::Path, sync::mpsc, time::Duration};
 /// Installation still uses the existing explicit install and Codex trust flow.
 ///
 /// CDXC:AgentHooks 2026-10-09 WHY:
-/// Codex runs hooks through cmd.exe and caps Interrupt at 3 seconds. Its shell exits outside Ghostex before loading the executable: even a cold native launch exceeded that budget. Routed hooks use double-quoted native arguments. Claude Code and Grok use PowerShell or Git Bash and take the statusline's space-free executable and single-quoted arguments. PowerShell startup exceeded these hooks' budgets even outside Ghostex.
+/// Claude Code and Grok use PowerShell or Git Bash and take the statusline's space-free executable and single-quoted arguments. PowerShell startup exceeded these hooks' budgets even outside Ghostex.
 pub(crate) fn command(agent: &str, notify_path: &Path) -> String {
     let executable = std::env::current_exe().unwrap_or_default();
     let notify = notify_path.to_string_lossy();
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
     if agent == "codex" {
-        return format!(
-            "(if not defined GHOSTEX_GLOBAL_SESSION_REF if not defined GHOSTEX_SESSION_STATE_FILE if not defined VSMUX_SESSION_STATE_FILE exit /b 0) & \"{}\" agent-hook-notify-native \"{notify}\" codex",
-            executable.display()
-        );
+        return codex_command(&executable, notify_path, quote);
     }
     if let Some(executable) = bare_command_path(&executable)
         .filter(|_| matches!(agent, "claude" | "grok") && !notify.contains('\''))
     {
         return format!("{executable} agent-hook-notify-native '{notify}' '{agent}'");
     }
-    let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
     if agent == "antigravity" {
         return antigravity_command(&executable, notify_path, quote);
     }
@@ -40,7 +37,6 @@ fn antigravity_command(
     notify_path: &Path,
     quote: impl Fn(&str) -> String,
 ) -> String {
-    let cmd_word = |path: &Path| bare_command_path(path).map(|short| short.replace('/', "\\"));
     if let (Some(executable), Some(notify)) = (cmd_word(executable), cmd_word(notify_path)) {
         return format!("{executable} agent-hook-notify-native {notify} antigravity");
     }
@@ -49,6 +45,25 @@ fn antigravity_command(
         quote(&executable.to_string_lossy()),
         quote(&notify_path.to_string_lossy())
     )
+}
+
+/// CDXC:AgentHooks 2026-10-11 WHY:
+/// Codex CLI (0.162.1) runs a Windows hook as `pwsh -NoProfile -Command <command>`, not through cmd.exe. The cmd-only `(if not defined … exit /b 0) & "…"` command installed on 2026-10-09 was a PowerShell parse error, so every Codex hook showed "Hook failed: hook exited with code 1" and none reached gxserver (no hook activity, transcript path or conversation id; only the footer status line still named the conversation). The command is gxserver and the notify script by their space-free short paths, which pwsh, Windows PowerShell and cmd.exe all run as written; gxserver's own outside-Ghostex check answers with the canned response, so the shell needs no early exit. A path without a short form falls back to PowerShell's call operator.
+fn codex_command(executable: &Path, notify_path: &Path, quote: impl Fn(&str) -> String) -> String {
+    if let (Some(executable), Some(notify)) = (cmd_word(executable), cmd_word(notify_path)) {
+        return format!("{executable} agent-hook-notify-native {notify} codex");
+    }
+    format!(
+        "& {} agent-hook-notify-native {} codex",
+        quote(&executable.to_string_lossy()),
+        quote(&notify_path.to_string_lossy())
+    )
+}
+
+/// `path` as one command word that cmd.exe, pwsh and Windows PowerShell all run unquoted: its
+/// space-free short path with backslashes.
+fn cmd_word(path: &Path) -> Option<String> {
+    bare_command_path(path).map(|short| short.replace('/', "\\"))
 }
 
 /// `path` as a command word that Git Bash and PowerShell both run as it stands: its 8.3 short
