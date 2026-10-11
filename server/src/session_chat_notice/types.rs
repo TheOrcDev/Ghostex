@@ -316,13 +316,15 @@ impl SessionChatTerminalNotice {
         self
     }
 
-    /// CDXC:SessionChat 2026-10-11 WHY: the chat cannot read these agents' pickers and dialogs row by row, so while one owns the input it passes Up/Down/Enter/Esc through to the terminal and shows the screen region (`screenTail`) live; see the DECISION in session_chat_resume_picker.rs.
+    /// CDXC:SessionChat 2026-10-11 WHY: the chat cannot read these screens row by row (other agents' pickers and dialogs, and Codex's own screens its dialog reader does not know), so while one owns the input the chat passes keys through to the terminal and shows the screen region (`screenTail`) live; see the DECISION in session_chat_resume_picker.rs.
     pub fn passes_keys_through(&self) -> bool {
         self.dialog.is_none()
             && self.choices.is_empty()
+            && self.conversation_lock.is_none()
             && matches!(
                 self.kind.as_str(),
-                SESSION_CHAT_NOTICE_CURSOR_INPUT_BLOCKED
+                SESSION_CHAT_NOTICE_CODEX_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_CURSOR_INPUT_BLOCKED
                     | SESSION_CHAT_NOTICE_GROK_INPUT_BLOCKED
                     | SESSION_CHAT_NOTICE_HERMES_INPUT_BLOCKED
                     | SESSION_CHAT_NOTICE_OMP_INPUT_BLOCKED

@@ -1,7 +1,7 @@
 //! The `/resume` picker card and the pass-through card: what the chat draws for an agent screen
 //! that owns the keyboard, and the answer each key sends to it.
 //!
-//! CDXC:SessionChat 2026-10-11 DECISION: User: `/resume` must be usable from the chat. Claude Code's and Codex's pickers are MIRRORED as a list card that takes the keyboard (Up/Down move, Enter picks, Esc cancels, typing filters) and sends every key to the agent's real picker; every other agent's input-owning screen is PASSED THROUGH: the chat shows that part of the terminal live and forwards Up/Down/Enter/Esc to it.
+//! CDXC:SessionChat 2026-10-11 DECISION: User: `/resume` must be usable from the chat. Claude Code's and Codex's pickers are MIRRORED as a list card that takes the keyboard (Up/Down move, Enter picks, Esc cancels, typing filters) and sends every key to the agent's real picker; every other agent's input-owning screen (and Codex's own unreadable ones) is PASSED THROUGH: the chat shows that part of the terminal live and the card takes the chat's keyboard, letters, digits, the four arrows, Enter and Esc, even over a composer with text, until the agent closes the screen or the user gives the keyboard back from the card (the user's words are in server/src/session_chat_resume_picker.rs).
 //! SEE-ALSO: server/src/session_chat_resume_picker.rs, apps/desktop/src/app/native_chat/terminal_picker.rs, apps/mobile/app/src/chat/native/cards/TerminalPickerCard.tsx.
 
 use serde_json::{json, Map, Value};
@@ -10,7 +10,7 @@ use crate::questions::model::{TerminalDialog, TerminalNotice};
 
 /// The keys a picker card hands to the agent, in the order the phone draws them as buttons.
 const PICKER_KEYS: [&str; 6] = ["up", "down", "enter", "escape", "pageUp", "pageDown"];
-const PASSTHROUGH_KEYS: [&str; 4] = ["up", "down", "enter", "escape"];
+const PASSTHROUGH_KEYS: [&str; 6] = ["up", "down", "left", "right", "enter", "escape"];
 
 fn str_field<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -138,7 +138,10 @@ pub fn passthrough_presentation(notice: &TerminalNotice) -> Option<Value> {
         .collect();
     Some(json!({
         "screen": passthrough_screen(notice.screen_tail.as_deref().unwrap_or_default()),
-        "hint": "↑ ↓ Enter and Esc go to the agent's terminal from here.",
+        "hint": "This card has the keyboard: letters, numbers, arrows, Enter and Esc go to the agent's terminal.",
+        "releaseLabel": "Return keyboard to chat",
         "keys": keys,
+        // The renderer puts the typed character in `text`.
+        "textAnswer": { "kind": "terminalKey", "text": "" },
     }))
 }

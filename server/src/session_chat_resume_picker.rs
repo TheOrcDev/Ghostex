@@ -4,7 +4,7 @@
 
 /*
 CDXC:SessionChat 2026-10-11 DECISION:
-User: make `/resume` usable from the chat view. For Claude Code and Codex the chat MIRRORS the agent's own picker: its rows, the highlighted row, the search text and the page, with the chat taking the keyboard (Up/Down move, Enter picks, Esc cancels, typing filters) and every key sent to the real picker, so the card follows the agent's screen and never drifts from it; on the phone a tapped row is picked. For every other agent the chat PASSES THROUGH: while the agent shows a screen that owns its input, Up/Down/Enter/Esc go to the terminal and the chat shows that part of the screen live.
+User: make `/resume` usable from the chat view. For Claude Code and Codex the chat MIRRORS the agent's own picker: its rows, the highlighted row, the search text and the page, with the chat taking the keyboard (Up/Down move, Enter picks, Esc cancels, typing filters) and every key sent to the real picker, so the card follows the agent's screen and never drifts from it; on the phone a tapped row is picked. For every other agent, and for Codex's own screens its dialog reader cannot read, the chat PASSES THROUGH: it shows that part of the agent's screen live and, in the user's words, "it should take over stuff like letter/number presses and up/down/left/right and escape presses in the chat itself so i need to get rid of it before i can use those keys in the chat composer": letters, digits, the four arrows, Enter and Esc go to the agent even when the composer holds text, until the agent closes the screen or the user gives the keyboard back from the card. This supersedes the Up/Down/Enter/Esc-only pass-through of the same day.
 SEE-ALSO: packages/gx-chat-core/src/questions/terminal_picker.rs, apps/desktop/src/app/native_chat/terminal_picker.rs, apps/mobile/app/src/chat/native/cards/TerminalPickerCard.tsx.
 */
 
@@ -291,11 +291,9 @@ fn detect_resume_picker(agent: &str, screen: &str) -> Option<ResumePicker> {
 /// What a `VerifyTerminalPicker` step checks at the front of the send queue: the agent still
 /// shows the screen its keys are meant for.
 pub(crate) fn screen_takes_picker_keys(agent: &str, screen: &str) -> bool {
-    match agent {
-        "claude" | "codex" => detect_resume_picker(agent, screen).is_some(),
-        _ => crate::session_chat_notice::classify_session_chat_terminal_notice(Some(agent), screen)
-            .is_some_and(|notice| notice.passes_keys_through()),
-    }
+    detect_resume_picker(agent, screen).is_some()
+        || crate::session_chat_notice::classify_session_chat_terminal_notice(Some(agent), screen)
+            .is_some_and(|notice| notice.passes_keys_through())
 }
 
 fn closed() -> DomainStateError {
@@ -476,7 +474,12 @@ pub(crate) async fn answer_terminal_key(
     agent: &str,
     params: &Map<String, Value>,
 ) -> Result<Value, DomainStateError> {
+    // A letter, digit or other character typed while the card has the keyboard.
+    let typed = params.get("text").and_then(Value::as_str).filter(|text| {
+        !text.is_empty() && text.chars().count() <= 8 && !text.chars().any(char::is_control)
+    });
     let bytes = match params.get("key").and_then(Value::as_str) {
+        _ if typed.is_some() => typed.unwrap_or_default(),
         Some("up") => "\x1b[A",
         Some("down") => "\x1b[B",
         Some("left") => "\x1b[D",

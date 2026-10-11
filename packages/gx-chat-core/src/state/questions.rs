@@ -60,6 +60,9 @@ pub struct QuestionsState {
     pub answered_notice_key: Option<String>,
     /// The detection whose answer failed, which stops blocking the composer.
     pub retired_notice_key: Option<String>,
+    /// The pass-through detection the user gave the keyboard back from: its card stays hidden
+    /// for as long as that detection lasts, and the composer has its keys again.
+    pub released_notice_key: Option<String>,
     /// The dismissal this session remembers, read back from client storage.
     pub dismissed_notice: Option<DismissedNotice>,
     /// The refusal the notice card shows instead of the composer's error line.

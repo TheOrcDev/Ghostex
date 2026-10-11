@@ -114,6 +114,9 @@ impl NativeChatView {
         if modifiers.platform || modifiers.control || modifiers.alt {
             return false;
         }
+        if let Some(passthrough) = self.passthrough_presentation().cloned() {
+            return self.passthrough_key_down(event, &passthrough, cx);
+        }
         let composer_focused_empty = self.input.as_ref().is_some_and(|input| {
             input.read(cx).focus_handle(cx).is_focused(window)
                 && input.read(cx).value().trim().is_empty()
@@ -157,6 +160,49 @@ impl NativeChatView {
             return false;
         }
         self.invoke(json!({"type":"answer","answer":answer}), cx);
+        true
+    }
+
+    /// While a pass-through card is up it has the chat's keyboard, composer text or not: letters,
+    /// digits and other characters, the four arrows, Enter and Esc go to the agent's screen.
+    /// Backspace, Tab and shortcuts stay with the chat.
+    fn passthrough_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        passthrough: &Value,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let keystroke = &event.keystroke;
+        let named = match keystroke.key.as_str() {
+            "up" => Some("up"),
+            "down" => Some("down"),
+            "left" => Some("left"),
+            "right" => Some("right"),
+            "enter" => Some("enter"),
+            "escape" => Some("escape"),
+            _ => None,
+        };
+        let answer = match named {
+            Some(_) if keystroke.modifiers.shift => return false,
+            // A held Enter or Esc would answer the agent's next screen too.
+            Some("enter" | "escape") if event.is_held => return true,
+            Some(key) => passthrough["keys"][key].clone(),
+            None => {
+                let Some(typed) = keystroke
+                    .key_char
+                    .clone()
+                    .filter(|typed| !typed.is_empty() && !typed.chars().any(char::is_control))
+                else {
+                    return false;
+                };
+                let mut answer = passthrough["textAnswer"].clone();
+                answer["text"] = json!(typed);
+                answer
+            }
+        };
+        if answer.is_object() {
+            self.invoke(json!({"type":"answer","answer":answer}), cx);
+        }
         true
     }
 
@@ -430,8 +476,21 @@ impl NativeChatView {
         );
         body.push(
             div()
-                .text_size(px(12.0 * s))
-                .text_color(p.card_muted)
+                .id("terminal-passthrough-keyboard")
+                .role(gpui::Role::Status)
+                .aria_label(text(passthrough, "hint"))
+                .flex()
+                .items_center()
+                .gap(px(6.0 * s))
+                .text_size(px(13.0 * s))
+                .text_color(p.foreground)
+                .child(
+                    gpui::svg()
+                        .path("titlebar/keyboard.svg")
+                        .size(px(14.0 * s))
+                        .text_color(p.primary)
+                        .flex_shrink_0(),
+                )
                 .child(text(passthrough, "hint"))
                 .into_any_element(),
         );
@@ -445,9 +504,19 @@ impl NativeChatView {
                     .into_any_element(),
             );
         }
+        // Giving the keyboard back hides the card until the agent shows another screen.
+        let release = self.chat_button(
+            "terminal-passthrough-release".into(),
+            text(passthrough, "releaseLabel"),
+            json!({"type":"dismissNotice"}),
+            p,
+            cx,
+        );
         let mut actions: Vec<AnyElement> = [
             ("up", "↑"),
             ("down", "↓"),
+            ("left", "←"),
+            ("right", "→"),
             ("enter", "Enter"),
             ("escape", "Esc"),
         ]
@@ -481,6 +550,7 @@ impl NativeChatView {
                 }))
                 .into_any_element(),
         );
+        actions.push(release);
         self.status_card(
             text(notice, "title"),
             "titlebar/terminal-2.svg",

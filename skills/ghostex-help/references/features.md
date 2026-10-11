@@ -899,8 +899,11 @@ conversation card listing the agent's own conversations: type to search, Up and
 Down move, Enter resumes the highlighted one, Escape cancels, or click a row (tap it
 on the phone). The card follows the agent's list as you go, and once you pick, the
 chat switches to that conversation. Other agents' pickers and menus that take over
-their terminal show that part of the terminal in a card instead: Up, Down, Enter and
-Escape in the chat box (or the card's buttons) go straight to it.
+their terminal (and Codex screens the chat can't read) show that part of the terminal
+in a card instead. While that card is up it has the chat's keyboard: letters, numbers,
+the arrow keys, Enter and Escape go straight to the agent, even if you were typing a
+message. Click Return keyboard to chat on the card to type in the chat box again. On
+the phone, the card's key buttons send the keys.
 A new Claude Code install's first-run setup is answered in the chat too: the
 text style, the login method, and Sign in to Claude, where you paste the code the
 browser sign-in page shows and press Sign in (Retry appears if the code was wrong).

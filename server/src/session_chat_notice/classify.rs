@@ -138,7 +138,7 @@ fn notice_from_codex_blocking_screen(
         blocking.title,
     )
     .with_detail(blocking.detail)
-    .with_screen_tail(screen.screen_tail())
+    .with_screen_tail(screen.live_tail())
     .with_actions(vec![SessionChatTerminalNoticeAction::switch_to_terminal(
         OPEN_TERMINAL.label,
     )])
