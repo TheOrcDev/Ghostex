@@ -260,18 +260,20 @@ chat instead.
 ```html
 <gx-questions submit="Send to the agent">
   <h1>Settings redesign</h1>
-  <p>Two layouts are drawn below; the questions refer to them.</p>
   <gx-wide>
-    <!-- your mockups, as wide as the page -->
+    <!-- layouts A and B, side by side -->
   </gx-wide>
   <gx-question tag="Q1" title="Which layout should I build?">
     <p>Why it matters, in a sentence or two.</p>
     <gx-choice value="tabs" recommended>Layout A: tabs<small>One page per area.</small></gx-choice>
     <gx-choice value="one page">Layout B: one long page</gx-choice>
   </gx-question>
-  <gx-question title="Which platforms first?" multiple>
-    <gx-choice>macOS</gx-choice>
-    <gx-choice>Windows</gx-choice>
+  <gx-wide>
+    <!-- the two header styles, side by side -->
+  </gx-wide>
+  <gx-question tag="Q2" title="Which header style?">
+    <gx-choice>Compact</gx-choice>
+    <gx-choice>Large title</gx-choice>
   </gx-question>
   <gx-question title="Anything else?" type="text"></gx-question>
 </gx-questions>
@@ -279,8 +281,16 @@ chat instead.
 
 - Put the whole page in one `<gx-questions>`. Its children sit in a centered
   720px column. A `<gx-wide>` child spans the page's full width: put mockups
-  there, above or between the questions, and refer to them from the
-  questions ("Layout A above"). Never put a mockup inside a question.
+  there and refer to them from the questions ("Layout A above"). Never put a
+  mockup inside a question.
+- Each question sits directly below the visual it asks about: a mockup, then
+  its question, then the next mockup and its question, so the reader answers
+  while the picture is still on screen instead of scrolling back up. When one
+  question compares several variants, put them side by side (or stacked)
+  immediately above that question, with nothing in between, and keep them
+  compact enough to be seen together with it: show one theme with a
+  dark/light switch rather than every variant twice. Never collect all the
+  mockups first and all the questions at the end.
 - `<gx-question>`: `title`; `tag`, an optional short label such as an issue
   id; `name`, the answer's key (the title when there is none); `multiple`
   for several picks; `type="text"` for a text box instead of choices. Content
