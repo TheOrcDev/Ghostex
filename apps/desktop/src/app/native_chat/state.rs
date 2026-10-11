@@ -104,6 +104,8 @@ pub(crate) struct NativeChatView {
     pub(super) context_status_measurements: Option<Value>,
     pub(crate) composer_measurements: Option<Value>,
     pub(super) composer_held_key: Option<String>,
+    /// When the last `Paste` reached a chat field, for the slow clipboard read log (clipboard.rs).
+    pub(super) paste_started: Option<web_time::Instant>,
     /// The chat box's height tween and the arrival fade of the controls an expansion brings back.
     pub(super) composer_animation: super::composer_animation::ComposerAnimation,
     /// Whether this session's status line holds its row of space, remembered across view
@@ -363,6 +365,7 @@ impl NativeChatView {
             stop_cooldown_task: None,
             composer_measurements: None,
             composer_held_key: None,
+            paste_started: None,
             composer_animation: Default::default(),
             context_status_measurements: None,
             bounds: Default::default(),

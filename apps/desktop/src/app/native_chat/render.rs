@@ -240,6 +240,7 @@ impl Render for NativeChatView {
             .capture_key_up(cx.listener(|chat, _, _, _| chat.composer_held_key = None))
             .capture_action(cx.listener(Self::composer_copy))
             .capture_action(cx.listener(Self::composer_cut))
+            .capture_action(cx.listener(Self::note_paste_started))
             .on_drop(cx.listener(|chat, paths: &gpui::ExternalPaths, _, cx| {
                 let paths = paths
                     .0
