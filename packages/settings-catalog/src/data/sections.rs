@@ -352,6 +352,7 @@ pub const MAIN_SETTINGS_SCROLL_TARGET_SETTING_KEYS: &[(&str, &[&str])] = &[
             "sessionChatFileEditPreviews",
             "sessionChatKeepComposerExpanded",
             "sessionChatConfirmEscapeInterrupt",
+            "markedHandovers",
         ],
     ),
     (
@@ -682,6 +683,7 @@ pub const MAIN_SETTINGS_SECTION_SETTING_KEYS: &[(&str, &[&str])] = &[
             "sessionChatFileEditPreviews",
             "sessionChatKeepComposerExpanded",
             "sessionChatConfirmEscapeInterrupt",
+            "markedHandovers",
         ],
     ),
     (

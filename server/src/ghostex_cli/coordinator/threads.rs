@@ -53,6 +53,9 @@ pub(super) fn start_thread(parsed: &ParsedArgs) -> CliResult<()> {
             instructions: agents::text(coordinator, "instructions"),
             notes: &notes,
             worktree: parsed.flags.truthy("worktree"),
+            marked_handovers: crate::agents::marked_handovers_enabled(
+                &crate::paths::get_gxserver_paths(None),
+            ),
         },
         &task,
     );

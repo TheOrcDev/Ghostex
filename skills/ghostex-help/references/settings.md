@@ -69,6 +69,7 @@ How to use this file:
 - **Keep chat box expanded while scrolling** `sessionChatKeepComposerExpanded` (boolean, default false): Keep the desktop chat box at full size while you scroll the transcript instead of shrinking it as you scroll up and growing it back at the end.
 - **Press Escape twice to interrupt** `sessionChatConfirmEscapeInterrupt` (boolean, default true): While the agent is working, the first Escape asks you to press Escape again within 2 seconds before it interrupts. Turn off to interrupt on the first Escape.
 - **Simple mode** `sessionChatSimpleMode` (boolean, default true): Simplify all chats: hide tool command previews and group file edits behind an expandable file count.
+- **Marked handovers** `markedHandovers` (boolean, default false): Ask agents to start each part of the message they hand back to you with a marker such as ❓ Needs you, ✅ Done, ⚠️ Read this, 🧪 Untested or 🛑 Blocked, so a quick skim shows what needs you. Applies to agent sessions started or resumed after you change it.
 - **Verbose mode** `sessionChatVerboseMode` (boolean, default false): Expand thinking blocks to show their tool calls by default. Each chat can override it from its composer.
 ### Tools
 

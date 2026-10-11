@@ -7,6 +7,8 @@ pub struct BriefContext<'a> {
     pub notes: &'a [String],
     /// The thread works in its own Ghostex worktree.
     pub worktree: bool,
+    /// The Marked handovers setting is on.
+    pub marked_handovers: bool,
 }
 
 /// A report longer than this is cut, with a pointer to the full reply.
@@ -135,6 +137,8 @@ pub fn strip_agent_message_header(text: &str) -> &str {
 /// Claude's projects send "the project's instructions" to every new thread so a rule stated once reaches all of them. Here the goal, the standing instructions and the memory notes ride under the coordinator's task, followed by the reporting rules the supervisor depends on: the thread's final message is its report, so it must not message the coordinator itself.
 /// CDXC:Coordinators 2026-10-05 DECISION:
 /// User chose to drop the coordinator's name from the brief's "You are a thread started by…" line: with a short task it was the only name in the first message, and Claude named the thread after its coordinator (thread G9c61, 2026-10-05). The sender block below the brief still names the coordinator.
+/// CDXC:MarkedHandovers 2026-10-11 WHY:
+/// A thread's final message goes to its orchestrator, not to the user, so with Marked handovers on the brief says that report is a handover too and gets the markers, which the orchestrator can keep when it passes the report on.
 pub fn thread_brief(coordinator: &BriefContext<'_>, task: &str) -> String {
     let mut brief = task.trim().to_string();
     brief.push_str("\n\n---\n");
@@ -164,6 +168,11 @@ pub fn thread_brief(coordinator: &BriefContext<'_>, task: &str) -> String {
 - The user talks only to the orchestrator. Never ask the user directly or publish a page for them (`ghostex show`): put questions, mockups and the path of any page file in your final report, and the orchestrator shows them to the user and sends you the answers.\n\
 - Do not merge, push, or delete anything unless this brief asks for it.",
     );
+    if coordinator.marked_handovers {
+        brief.push_str(
+            "\n- Your final report is a handover: start each relevant section of it with one of the markers ❓ Needs you, ✅ Done, ⚠️ Read this, 🔄 In progress, 🧪 Untested, 🚀 Shipped or 🛑 Blocked.",
+        );
+    }
     brief
 }
 

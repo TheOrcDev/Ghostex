@@ -113,17 +113,23 @@ pub fn with_coordinator_role(
             "{command} --append-system-prompt-file {}",
             crate::agents::quote_shell_arg(&role_file.to_string_lossy())
         )),
-        "codex" => {
-            let value = serde_json::to_string(GUIDE_POINTER_COORDINATOR_INSTRUCTIONS)
-                .unwrap_or_else(|_| "\"\"".to_string());
-            Ok(format!(
-                "{command} -c {}",
-                crate::agents::quote_shell_arg(&format!("developer_instructions={value}"))
-            ))
-        }
+        "codex" => Ok(format!(
+            "{command} {}",
+            codex_developer_instructions_arg(GUIDE_POINTER_COORDINATOR_INSTRUCTIONS)
+        )),
         "zcode" | "empryo" => Ok(command.to_string()),
         _ => Err(DomainStateError::bad_request(format!(
             "An orchestrator runs on {COORDINATOR_AGENT_FAMILIES_TEXT}. Pick one of those agents."
         ))),
     }
+}
+
+/// The `-c developer_instructions=…` argument a Codex coordinator's command carries. Marked
+/// handovers (agents/marked_handovers.rs) finds it by this exact text to add its note to it.
+pub fn codex_developer_instructions_arg(text: &str) -> String {
+    let value = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "-c {}",
+        crate::agents::quote_shell_arg(&format!("developer_instructions={value}"))
+    )
 }

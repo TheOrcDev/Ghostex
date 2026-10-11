@@ -439,7 +439,8 @@ CDXC:Coordinators 2026-10-03 WHY:
 ZCode has no system-prompt or config flag its launch command could carry, so a ZCode coordinator's
 guide pointer rides the SessionStart hook: this endpoint answers the ingest with `additionalContext`
 and the hook prints it for zcode to fold into context. Only a ZCode SessionStart on a session with
-a coordinators row is answered, so every other hook response stays unchanged.
+a coordinators row, or any ZCode SessionStart while Marked handovers is on (its note follows the
+pointer; agents/marked_handovers.rs), is answered, so every other hook response stays unchanged.
 */
 fn coordinator_session_start_context(
     repository: &DomainRepository<'_>,
@@ -462,10 +463,13 @@ fn coordinator_session_start_context(
         &lifecycle.session_id,
     )?
     .is_some();
-    Ok(
-        coordinator
-            .then(|| crate::coordinators::GUIDE_POINTER_COORDINATOR_INSTRUCTIONS.to_string()),
-    )
+    let parts = [
+        coordinator.then_some(crate::coordinators::GUIDE_POINTER_COORDINATOR_INSTRUCTIONS),
+        super::marked_handovers_enabled(&crate::paths::get_gxserver_paths(None))
+            .then_some(super::MARKED_HANDOVERS_NOTE),
+    ];
+    let context = parts.into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    Ok((!context.is_empty()).then_some(context))
 }
 
 /// A working↔not-working flip is the only activity change the chat channel

@@ -502,6 +502,8 @@ pub const DEFAULT_GHOSTEX_SETTINGS: &[(&str, J)] = &[
     ("sessionChatFileEditPreviews", J::Bool(false)),
     ("sessionChatKeepComposerExpanded", J::Bool(false)),
     ("sessionChatConfirmEscapeInterrupt", J::Bool(true)),
+    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: off by default while they trial it.
+    ("markedHandovers", J::Bool(false)),
     // CDXC:Theming 2026-06-15-11:24:
     // Custom sidebar/titlebar colors are scoped to the sidebar and titlebar.
     // The default background matches Dark Gray chrome without changing modal or

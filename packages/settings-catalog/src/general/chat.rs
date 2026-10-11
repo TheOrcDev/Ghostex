@@ -17,6 +17,7 @@ pub(crate) fn chat() -> Section {
             row("sessionChatKeepComposerExpanded", "Keep chat box expanded while scrolling", "Keep the desktop chat box at full size while you scroll the transcript instead of shrinking it as you scroll up and growing it back at the end."),
             row("sessionChatConfirmEscapeInterrupt", "Press Escape twice to interrupt", "While the agent is working, the first Escape asks you to press Escape again within 2 seconds before it interrupts. Turn off to interrupt on the first Escape."),
             row("sessionChatSimpleMode", "Simple mode", "Simplify all chats: hide tool command previews and group file edits behind an expandable file count."),
+            row("markedHandovers", "Marked handovers", "Ask agents to start each part of the message they hand back to you with a marker such as ❓ Needs you, ✅ Done, ⚠️ Read this, 🧪 Untested or 🛑 Blocked, so a quick skim shows what needs you. Applies to agent sessions started or resumed after you change it."),
             row("sessionChatVerboseMode", "Verbose mode", "Expand thinking blocks to show their tool calls by default. Each chat can override it from its composer."),
         ],
     )

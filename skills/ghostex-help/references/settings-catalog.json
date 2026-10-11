@@ -1026,6 +1026,20 @@
       "agentWritable": true
     },
     {
+      "key": "markedHandovers",
+      "title": "Marked handovers",
+      "subtitle": "Ask agents to start each part of the message they hand back to you with a marker such as ❓ Needs you, ✅ Done, ⚠️ Read this, 🧪 Untested or 🛑 Blocked, so a quick skim shows what needs you. Applies to agent sessions started or resumed after you change it.",
+      "tab": "settings",
+      "tabTitle": "General",
+      "group": "chat",
+      "groupTitle": "Chat",
+      "section": "chat",
+      "sectionTitle": "Chat",
+      "type": "boolean",
+      "default": false,
+      "agentWritable": true
+    },
+    {
       "key": "sessionChatVerboseMode",
       "title": "Verbose mode",
       "subtitle": "Expand thinking blocks to show their tool calls by default. Each chat can override it from its composer.",

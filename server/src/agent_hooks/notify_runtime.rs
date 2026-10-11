@@ -664,7 +664,7 @@ fn post_json(
 }
 
 /// The `additionalContext` gxserver answered with, when the response carries one. The hook prints
-/// it only for a ZCode SessionStart on a coordinator session, so every other event keeps the
+/// it only for a ZCode SessionStart (a coordinator's guide pointer, the Marked handovers note), so every other event keeps the
 /// wrapper's canned response and every other agent sees an empty helper stdout.
 fn coordinator_additional_context(response: &str) -> Option<String> {
     let body = response.split_once("\r\n\r\n")?.1;

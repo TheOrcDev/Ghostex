@@ -1243,6 +1243,15 @@ toggle (`sessionChatSimpleMode`, on by default). The phone app has Simple mode t
 under More actions > View in its chat box or in its Settings > Chat; the phone keeps
 its own switch, also on by default.
 
+Marked handovers (Settings > Chat, off by default) asks every agent session
+Ghostex starts to begin each part of the message it hands back to you with a
+marker: ❓ Needs you, ✅ Done, ⚠️ Read this, 🔄 In progress, 🧪 Untested,
+🚀 Shipped or 🛑 Blocked, so a quick skim shows what needs you. The agent
+otherwise writes as usual. It reaches Claude Code, Codex and ZCode, including
+orchestrators and the reports their threads send them. A change applies to
+sessions started or resumed afterwards; a running agent keeps the instructions
+it started with until it is resumed. Setting: `markedHandovers`.
+
 Summary mode folds each turn down to your prompt and an "Agent reply" row; the
 newest reply stays open, and older ones open with a click. The row holds every
 reply the agent gave to that prompt, including the ones it wrote after a
