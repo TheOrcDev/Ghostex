@@ -123,6 +123,7 @@ pub(crate) fn kind_color(kind: &str, light: bool) -> Hsla {
         "need" => (0x60a5fa, 0x2563eb),
         "done" => (0x4ade80, 0x15803d),
         "read" => (0xfbbf24, 0xb45309),
+        "kicked" => (0xf472b6, 0xbe185d),
         "progress" => (IN_PROGRESS_DARK, IN_PROGRESS_LIGHT),
         "untested" => (0x2dd4bf, 0x0f766e),
         "shipped" => (0x818cf8, 0x4f46e5),
@@ -305,7 +306,7 @@ pub(crate) fn summary_strip(
 }
 
 /// The reply the Settings preview draws in every style: the mockup's orchestrator handover.
-const PREVIEW_REPLY: &str = "Here's where the three threads stand after this round.\n\n✅ **Done:**\n- The questions form draws on desktop and the web build; picks survive a reload.\n- Settings > Skills: the trash button comes first.\n\n🔄 **In progress:**\n- Phone chat: the note box still loses focus when the keyboard opens.\n\n⚠️ **Read this:** a questions block with more than 20 questions is now refused with an error.\n\n❓ **Needs you:**\n- **Q1** Should a sent form collapse to one line? (a) collapse (b) stay open\n- **Q2** OK to ship the phone part first? (a) yes (b) wait\n\n🧪 Untested: answering from the floating page on Windows.";
+const PREVIEW_REPLY: &str = "Here's where the three threads stand after this round.\n\n✅ **Done:**\n- The questions form draws on desktop and the web build; picks survive a reload.\n- Settings > Skills: the trash button comes first.\n\n🛫 **Kicked off:** a thread for the Windows installer.\n\n🔄 **In progress:**\n- Phone chat: the note box still loses focus when the keyboard opens.\n- Windows installer: started this turn.\n\n⚠️ **Read this:** a questions block with more than 20 questions is now refused with an error.\n\n❓ **Needs you:**\n- **Q1** Should a sent form collapse to one line? (a) collapse (b) stay open\n- **Q2** OK to ship the phone part first? (a) yes (b) wait\n\n🧪 Untested: answering from the floating page on Windows.";
 
 /// The preview reply's marked text split at its marks: prose, sections and the summary.
 enum PreviewPart {

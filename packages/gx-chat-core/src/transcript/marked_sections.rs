@@ -1,5 +1,5 @@
 //! Marked sections: the parts of an agent's reply that start with a Marked handovers marker
-//! (❓ Needs you, ✅ Done, ⚠️ Read this, 🔄 In progress, 🧪 Untested, 🚀 Shipped, 🛑 Blocked),
+//! (❓ Needs you, ✅ Done, ⚠️ Read this, 🛫 Kicked off, 🔄 In progress, 🧪 Untested, 🚀 Shipped, 🛑 Blocked),
 //! tagged with their kind so every chat draws them in that kind's colour, and the summary of the
 //! ones that ask something of the reader.
 //!
@@ -17,7 +17,7 @@
 //!     after the first.
 //!
 //! CDXC:MarkedHandovers 2026-10-11 DECISION:
-//! User: the chat colours the sections an agent marks, in one of three styles picked in Settings > Chat under Marked handovers ("Marked sections style": a thin left rule, a coloured badge in place of the emoji, or coloured labels, the default), and every style shows a summary strip at the top of the message with chips counting the marked items ("❓ 2 need you · ⚠️ 1 to read · 🧪 1 untested"; a chip jumps to its section; no strip when nothing is counted). A bold label line and the bullets under it are one section. Colours are the mockup's palette (docs/2026-10-11/chat-section-markers/index.html), In progress #00A6ED. It applies to every agent's replies that carry markers (orchestrators and their threads always mark their handovers; Marked handovers extends that to every session); copying a message still gives the agent's own text (`copyText` is the unmarked body).
+//! User: the chat colours the sections an agent marks, in one of three styles picked in Settings > Chat under Marked handovers ("Marked sections style": a thin left rule, a coloured badge in place of the emoji, or coloured labels, the default), and every style shows a summary strip at the top of the message with chips counting the marked items ("❓ 2 need you · ⚠️ 1 to read · 🧪 1 untested"; a chip jumps to its section; no strip when nothing is counted). A bold label line and the bullets under it are one section. Colours are the mockup's palette (docs/2026-10-11/chat-section-markers/index.html), In progress #00A6ED; 🛫 Kicked off (user: "let's call it 'Kicked off'", work started this turn) is pink and is not counted, since it asks nothing of the reader. It applies to every agent's replies that carry markers (orchestrators and their threads always mark their handovers; Marked handovers extends that to every session); copying a message still gives the agent's own text (`copyText` is the unmarked body).
 //! SEE-ALSO: apps/desktop/src/app/native_chat/marked_sections.rs (GPUI drawing and the palette), apps/mobile/app/src/chat/native/transcript/markdown/MarkedSections.tsx (phone drawing), server/src/agents/marked_handovers.rs (the note that asks agents for these markers; the emoji and names must match it).
 
 use serde_json::{json, Value};
@@ -39,7 +39,7 @@ struct Marker {
 }
 
 /// In the order the summary lists the counted kinds.
-const MARKERS: [Marker; 7] = [
+const MARKERS: [Marker; 8] = [
     Marker {
         kind: "need",
         emoji: "\u{2753}",
@@ -68,6 +68,12 @@ const MARKERS: [Marker; 7] = [
         kind: "done",
         emoji: "\u{2705}",
         name: "Done",
+        counted: None,
+    },
+    Marker {
+        kind: "kicked",
+        emoji: "\u{1f6eb}",
+        name: "Kicked off",
         counted: None,
     },
     Marker {

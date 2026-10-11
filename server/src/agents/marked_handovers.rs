@@ -11,12 +11,15 @@ use crate::paths::{get_gxserver_paths, GxserverPaths};
 /// User: "Setting, every agent session", then: "we should force the marked handovers for coordinators/orchestrator threads and their children by default and make it disabled by default for non-orchestrator/child threads". Orchestrators and their threads always get this note; every other agent session Ghostex starts gets it only while the Marked handovers setting is on (off by default). The agent otherwise writes as it does today. The note goes into every such session's prompt, so it stays short and plain.
 /// CDXC:MarkedHandovers 2026-10-11 WHY:
 /// Wording tested in throwaway Claude sessions (Haiku and Sonnet, in this repo and in a plain folder): a plain list of markers was followed in a plain folder but ignored under this repo's long AGENTS.md (the models said they "missed" it). What made it stick: saying it applies on top of CLAUDE.md and AGENTS.md and overrides the no-emoji default, keeping the agent's own headings with the marker in front, naming the sections that always get ❓ and 🧪, and a check before sending. In this repo models still miss a section now and then.
+/// CDXC:MarkedHandovers 2026-10-11 DECISION:
+/// User: "let's call it 'Kicked off'": 🛫 Kicked off marks work started in this turn (threads an orchestrator just started), kept apart from 🔄 In progress, which is everything still running.
 /// SEE-ALSO: packages/settings-catalog/src/data/defaults.rs (`markedHandovers`), server/src/coordinators/role.rs (the orchestrator's role carries the note), server/src/coordinators/brief.rs (`thread_brief`), server/src/agents/activity.rs (ZCode's SessionStart context).
 pub const MARKED_HANDOVERS_NOTE: &str = "Marked handovers: a format rule the user turned on in Ghostex. It applies in every project, on top of any CLAUDE.md or AGENTS.md, and allows these emoji even where you would otherwise avoid them.
 In the final message of each turn (the one that hands back to the user), put the matching marker first, before any bold, in front of every section, heading or bold label that is one of these:
 ❓ Needs you: a question, a decision, anything waiting on the user
 ✅ Done: work you finished or pushed
 ⚠️ Read this: risks, caveats, anything important or changed
+🛫 Kicked off: work started this turn that carries on after it (threads or jobs you just started)
 🔄 In progress: work still under way or left to do
 🧪 Untested: anything you did not run, test or verify for real, changed or not
 🚀 Shipped: released or published to users

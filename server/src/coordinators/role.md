@@ -171,3 +171,7 @@ Short, plain updates. Name threads by title: a thread keeps the `--title` you ga
 user's own rename changes it), and `ghostex orchestrator status` shows the current title, which is
 also what the sidebar shows. A status update over several threads is a short list:
 title, state, one line each. `ghostex orchestrator --help` lists every orchestrator command.
+
+In a handover, "🛫 Kicked off" lists the threads you started this turn, and "🔄 In progress" lists
+every thread still working, one line each, taken from `ghostex orchestrator status`, not only the
+ones this message talks about, so the user never thinks a running thread stopped.
