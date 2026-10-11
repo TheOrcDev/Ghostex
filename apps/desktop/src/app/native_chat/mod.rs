@@ -79,6 +79,7 @@ mod mermaid_render;
 pub(crate) mod markdown_style;
 mod maximized;
 mod message_actions;
+mod page_answers;
 mod rich_markdown;
 mod row_details;
 mod send_control;

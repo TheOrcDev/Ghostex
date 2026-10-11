@@ -3,9 +3,9 @@ name: ghostex-visuals
 description: >-
   Show charts, stat tiles, tables and text layouts inline in the Ghostex chat
   with a fenced ```visual block, and publish self-contained HTML pages (UI
-  mockups, small interactive tools) with `ghostex show` so the chat shows them
-  as a card that opens the page. Use only when the user asks for
-  $ghostex-visuals.
+  mockups, small interactive tools, question forms whose answers come back to
+  you) with `ghostex show` so the chat shows them as a card that opens the
+  page. Use only when the user asks for $ghostex-visuals.
 disable-model-invocation: true
 ---
 
@@ -15,8 +15,8 @@ Ghostex draws a fenced ```visual block in your reply natively, inline in the
 chat, on desktop, web and phone.
 
 - Prefer a block for charts, tables, stats and text layouts.
-- Use an HTML page only for what a block cannot express: UI mockups and small
-  interactive tools.
+- Use an HTML page only for what a block cannot express: UI mockups, small
+  interactive tools, and questions the reader answers on a page.
 - Don't restate in prose what the visual already shows. Add only what it
   doesn't: the conclusion, a caveat, the next step.
 
@@ -163,7 +163,7 @@ For a mockup or a small interactive tool:
    and font.
 3. The page runs in a sandbox with no origin of its own: `localStorage`,
    cookies and requests to `http://` or `localhost` don't work. Keep state in
-   memory.
+   memory. The one way back to you is `ghostex.submit` (below).
 4. Publish it:
 
    ```bash
@@ -182,3 +182,67 @@ For a mockup or a small interactive tool:
 
 If `ghostex show` is an unknown command, say this Ghostex is too old to show
 pages and give the HTML file's path instead.
+
+### Pages that ask the reader
+
+When you need the reader's decisions (a pick between options, a form of open
+questions, choices on a mockup), the page can send the answers back to you.
+First run `ghostex show help`: if it doesn't mention `ghostex.submit`, this
+Ghostex can't take answers from a page, so ask your questions in the chat
+instead.
+
+- Call `ghostex.submit(answers)` from the page with any JSON under 64 KiB,
+  best an object keyed by short field names
+  (`{"auth": "OAuth", "keepLegacy": true}`); the chat turns the names into
+  labels. It returns a promise that resolves once Ghostex has the answers and
+  rejects with an `Error` whose message says why they weren't sent. Show that
+  message on the page.
+- A page takes one set of answers. Once they are sent, `ghostex.answered` is
+  `true` and `ghostex.answers` holds them, also when the reader opens the page
+  again later, and Ghostex adds a short Answered note at the top of the page.
+  Use them to show the sent answers read-only instead of an empty form.
+- When `window.ghostex` is missing (an older Ghostex), hide the send button
+  and tell the reader to type their answers in the chat.
+- After pasting the card, end your turn. Don't poll or wait in a loop: the
+  answers arrive as the next user message, which the chat shows as an answers
+  card while the page's card reads Answered:
+
+  ```text
+  <ghostex-page-answers page="7ea5c5be1f2d68ebc9e40f790db0ef29" title="Open questions">
+  {
+    "auth": "OAuth with PKCE",
+    "notes": "keep the refresh token in the keychain"
+  }
+  </ghostex-page-answers>
+  ```
+
+A minimal question page:
+
+```html
+<form id="questions">
+  <label>Sign-in <select name="auth"><option>OAuth with PKCE</option><option>API keys</option></select></label>
+  <label>Notes <textarea name="notes"></textarea></label>
+  <button>Send to the agent</button>
+  <p id="status"></p>
+</form>
+<script>
+  const form = document.getElementById("questions");
+  const status = document.getElementById("status");
+  const lock = () => { for (const field of form.elements) field.disabled = true; };
+  if (!window.ghostex) {
+    form.querySelector("button").hidden = true;
+    status.textContent = "Type your answers in the chat instead.";
+  } else if (ghostex.answered) {
+    for (const [name, value] of Object.entries(ghostex.answers || {})) {
+      if (form.elements[name]) form.elements[name].value = value;
+    }
+    lock();
+  }
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    ghostex.submit(Object.fromEntries(new FormData(form)))
+      .then(() => { lock(); status.textContent = "Sent."; })
+      .catch((error) => { status.textContent = error.message; });
+  });
+</script>
+```

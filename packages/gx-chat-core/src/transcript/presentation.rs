@@ -30,6 +30,9 @@ use crate::transcript::message_text::{
 use crate::transcript::message_time::message_time;
 use crate::transcript::native_markdown::native_markdown;
 use crate::transcript::noise::suppressed_turn_presentation;
+use crate::transcript::page_answers::{
+    answered_page_ids, parse_page_answers, project_page_answers,
+};
 use crate::transcript::prose::prose_markdown;
 use crate::transcript::question_exchange::answered_question_exchange;
 use crate::transcript::sent_message::{project_sent_messages, resolve_recipients};
@@ -115,6 +118,7 @@ pub fn project_message(
     };
     let agent_message = parse_agent_message(&body);
     let inter_agent_message = is_user.then(|| parse_inter_agent_message(&body)).flatten();
+    let page_answers = is_user.then(|| parse_page_answers(&body)).flatten();
     let (remaining, changes) = split_file_changes(tools);
     let tool_pairs = pair_tool_blocks(remaining);
     let copy_text = if is_user {
@@ -219,6 +223,12 @@ pub fn project_message(
             }),
             None => Value::Null,
         },
+    );
+    projected.insert(
+        "pageAnswers".to_string(),
+        page_answers
+            .as_ref()
+            .map_or(Value::Null, project_page_answers),
     );
     projected.insert("questions".to_string(), Value::Array(questions));
     projected.insert(
@@ -336,6 +346,8 @@ fn placeholder(message: &ChatMessage) -> Value {
 pub struct Projection {
     pub items: Vec<TranscriptItem>,
     pub final_ids: Vec<String>,
+    /// The published pages whose answers arrived in this transcript (`page_answers.rs`).
+    pub answered_pages: Vec<String>,
     /// Ids that shipped as placeholders and want a backfill batch.
     pub backfill: Vec<ChatMessage>,
     /// The minimap rail for this pass.
@@ -723,6 +735,7 @@ pub fn build_scope(
     Projection {
         items,
         final_ids: projection.final_ids,
+        answered_pages: answered_page_ids(scope.messages),
         backfill,
         minimap,
     }

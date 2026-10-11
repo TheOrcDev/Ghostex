@@ -686,6 +686,12 @@ impl NativeChatView {
             None => "Interactive HTML page".to_string(),
         };
         let floating = page.popup && super::visual_popup::FLOATING_PAGES;
+        // The reader already sent this page's answers (`answeredPages`, page_answers.rs).
+        let answered = page.page_id().is_some_and(|page_id| {
+            self.snapshot["answeredPages"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == page_id))
+        });
         let file = page.file.clone();
         let gxv::PageRef { title, url, .. } = page;
         let page_title = title.clone();
@@ -761,9 +767,37 @@ impl NativeChatView {
                             .truncate()
                             .text_size(px(11.5 * s))
                             .text_color(p.muted)
-                            .child(detail),
+                            .child(if answered {
+                                format!("Your answers were sent · {detail}")
+                            } else {
+                                detail
+                            }),
                     ),
             )
+            .when(answered, |this| {
+                let good = super::page_answers::answered_color(p);
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0 * s))
+                        .flex_shrink_0()
+                        .px(px(8.0 * s))
+                        .py(px(2.0 * s))
+                        .rounded_full()
+                        .bg(good.opacity(0.14))
+                        .text_size(px(11.0 * s))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(good)
+                        .child(
+                            svg()
+                                .path("titlebar/check.svg")
+                                .size(px(11.0 * s))
+                                .text_color(good),
+                        )
+                        .child("Answered"),
+                )
+            })
             .child(super::mermaid::button(
                 "visual-page-open",
                 "titlebar/external-link.svg",

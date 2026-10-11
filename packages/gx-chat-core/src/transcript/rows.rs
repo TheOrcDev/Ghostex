@@ -99,6 +99,7 @@ pub fn refresh(state: &mut ChatState, context: &ChatContext) {
     let view = &mut state.transcript_view;
     view.items = projection.items;
     view.final_ids = projection.final_ids;
+    view.answered_pages = projection.answered_pages;
     view.backfill = projection.backfill;
     view.projection_inputs = Some(inputs);
     // `update` runs INSIDE `publish` in the TypeScript, so a rebuild only becomes a new array the

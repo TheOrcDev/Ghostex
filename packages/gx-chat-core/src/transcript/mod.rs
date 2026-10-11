@@ -27,6 +27,7 @@ pub mod message_text;
 pub mod message_time;
 pub mod native_markdown;
 pub mod noise;
+pub mod page_answers;
 pub mod presentation;
 pub mod prose;
 pub mod question_exchange;

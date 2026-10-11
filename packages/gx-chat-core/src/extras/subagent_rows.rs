@@ -124,6 +124,7 @@ pub fn refresh(state: &mut ChatState, context: &ChatContext) {
     view.projected = cache;
     view.items = projection.items;
     view.final_ids = projection.final_ids;
+    view.answered_pages = projection.answered_pages;
     view.backfill = projection.backfill;
     view.projection_inputs = Some(inputs);
     let details = row_details(state, context);

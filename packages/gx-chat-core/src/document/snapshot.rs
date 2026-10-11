@@ -80,6 +80,8 @@ pub struct Document {
     pub loading_earlier: bool,
     /// The ids of the turns whose reply is final, so the renderer can mark them.
     pub final_ids: Vec<String>,
+    /// The published pages (`ghostex show`) whose answers arrived, so their cards read Answered.
+    pub answered_pages: Vec<String>,
     /// Per completed-work row: the read is in flight, or it failed and offers a retry.
     pub deferred_work: BTreeMap<String, DeferredWorkRow>,
 
