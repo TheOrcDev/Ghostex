@@ -16,9 +16,9 @@
 //!
 //! A mockup can stand for one choice: an element with `data-question` (the question's `name`,
 //! title or tag) and `data-choice` (the choice's value, label or letter), usually the element
-//! holding the variant's title and its mockup, gets a Pick button by its first heading that picks
-//! that choice (and shows it picked, both there and in the question), and a note box under it whose
-//! text arrives as `"<question> · <choice> (note)"`.
+//! holding the variant's title and its mockup, gets a Pick button at the right end of its first
+//! heading's row that picks that choice (and shows it picked, both there and in the question), and a
+//! note box under it whose text arrives as `"<question> · <choice> (note)"`.
 //!
 //! ```html
 //! <section data-question="Q1" data-choice="tabs"><h3>A. Tabs</h3>…mockup…</section>
@@ -82,7 +82,8 @@ gx-question{display:block;border:1px solid var(--border);background:var(--card);
 .gx-note::placeholder,.gx-text::placeholder{color:var(--muted-foreground)}
 .gx-note[readonly],.gx-text[readonly]{resize:none}
 .gx-note[hidden],.gx-text[hidden]{display:none}
-.gx-pick{display:inline-flex;align-items:center;gap:4px;margin-left:10px;padding:2px 10px;vertical-align:middle;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--foreground);font:500 12px/1.5 var(--font-sans);cursor:pointer}
+.gx-has-pick{display:flex;align-items:center;gap:8px}
+.gx-pick{display:inline-flex;flex:none;align-items:center;gap:4px;margin-left:auto;padding:2px 10px;vertical-align:middle;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--foreground);font:500 12px/1.5 var(--font-sans);cursor:pointer}
 .gx-pick:hover:not(:disabled):not([aria-pressed=true]){background:var(--accent);color:var(--accent-foreground)}
 .gx-pick[aria-pressed=true]{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
 .gx-pick[aria-pressed=true]:hover:not(:disabled),.gx-pick[aria-pressed=true]:active:not(:disabled){background:color-mix(in srgb,var(--primary) 85%,var(--foreground));border-color:color-mix(in srgb,var(--primary) 85%,var(--foreground));color:var(--primary-foreground)}
@@ -166,7 +167,8 @@ function bindOptions(questions,changed){
     if(!c){if(window.console)console.warn("ghostex: no choice \""+wanted+"\" in question \""+asked+"\"");return;}
     var heading=/^H[1-6]$/.test(node.tagName)?node:node.querySelector("h1,h2,h3,h4,h5,h6");
     var pick=el("button","gx-pick");pick.type="button";
-    if(heading)heading.append(pick);
+    /* The Pick button sits at the right end of the title's row. */
+    if(heading){heading.classList.add("gx-has-pick");heading.append(pick);}
     else{var head=el("div","gx-option-head");head.append(el("span","gx-option-label",c.label),pick);node.insertBefore(head,node.firstChild);}
     var note=el("textarea","gx-option-note");note.rows=1;note.placeholder="Note about this option (optional)";note.setAttribute("aria-label","Note about "+c.label);
     if(heading===node){var mockup=node.nextElementSibling;node.parentNode.insertBefore(note,mockup?mockup.nextSibling:null);}else node.append(note);
