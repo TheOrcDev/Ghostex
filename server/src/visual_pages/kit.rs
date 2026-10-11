@@ -14,6 +14,16 @@
 //! </gx-questions>
 //! ```
 //!
+//! A mockup can stand for one choice: an element with `data-question` (the question's `name`,
+//! title or tag) and `data-choice` (the choice's value, label or letter), usually the element
+//! holding the variant's title and its mockup, gets a Pick button by its first heading that picks
+//! that choice (and shows it picked, both there and in the question), and a note box under it whose
+//! text arrives as `"<question> · <choice> (note)"`.
+//!
+//! ```html
+//! <section data-question="Q1" data-choice="tabs"><h3>A. Tabs</h3>…mockup…</section>
+//! ```
+//!
 //! `<gx-questions>` lays its children out in one centred column (`--gx-column`, 720px) and lets a
 //! `<gx-wide>` child span the page's full width. A choice question (`multiple` for several picks)
 //! letters its choices, ends with "Other / none of these", and has a note box; a `type="text"`
@@ -24,6 +34,7 @@
 //! reopening the page brings them back.
 //!
 //! CDXC:SessionChat 2026-10-11 DECISION:
+//! User: a reader picks an option right at its mockup (a Pick button by the mockup's title that picks that choice in its question, shown picked on both and cleared from either), and writes a note under each mockup that arrives with the answers keyed to that question and choice, is kept as a draft, and shows in the answers card.
 //! User: every question page offers "Other / none of these" with a note box, consistently, instead of each agent hand-rolling it, and the reader may leave a question unanswered. No choice is ever preselected; an agent marks the one it recommends with a Recommended badge and the reader picks. Mockups can use the full width of the page between or above the questions, and the Answered note is as wide as the question cards.
 //!
 //! CDXC:SessionChat 2026-10-11 SEE-ALSO:
@@ -67,6 +78,18 @@ gx-question{display:block;border:1px solid var(--border);background:var(--card);
 .gx-note::placeholder,.gx-text::placeholder{color:var(--muted-foreground)}
 .gx-note[readonly],.gx-text[readonly]{resize:none}
 .gx-note[hidden],.gx-text[hidden]{display:none}
+.gx-pick{display:inline-flex;align-items:center;gap:4px;margin-left:10px;padding:2px 10px;vertical-align:middle;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--foreground);font:500 12px/1.5 var(--font-sans);cursor:pointer}
+.gx-pick:hover:not(:disabled){background:var(--accent)}
+.gx-pick[aria-pressed=true]{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+.gx-pick:disabled{cursor:default}
+.gx-pick:disabled:not([aria-pressed=true]){opacity:.5}
+.gx-option-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;font-weight:600}
+[data-question][data-choice].gx-picked:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6){outline:2px solid var(--primary);outline-offset:4px;border-radius:calc(var(--radius) + 4px)}
+.gx-option-note{display:block;width:100%;box-sizing:border-box;margin:8px 0 0;min-height:34px;resize:vertical;field-sizing:content;font:inherit;font-size:12.5px;color:var(--foreground);background:transparent;border:1px solid var(--border);border-radius:var(--radius);padding:7px 9px}
+.gx-option-note:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 20%,transparent)}
+.gx-option-note::placeholder{color:var(--muted-foreground)}
+.gx-option-note[readonly]{resize:none}
+.gx-option-note[hidden]{display:none}
 .gx-send{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px}
 .gx-send-button{font:inherit;font-size:13px;font-weight:600;padding:8px 16px;border-radius:var(--radius);border:1px solid var(--primary);background:var(--primary);color:var(--primary-foreground);cursor:pointer}
 .gx-send-button:disabled{opacity:.55;cursor:default}
@@ -96,7 +119,7 @@ function question(qe,index,used,changed){
   if(desc.textContent.trim()||desc.querySelector("img,svg,canvas,table"))qe.append(desc);
   if(text){
     var area=el("textarea","gx-text");area.placeholder=qe.getAttribute("placeholder")||"Your answer (optional)";area.setAttribute("aria-labelledby",titleId);area.addEventListener("input",changed);qe.append(area);
-    return{collect:function(out){out[key]=area.value.trim()||null;},
+    return{key:key,tag:(tag||"").trim(),choices:[],collect:function(out){out[key]=area.value.trim()||null;},
       restore:function(answers){if(typeof answers[key]==="string")area.value=answers[key];},
       lock:function(){area.readOnly=true;if(!area.value)area.hidden=true;}};
   }
@@ -104,40 +127,71 @@ function question(qe,index,used,changed){
   list.setAttribute("role",multiple?"group":"radiogroup");list.setAttribute("aria-labelledby",titleId);
   var note=el("textarea","gx-note");note.rows=1;note.setAttribute("aria-label","Note");note.addEventListener("input",changed);
   function sync(){note.placeholder=other.on()?"What would you prefer instead? (optional)":"Note (optional)";}
-  function choice(nodes,value,recommended){
-    var button=el("button","gx-choice"),body=el("span","gx-choice-body"),index=choices.length;
+  function choice(nodes,value,recommended,label){
+    var button=el("button","gx-choice"),body=el("span","gx-choice-body"),index=choices.length,letter=index<26?String.fromCharCode(97+index):String(index+1);
     button.type="button";button.setAttribute("role",multiple?"checkbox":"radio");button.setAttribute("aria-checked","false");
-    body.append(el("b","gx-letter",(index<26?String.fromCharCode(97+index):index+1)+")")," ");
+    body.append(el("b","gx-letter",letter+")")," ");
     nodes.forEach(function(node){body.append(node);});
     if(recommended)body.insertBefore(el("span","gx-rec","Recommended"),body.querySelector(":scope>small"));
     button.append(el("span","gx-mark"),body);list.append(button);
-    var c={button:button,value:value,on:function(){return button.getAttribute("aria-checked")==="true";},set:function(v){button.setAttribute("aria-checked",v?"true":"false");}};
+    var c={button:button,value:value,label:label,letter:letter,on:function(){return button.getAttribute("aria-checked")==="true";},set:function(v){button.setAttribute("aria-checked",v?"true":"false");}};
     button.addEventListener("click",function(){var on=!c.on();if(on&&!multiple)choices.forEach(function(o){o.set(false);});c.set(on);sync();changed();if(on&&c===other)note.focus();});
     choices.push(c);return c;
   }
-  choiceEls.forEach(function(ce){choice(kids(ce),(ce.getAttribute("value")||"").trim()||labelText(ce),ce.hasAttribute("recommended"));});
-  var other=choice([document.createTextNode(OTHER)],OTHER,false);other.button.classList.add("gx-other");
+  choiceEls.forEach(function(ce){var label=labelText(ce);choice(kids(ce),(ce.getAttribute("value")||"").trim()||label,ce.hasAttribute("recommended"),label);});
+  var other=choice([document.createTextNode(OTHER)],OTHER,false,OTHER);other.button.classList.add("gx-other");
   sync();qe.append(list,note);
-  return{collect:function(out){var on=choices.filter(function(c){return c.on();}).map(function(c){return c.value;});
+  return{key:key,tag:(tag||"").trim(),choices:choices,collect:function(out){var on=choices.filter(function(c){return c.on();}).map(function(c){return c.value;});
       out[key]=multiple?(on.length?on:null):on[0]||null;var written=note.value.trim();if(written)out[key+" (note)"]=written;},
     restore:function(answers){var v=answers[key],picked=Array.isArray(v)?v:v==null?[]:[v];
       choices.forEach(function(c){c.set(picked.indexOf(c.value)>=0);});
       if(typeof answers[key+" (note)"]==="string")note.value=answers[key+" (note)"];sync();},
     lock:function(){choices.forEach(function(c){c.button.disabled=true;});note.readOnly=true;if(!note.value)note.hidden=true;}};
 }
+/* A mockup tied to a choice (`data-question` + `data-choice`): a Pick button by its title that
+   clicks that choice, and a note box under it, sent as "<question> · <choice> (note)". */
+function bindOptions(questions,changed){
+  var found=[];
+  Array.prototype.forEach.call(document.querySelectorAll("[data-question][data-choice]"),function(node){
+    if(node.closest("gx-question"))return;
+    var asked=(node.getAttribute("data-question")||"").trim(),wanted=(node.getAttribute("data-choice")||"").trim();
+    var q=questions.filter(function(x){return x.key===asked||(x.tag&&x.tag===asked);})[0];
+    var c=q&&q.choices.filter(function(x){return x.value===wanted||x.label===wanted||x.letter===wanted.toLowerCase();})[0];
+    if(!c){if(window.console)console.warn("ghostex: no choice \""+wanted+"\" in question \""+asked+"\"");return;}
+    var heading=/^H[1-6]$/.test(node.tagName)?node:node.querySelector("h1,h2,h3,h4,h5,h6");
+    var pick=el("button","gx-pick");pick.type="button";
+    if(heading)heading.append(pick);
+    else{var head=el("div","gx-option-head");head.append(el("span","gx-option-label",c.label),pick);node.insertBefore(head,node.firstChild);}
+    var note=el("textarea","gx-option-note");note.rows=1;note.placeholder="Note about this option (optional)";note.setAttribute("aria-label","Note about "+c.label);
+    if(heading===node){var mockup=node.nextElementSibling;node.parentNode.insertBefore(note,mockup?mockup.nextSibling:null);}else node.append(note);
+    var key=q.key+" \u00b7 "+c.value+" (note)";
+    pick.addEventListener("click",function(){c.button.click();});
+    note.addEventListener("input",changed);
+    found.push({
+      sync:function(){var on=c.on();node.classList.toggle("gx-picked",on);pick.setAttribute("aria-pressed",on?"true":"false");pick.textContent=on?"\u2713 Picked":"Pick";pick.title=on?"Click again to clear":"Pick \""+c.label+"\"";pick.disabled=c.button.disabled;},
+      collect:function(out){var written=note.value.trim();if(written)out[key]=written;},
+      restore:function(answers){if(typeof answers[key]==="string")note.value=answers[key];},
+      lock:function(){note.readOnly=true;if(!note.value)note.hidden=true;}});
+  });
+  return found;
+}
 function setup(root){
-  var used={},questions=[];
+  var used={},questions=[],options=[];
+  function collect(){var out={};questions.forEach(function(q){q.collect(out);});options.forEach(function(o){o.collect(out);});return out;}
+  function restore(answers){questions.forEach(function(q){q.restore(answers);});options.forEach(function(o){o.restore(answers);});}
+  function syncOptions(){options.forEach(function(o){o.sync();});}
   /* The reader's picks so far are kept on the host (PAGE_API's draft), so closing and reopening the page loses nothing. */
-  function changed(){if(window.ghostex&&ghostex.__saveDraft){var out={};questions.forEach(function(q){q.collect(out);});ghostex.__saveDraft("kit",out);}}
+  function changed(){syncOptions();if(window.ghostex&&ghostex.__saveDraft)ghostex.__saveDraft("kit",collect());}
   questions=Array.prototype.map.call(root.querySelectorAll("gx-question"),function(qe,index){return question(qe,index,used,changed);});
+  options=bindOptions(questions,changed);syncOptions();
   var bar=el("div","gx-send"),button=el("button","gx-send-button",root.getAttribute("submit")||"Send answers"),status=el("span","gx-send-status","Questions you leave blank are sent as unanswered.");
   button.type="button";bar.append(button,status);root.append(bar);
-  function lock(){questions.forEach(function(q){q.lock();});button.disabled=true;button.textContent="Sent";status.textContent="";}
+  function lock(){questions.forEach(function(q){q.lock();});options.forEach(function(o){o.lock();});syncOptions();button.disabled=true;button.textContent="Sent";status.textContent="";}
   if(!window.ghostex){button.disabled=true;status.textContent="This Ghostex can't send answers from a page; type them in the chat.";return;}
-  if(ghostex.answered){var answers=ghostex.answers||{};questions.forEach(function(q){q.restore(answers);});lock();return;}
-  var saved=ghostex.__draft&&ghostex.__draft("kit");if(saved&&typeof saved==="object")questions.forEach(function(q){q.restore(saved);});
+  if(ghostex.answered){restore(ghostex.answers||{});lock();return;}
+  var saved=ghostex.__draft&&ghostex.__draft("kit");if(saved&&typeof saved==="object"){restore(saved);syncOptions();}
   button.addEventListener("click",function(){
-    var out={};questions.forEach(function(q){q.collect(out);});
+    var out=collect();
     button.disabled=true;status.classList.remove("gx-error");status.textContent="Sending…";
     ghostex.submit(out).then(lock,function(error){button.disabled=false;status.classList.add("gx-error");status.textContent=error&&error.message||"Your answers were not sent.";});
   });

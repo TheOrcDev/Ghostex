@@ -1017,9 +1017,10 @@ choice, and you can leave any question blank or click a choice again to clear
 it. Send delivers your answers to the agent as a message (when the agent is
 busy, they wait in the chat's queue and go as soon as it is free), the chat
 shows them as a card, and the form then reads Answered. Questions that need a picture,
-such as choosing between two mockups, come as a page instead, which works the
-same way: its card reads Answered once you send, and opening it again shows
-what you sent. On desktop the floating window closes once your answers are
+such as choosing between two mockups, come as a page instead, where you can
+also pick an option right at its mockup and add a note under each mockup. A
+page works the same way: its card reads Answered once you send, and opening it
+again shows what you sent. On desktop the floating window closes once your answers are
 sent, and stays open with the error if they could not be. Until you send,
 what you picked and typed is kept, in a form and on a page alike, even when
 you close the page or the chat, switch sessions, or restart. Commands:

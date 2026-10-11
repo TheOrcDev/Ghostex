@@ -238,7 +238,10 @@ pub fn project_message(
         page_answers
             .as_ref()
             .map_or(Value::Null, |(answers, rest)| {
-                let mut card = project_page_answers(answers);
+                // An in-chat form's answers show its choices' labels (`project_page_answers`).
+                let forms = question_forms(messages);
+                let form = forms.iter().find(|form| form.id == answers.page_id);
+                let mut card = project_page_answers(answers, form);
                 card["withText"] = Value::Bool(!rest.is_empty());
                 card
             }),

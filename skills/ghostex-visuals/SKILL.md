@@ -291,6 +291,15 @@ chat instead.
   compact enough to be seen together with it: show one theme with a
   dark/light switch rather than every variant twice. Never collect all the
   mockups first and all the questions at the end.
+- Tie each variant to its choice so the reader can pick it right there: wrap
+  the variant's title and its mockup in one element with `data-question`
+  (the question's `name`, title or tag) and `data-choice` (the choice's
+  value, label or letter), for example
+  `<section data-question="Q1" data-choice="tabs"><h3>A. Tabs</h3>…</section>`.
+  The kit puts a Pick button by that title, shows the variant picked there
+  and in the question (clicking either clears both), and adds a note box
+  under the mockup whose text arrives as `"<question key> · <choice> (note)"`.
+  Older Ghostex versions ignore the attributes; the question still works.
 - `<gx-question>`: `title`; `tag`, an optional short label such as an issue
   id; `name`, the answer's key (the title when there is none); `multiple`
   for several picks; `type="text"` for a text box instead of choices. Content

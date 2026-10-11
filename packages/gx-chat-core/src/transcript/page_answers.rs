@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::transcript::jsstr::js_trim;
 use crate::transcript::prose::prose_markdown;
+use crate::transcript::question_forms::{FormQuestion, QuestionForm};
 
 const OPEN: &str = "<ghostex-page-answers";
 const CLOSE: &str = "</ghostex-page-answers>";
@@ -26,6 +27,8 @@ const MAX_ROWS: usize = 40;
 const MAX_VALUE_CHARS: usize = 600;
 /// How the question kit (server/src/visual_pages/kit.rs) names a question's note.
 const NOTE_SUFFIX: &str = " (note)";
+/// Between a question's key and a choice in the note a page keeps under that choice's mockup.
+const OPTION_SEPARATOR: &str = " \u{b7} ";
 
 /// One answered page, as its message carries it.
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +146,46 @@ fn display_value(value: &Value) -> String {
     })
 }
 
+/// An answer as text that starts like a sentence: "no confirm" reads "No confirm". A first word
+/// with capitals of its own ("macOS", "iOS") is a name and stays as written.
+fn sentence_case(text: &str) -> String {
+    let first_word = text.split_whitespace().next().unwrap_or_default();
+    let mut characters = text.chars();
+    match characters.next() {
+        Some(first) if first.is_lowercase() && !first_word.chars().any(char::is_uppercase) => {
+            first.to_uppercase().chain(characters).collect()
+        }
+        _ => text.to_string(),
+    }
+}
+
+/// A picked value as the answers card shows it: the choice's own label when the form that asked is
+/// known (an in-chat question form), else the value with a capital first letter. What the agent
+/// received is unchanged.
+///
+/// CDXC:SessionChat 2026-10-11 DECISION:
+/// User: the answers card shows answers starting with a capital letter ("No confirm", not "no confirm") on desktop and the phone, without changing what the agent receives; when the card knows the choice's label it shows the label.
+fn display_answer(value: &Value, asked: Option<&FormQuestion>) -> String {
+    let shown = |text: &str| {
+        asked
+            .and_then(|asked| asked.choices.iter().find(|choice| choice.value == text))
+            .map(|choice| choice.label.clone())
+            .unwrap_or_else(|| sentence_case(text))
+    };
+    match value {
+        Value::String(text) => clip(shown(text)),
+        Value::Array(items) if items.iter().all(Value::is_string) => clip(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(shown)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        other => display_value(other),
+    }
+}
+
 /// A field name as a label: `preferred_name` and `preferredName` read as "Preferred name". A key
 /// that is already words (the question kit keys answers by question title) is shown as written.
 fn display_label(key: &str) -> String {
@@ -174,23 +217,53 @@ fn display_label(key: &str) -> String {
     }
 }
 
+/// Which question's row a note belongs to: `"<key> (note)"` is that question's own note, and
+/// `"<key> · <choice> (note)"` a page's note under one choice's mockup (the question kit,
+/// server/src/visual_pages/kit.rs). `None` when the key is not a note of a question in `fields`.
+fn note_owner<'a>(
+    fields: &serde_json::Map<String, Value>,
+    key: &'a str,
+) -> Option<(&'a str, Option<&'a str>)> {
+    let base = key.strip_suffix(NOTE_SUFFIX)?;
+    if fields.contains_key(base) {
+        return Some((base, None));
+    }
+    let (question, choice) = base.rsplit_once(OPTION_SEPARATOR)?;
+    fields
+        .contains_key(question)
+        .then_some((question, Some(choice)))
+}
+
 /// The message's `pageAnswers` key: `{pageId, title, rows: [{label, value, note?}], more,
 /// withText}`, `withText` when the message has the user's own words besides (drawn below the card
 /// as an ordinary message). The
 /// question kit sends a question's note as `"<key> (note)"`; it is shown under that question's
 /// answer instead of as a row of its own.
-pub fn project_page_answers(answers: &PageAnswers) -> Value {
+pub fn project_page_answers(answers: &PageAnswers, form: Option<&QuestionForm>) -> Value {
     let rows: Vec<Value> = match &answers.answers {
         Value::Object(fields) => fields
             .iter()
-            .filter(|(key, _)| {
-                key.strip_suffix(NOTE_SUFFIX)
-                    .is_none_or(|question| !fields.contains_key(question))
-            })
+            .filter(|(key, _)| note_owner(fields, key).is_none())
             .map(|(key, value)| {
-                let mut row = json!({"label": display_label(key), "value": display_value(value)});
-                if let Some(note) = fields.get(&format!("{key}{NOTE_SUFFIX}")) {
-                    row["note"] = json!(display_value(note));
+                let asked = form
+                    .and_then(|form| form.questions.iter().find(|question| question.key == *key));
+                // The form's own question title when the card knows the form, else the key.
+                let label = asked.map_or_else(|| display_label(key), |asked| asked.title.clone());
+                let mut row = json!({"label": label, "value": display_answer(value, asked)});
+                let notes: Vec<String> = fields
+                    .iter()
+                    .filter_map(|(note_key, note)| match note_owner(fields, note_key) {
+                        Some((owner, None)) if owner == key.as_str() => Some(display_value(note)),
+                        Some((owner, Some(choice))) if owner == key.as_str() => Some(format!(
+                            "{}: {}",
+                            display_answer(&json!(choice), asked),
+                            display_value(note)
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                if !notes.is_empty() {
+                    row["note"] = json!(notes.join("\n"));
                 }
                 row
             })
