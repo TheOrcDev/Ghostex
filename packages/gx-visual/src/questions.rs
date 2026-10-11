@@ -253,16 +253,41 @@ pub fn parse_form(body: &str) -> QuestionForm {
 /// answers use (`server/src/visual_pages/answers.rs`), so the agent reads both the same way and
 /// the chat draws both as an answers card.
 pub fn answers_message(form: &QuestionForm, answers: &Value) -> String {
-    let title = form
-        .title
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace(['\r', '\n'], " ");
+    page_answers_message(&form.id, &form.title, answers)
+}
+
+/// The `<ghostex-page-answers page="…" title="…">` message, for a question form or a published page
+/// alike (server/src/visual_pages/answers.rs).
+///
+/// CDXC:SessionChat 2026-10-11 WHY:
+/// The agent reads this envelope as text, so the title keeps its own characters ("Interrupt & Send
+/// follow-ups", not "&amp;"): only a quote, an angle bracket, a line break and an ampersand that
+/// would read as one of these escapes are escaped, which is what the chat's parser
+/// (packages/gx-chat-core/src/transcript/page_answers.rs) needs to read the title back exactly.
+pub fn page_answers_message(id: &str, title: &str, answers: &Value) -> String {
     let body = serde_json::to_string_pretty(answers).unwrap_or_else(|_| "null".to_string());
     format!(
-        "<ghostex-page-answers page=\"{}\" title=\"{title}\">\n{body}\n</ghostex-page-answers>",
-        form.id
+        "<ghostex-page-answers page=\"{id}\" title=\"{}\">\n{body}\n</ghostex-page-answers>",
+        escape_title(title)
     )
+}
+
+fn escape_title(title: &str) -> String {
+    let mut escaped = String::with_capacity(title.len());
+    for (at, character) in title.char_indices() {
+        match character {
+            '&' if ["&amp;", "&quot;", "&lt;", "&gt;"]
+                .iter()
+                .any(|entity| title[at..].starts_with(entity)) =>
+            {
+                escaped.push_str("&amp;")
+            }
+            '"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\r' | '\n' => escaped.push(' '),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }

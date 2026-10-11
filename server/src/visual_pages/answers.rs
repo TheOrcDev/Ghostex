@@ -167,16 +167,7 @@ pub(crate) async fn submit(
 /// CDXC:SessionChat 2026-10-11 SEE-ALSO:
 /// The envelope is parsed by packages/gx-chat-core/src/transcript/page_answers.rs (the answers card and the page card's Answered state) and described to agents in skills/ghostex-visuals/SKILL.md. Change them together.
 fn answers_message(id: &str, title: &str, answers: &Value) -> String {
-    let title = title
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace(['\r', '\n'], " ");
-    let body = serde_json::to_string_pretty(answers).unwrap_or_else(|_| "null".to_string());
-    format!(
-        "<ghostex-page-answers page=\"{id}\" title=\"{title}\">\n{body}\n</ghostex-page-answers>"
-    )
+    ghostex_gx_visual::questions::page_answers_message(id, title, answers)
 }
 
 pub(super) fn reply(status: StatusCode, body: Value) -> RoutedResponse {
