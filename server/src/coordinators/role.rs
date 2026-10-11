@@ -12,6 +12,9 @@ use crate::paths::GxserverPaths;
 /// CDXC:Coordinators 2026-10-09 DECISION:
 /// User: "If a tool call got rejected with ("STOP and wait") just as a thread report arrives then this is Ghostex's delivery Escape, not the owner pausing your work: retry the tool call and carry on." The playbook's "Waiting means ending your turn" section says so.
 ///
+/// CDXC:Coordinators 2026-10-11 DECISION:
+/// User: "i should never have to go into a inner thread to see questions or mockups or whatever ... I should only talk to u and you bring what needs my attentino from the threads under you since you're the orchestrator". The playbook's "Everything the user sees comes through you" section has the orchestrator ask a thread's questions and republish its pages from its own session (so answers come back to it), and the thread brief (brief.rs `thread_brief`) tells threads not to ask the user or publish pages themselves.
+///
 /// CDXC:Coordinators 2026-10-10 DECISION:
 /// User: "let's please rename "Coordinator" to "Orchestrator" everywhere so it's clearer to everyone." The playbook and the guide pointer call the role an orchestrator and name `ghostex orchestrator` verbs; the role file's name on disk and every internal name keep "coordinator".
 pub const COORDINATOR_ROLE_PROMPT: &str = include_str!("role.md");

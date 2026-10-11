@@ -161,6 +161,7 @@ pub fn thread_brief(coordinator: &BriefContext<'_>, task: &str) -> String {
         "\n\nWhen you are done:\n\
 - End your turn with a final report: what you did, where (files, branch, pull request), how you verified it, and anything left or blocked. Ghostex forwards your final message to the orchestrator automatically, so do not message the orchestrator yourself.\n\
 - If you need a decision you cannot make, ask it plainly in your final message and stop. The orchestrator answers in this chat.\n\
+- The user talks only to the orchestrator. Never ask the user directly or publish a page for them (`ghostex show`): put questions, mockups and the path of any page file in your final report, and the orchestrator shows them to the user and sends you the answers.\n\
 - Do not merge, push, or delete anything unless this brief asks for it.",
     );
     brief
