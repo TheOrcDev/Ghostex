@@ -22,11 +22,32 @@ pub(crate) fn command(agent: &str, notify_path: &Path) -> String {
         return format!("{executable} agent-hook-notify-native '{notify}' '{agent}'");
     }
     let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    if agent == "antigravity" {
+        return antigravity_command(&executable, notify_path, quote);
+    }
     format!(
         "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& {} agent-hook-notify-native {} {}\"",
         quote(&executable.to_string_lossy()),
         quote(&notify_path.to_string_lossy()),
         quote(agent)
+    )
+}
+
+/// CDXC:AgentHooks 2026-10-11 WHY:
+/// Antigravity CLI (agy 1.3.3) runs a Windows hook as `cmd /c "<command>"` with the command Go-escaped as one argument, so every double quote in it reaches cmd.exe as `\"`. The PowerShell wrapper's `-Command "& '…'"` therefore arrived as a quoted string, which PowerShell printed instead of running: no Antigravity hook ever reached gxserver (no conversation id, so the chat never found the transcript and a wake started a new conversation), and agy failed every tool call on the PreToolUse hook's unparseable output. The command carries no double quote: gxserver and the notify script by their space-free short paths, or, when a path has no short form, PowerShell's `-Command` as the rest of the line with cmd's `&` escaped as `^&` (PowerShell rejoins the arguments, so single-quoted paths keep their spaces).
+fn antigravity_command(
+    executable: &Path,
+    notify_path: &Path,
+    quote: impl Fn(&str) -> String,
+) -> String {
+    let cmd_word = |path: &Path| bare_command_path(path).map(|short| short.replace('/', "\\"));
+    if let (Some(executable), Some(notify)) = (cmd_word(executable), cmd_word(notify_path)) {
+        return format!("{executable} agent-hook-notify-native {notify} antigravity");
+    }
+    format!(
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command ^& {} agent-hook-notify-native {} 'antigravity'",
+        quote(&executable.to_string_lossy()),
+        quote(&notify_path.to_string_lossy())
     )
 }
 
