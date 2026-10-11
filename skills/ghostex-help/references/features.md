@@ -2524,6 +2524,12 @@ backend: `ghostex team deploy|join|invite|identity|status|ping|leave`. Slack:
   absent wherever it is hidden, so its hotkeys and command palette entries go
   away with it. Custom views under Your views keep their own Available in
   picker inside their own editor.
+  To delete one of your own views, open it with its pencil button and press
+  **Delete** at the bottom of its editor (or hover its card and click the
+  trash button), then confirm. The view is removed from every project and its
+  tab closes. Built-in views and the built-in templates cannot be deleted, only
+  switched off; a template you saved yourself has its own remove button in the
+  Add view template list.
   Its Account usage in the sidebar section lets you star saved Claude and Codex
   accounts to show their usage at the bottom of the desktop sidebar, or unstar
   them to hide it. These are the same per-account stars available in
