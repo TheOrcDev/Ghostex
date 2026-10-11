@@ -25,9 +25,10 @@
 //! ```
 //!
 //! `<gx-questions>` lays its children out in one centred column (`--gx-column`, 720px) and lets a
-//! `<gx-wide>` child span the page's full width. A choice question (`multiple` for several picks)
-//! letters its choices, ends with "Other / none of these", and has a note box; a `type="text"`
-//! question is a text box. The kit adds the send button, posts the answers with `ghostex.submit`
+//! `<gx-wide>` child span the page's full width; what a wide section holds that is narrower than
+//! the page is centred, so it lines up symmetrically with the column. A choice question
+//! (`multiple` for several picks) letters its choices, ends with "Other / none of these", and has
+//! a note box; a `type="text"` question is a text box. The kit adds the send button, posts the answers with `ghostex.submit`
 //! keyed by each question's `name` (its title when it has none), with a non-empty note as
 //! `"<key> (note)"`, and shows a sent page's answers locked when it is opened again. Until then it
 //! keeps the reader's picks as the page's draft on the host (theme.rs `PAGE_API`), so closing and
@@ -45,9 +46,10 @@
 /// The kit's look. It comes before the page's own styles, and its heading and paragraph defaults
 /// have no specificity (`:where`), so a page's own CSS always wins.
 pub(super) const KIT_STYLE: &str = r#"<style id="ghostex-kit">
-gx-questions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,var(--gx-column,720px)) minmax(0,1fr);row-gap:12px;align-content:start}
+gx-questions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,var(--gx-column,720px)) minmax(0,1fr);row-gap:12px;align-content:start;padding:12px 0 24px}
 gx-questions>*{grid-column:2;min-width:0}
 gx-questions>gx-wide{grid-column:1/-1}
+gx-wide>*{margin-left:auto;margin-right:auto}
 gx-wide,gx-choice{display:block;min-width:0}
 :where(gx-questions>h1,gx-questions>h2,gx-questions>h3,gx-questions>p){margin:0}
 :where(gx-questions>h1){font-size:18px;font-weight:600;line-height:1.35}
