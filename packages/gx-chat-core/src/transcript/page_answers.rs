@@ -72,20 +72,21 @@ pub fn parse_page_answers(text: &str) -> Option<PageAnswers> {
     })
 }
 
-/// The pages whose answers this transcript received, in the order they arrived.
-pub fn answered_page_ids(messages: &[ChatMessage]) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::new();
+/// The answers this transcript received, one per page or question form (the first sent), in the
+/// order they arrived.
+pub fn page_answers_in(messages: &[ChatMessage]) -> Vec<PageAnswers> {
+    let mut found: Vec<PageAnswers> = Vec::new();
     for message in messages
         .iter()
         .filter(|message| message.role == ChatRole::User)
     {
         if let Some(answers) = parse_page_answers(&prose_markdown(&message.blocks)) {
-            if !ids.contains(&answers.page_id) {
-                ids.push(answers.page_id);
+            if !found.iter().any(|known| known.page_id == answers.page_id) {
+                found.push(answers);
             }
         }
     }
-    ids
+    found
 }
 
 fn clip(text: String) -> String {

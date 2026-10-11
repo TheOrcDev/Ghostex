@@ -41,6 +41,38 @@ pub fn handle(state: &mut ChatState, action: &UserAction, context: &ChatContext)
                 effects.extend(answer_prompt(state, &answer));
             }
         }
+        ActionKind::FormChoice | ActionKind::FormText | ActionKind::FormSend => {
+            let id = action
+                .param("form")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let question = action
+                .param("question")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            effects.extend(match action.kind {
+                ActionKind::FormChoice => crate::questions::forms::pick(
+                    state,
+                    &id,
+                    question,
+                    action
+                        .param("choice")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX) as usize,
+                ),
+                ActionKind::FormText => crate::questions::forms::write(
+                    state,
+                    &id,
+                    question,
+                    action
+                        .param("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ),
+                _ => crate::questions::forms::send(state, context, &id),
+            });
+        }
         ActionKind::Answer => {
             if let Some(answer) = action.param("answer") {
                 let answer = answer.clone();

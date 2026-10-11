@@ -38,6 +38,9 @@ pub struct QuestionControls {
 pub struct QuestionDraft {
     pub indices: Vec<u32>,
     pub other: String,
+    /// A question form's "Other / none of these" is picked; `other` is then its note.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub other_picked: bool,
 }
 
 /// The async question strip a working agent shows above the composer.

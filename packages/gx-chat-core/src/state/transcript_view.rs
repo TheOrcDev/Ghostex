@@ -82,6 +82,10 @@ pub struct TranscriptViewState {
     pub final_ids: Vec<String>,
     /// The published pages whose answers arrived (`transcript/page_answers.rs`).
     pub answered_pages: Vec<String>,
+    /// The question forms the agent's replies hold (`transcript/question_forms.rs`).
+    pub question_forms: Vec<crate::transcript::question_forms::QuestionForm>,
+    /// The answers that arrived, for pages and forms alike.
+    pub page_answers: Vec<crate::transcript::page_answers::PageAnswers>,
     /// The `loadWork` reads in flight or failed, keyed by the turn's user-message id. This is the
     /// document's `deferredWork`, which reports the READ's state, not the rows it brought back.
     pub deferred_work: BTreeMap<String, DeferredWorkRow>,
@@ -170,6 +174,8 @@ impl Default for TranscriptViewState {
             items: Vec::new(),
             final_ids: Vec::new(),
             answered_pages: Vec::new(),
+            question_forms: Vec::new(),
+            page_answers: Vec::new(),
             deferred_work: BTreeMap::new(),
             detail_revision: 0,
             row_details: RowDetails::new(),

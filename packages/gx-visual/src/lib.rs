@@ -33,6 +33,7 @@
 
 mod layout;
 mod motion;
+pub mod questions;
 mod scene;
 mod spec;
 mod stats;

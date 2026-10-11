@@ -100,6 +100,8 @@ pub fn refresh(state: &mut ChatState, context: &ChatContext) {
     view.items = projection.items;
     view.final_ids = projection.final_ids;
     view.answered_pages = projection.answered_pages;
+    view.question_forms = projection.question_forms;
+    view.page_answers = projection.page_answers;
     view.backfill = projection.backfill;
     view.projection_inputs = Some(inputs);
     // `update` runs INSIDE `publish` in the TypeScript, so a rebuild only becomes a new array the

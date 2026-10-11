@@ -144,6 +144,10 @@ pub(crate) struct NativeChatView {
     pub(super) terminal_dialog_key_focus: gpui::FocusHandle,
     pub(crate) note_input: Option<Entity<TextareaState>>,
     pub(crate) note_subscription: Option<Subscription>,
+    /// The note and text boxes of the open question forms, by `<form id>:<question>`, with the
+    /// placeholder each shows.
+    pub(super) form_inputs:
+        std::collections::HashMap<String, (Entity<TextareaState>, Subscription, String)>,
     /// Transcript search (Cmd+F): the field, and the navigation it last scrolled to.
     pub(super) search_input: Option<Entity<InputState>>,
     pub(super) search_subscription: Option<Subscription>,
@@ -387,6 +391,7 @@ impl NativeChatView {
             terminal_dialog_key_focus: cx.focus_handle(),
             note_input: None,
             note_subscription: None,
+            form_inputs: Default::default(),
             search_input: None,
             search_subscription: None,
             search_scrolled_revision: -1,

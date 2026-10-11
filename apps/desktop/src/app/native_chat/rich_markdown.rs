@@ -83,6 +83,11 @@ enum Segment {
     Mermaid(String),
     /// A finished ```visual fence, its lines as written.
     Visual(String),
+    /// A finished ```questions fence: the form's id, and its lines as written.
+    Questions {
+        id: String,
+        fence: String,
+    },
     /// A line that has a picture in it, as the run of text and pictures it is made of.
     Flow(Vec<FlowPart>),
 }
@@ -200,6 +205,20 @@ fn parse(lines: &[&str]) -> Vec<Segment> {
             segments.push(Segment::Mermaid(
                 lines[index + 1..end.min(lines.len())].join("\n"),
             ));
+            index = end + 1;
+            continue;
+        }
+        if let Some(form_id) = line.strip_prefix(super::question_form::OPEN) {
+            let end = lines[index + 1..]
+                .iter()
+                .position(|line| *line == super::question_form::CLOSE)
+                .map(|offset| index + 1 + offset)
+                .unwrap_or(lines.len());
+            flush(&mut prose, &mut segments);
+            segments.push(Segment::Questions {
+                id: form_id.to_string(),
+                fence: lines[index + 1..end.min(lines.len())].join("\n"),
+            });
             index = end + 1;
             continue;
         }
@@ -387,7 +406,7 @@ impl NativeChatView {
 
     /// CDXC:SessionChat 2026-10-08 WHY:
     /// User: scrolling up "just above the last message" jumped "to the top of the message above it". gpui's list measures a row once in the overdraw above the viewport and scrolls by that height, and a TextView over 4KB parsed in the background, so its first layout (and every one after its row left the list's drawn range, which drops the view's state) was empty and the long reply was cached a few pixels tall; the first wheel step into it landed near its top. Chat text therefore parses on the UI thread, so a row's first height is its real one.
-    fn text_view(
+    pub(super) fn text_view(
         &self,
         id: String,
         content: String,
@@ -504,6 +523,7 @@ impl NativeChatView {
             }
             Segment::Mermaid(fence) => self.mermaid_card(format!("{id}:{index}"), fence, p, cx),
             Segment::Visual(fence) => self.visual_card(format!("{id}:{index}"), fence, p, cx),
+            Segment::Questions { id: form, fence } => self.question_form(form, fence, p, cx),
             // The air around an inline picture is the picture's own margin, exactly as React's
             // frame carries it, so the row itself adds nothing between a word and the picture
             // beside it. It wraps because a sentence with two pictures in it still has to fit the

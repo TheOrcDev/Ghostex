@@ -31,6 +31,7 @@ pub mod page_answers;
 pub mod presentation;
 pub mod prose;
 pub mod question_exchange;
+pub mod question_forms;
 pub mod raw_html;
 pub mod rows;
 pub mod sent_message;

@@ -204,6 +204,7 @@ impl NativeChatView {
             .chain(this.async_answer_input.iter())
             .map(|(_, input)| input)
             .chain(this.note_input.iter())
+            .chain(this.form_inputs.values().map(|(input, _, _)| input))
             .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
         {
             cx.propagate();

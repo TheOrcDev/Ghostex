@@ -226,7 +226,7 @@ pub fn usage() -> String {
         ),
         format_help_command(
             "visual check <file.json|-> [--width N] [--light] [--out file.png]",
-            "Draw a ```visual block's JSON to a PNG and print its path, so an agent can check it before replying",
+            "Draw a ```visual block's JSON to a PNG and print its path, or read a ```questions block and list its questions, so an agent can check it before replying",
         ),
         format_help_command("run-agent <agentId>", "Run a configured agent button"),
         format_help_command(
@@ -1239,13 +1239,16 @@ Usage:
 
 Agent skill:
   Use $ghostex-visuals when the user asks for it: charts, stats and tables go
-  in the reply as a ```visual block; mockups and small tools are HTML pages
+  in the reply as a ```visual block; questions go in a ```questions block,
+  which the chat shows as a form; mockups and small tools are HTML pages
   published with `ghostex show`.
 
 check:
   Draws the block's JSON (or the whole fenced block) exactly as the chat lays
   it out and prints the path of a PNG to look at, or the error that names what
-  to fix. --width defaults to 640; use 360 for a phone.
+  to fix. --width defaults to 640; use 360 for a phone. A ```questions block
+  is read instead: check lists its questions and answer keys, or names the
+  problem.
 "
     .to_string()
 }

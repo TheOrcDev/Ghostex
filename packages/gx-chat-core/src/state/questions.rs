@@ -71,6 +71,36 @@ pub struct QuestionsState {
 
     // ---- the async strip --------------------------------------------------
     pub async_questions: AsyncQuestionsState,
+
+    // ---- question forms ---------------------------------------------------
+    /// The reader's side of each ```questions form, by form id (`crate::questions::forms`).
+    pub forms: std::collections::BTreeMap<String, FormState>,
+}
+
+/// One question form's picks while it is open, and its send.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FormState {
+    /// One draft per question: the picked choices, whether "Other / none of these" is picked, and
+    /// the note (or a text question's answer).
+    pub drafts: Vec<QuestionDraft>,
+    /// The saved picks have been asked for.
+    pub load_requested: bool,
+    /// The reader changed the form, so saved picks that arrive later no longer replace it.
+    pub touched: bool,
+    /// The send in flight: its call, what it drew, and the answers it carries.
+    pub send: Option<FormSend>,
+    /// The answers that went out, which the form shows until the transcript carries them.
+    pub sent: Option<serde_json::Value>,
+    /// Why the last send was refused.
+    pub error: Option<String>,
+}
+
+/// A question form's answers on their way to the agent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FormSend {
+    pub request_id: u64,
+    pub drawn: crate::composer::send::AgentSend,
+    pub answers: serde_json::Value,
 }
 
 /// The answer call in flight and what settling it means.

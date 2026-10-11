@@ -28,13 +28,14 @@ use crate::transcript::message_text::{
     user_turn_copy_markdown,
 };
 use crate::transcript::message_time::message_time;
-use crate::transcript::native_markdown::native_markdown;
+use crate::transcript::native_markdown::{native_markdown, without_question_forms};
 use crate::transcript::noise::suppressed_turn_presentation;
 use crate::transcript::page_answers::{
-    answered_page_ids, parse_page_answers, project_page_answers,
+    page_answers_in, parse_page_answers, project_page_answers, PageAnswers,
 };
 use crate::transcript::prose::prose_markdown;
 use crate::transcript::question_exchange::answered_question_exchange;
+use crate::transcript::question_forms::{question_forms, QuestionForm};
 use crate::transcript::sent_message::{project_sent_messages, resolve_recipients};
 use crate::transcript::simple::{simple_edit_label, tool_count_label};
 use crate::transcript::system_cards::classify_system_card;
@@ -132,8 +133,9 @@ pub fn project_message(
         body.clone()
     };
     // Code-block headers, GitHub alerts, and typed file paths, marked for the native renderer.
+    // A ```questions block somebody typed stays code: only the agent's own reply asks the reader.
     let native_body = if is_user {
-        native_markdown(&user_line_breaks(&displayed_body), true)
+        without_question_forms(native_markdown(&user_line_breaks(&displayed_body), true))
     } else {
         native_markdown(&displayed_body, false)
     };
@@ -141,7 +143,7 @@ pub fn project_message(
     let collapsed_body = is_user
         .then(|| collapsed_prompt(&displayed_body))
         .flatten()
-        .map(|preview| native_markdown(&user_line_breaks(&preview), true));
+        .map(|preview| without_question_forms(native_markdown(&user_line_breaks(&preview), true)));
     let suppressed = suppressed_turn_presentation(message);
     let rows = tool_rows(&tool_pairs, agent_path, working_directory);
     let system_card = classify_system_card(message, &displayed_body);
@@ -348,6 +350,10 @@ pub struct Projection {
     pub final_ids: Vec<String>,
     /// The published pages whose answers arrived in this transcript (`page_answers.rs`).
     pub answered_pages: Vec<String>,
+    /// The question forms the agent's replies hold (`question_forms.rs`).
+    pub question_forms: Vec<QuestionForm>,
+    /// The answers that arrived, for pages and forms alike.
+    pub page_answers: Vec<PageAnswers>,
     /// Ids that shipped as placeholders and want a backfill batch.
     pub backfill: Vec<ChatMessage>,
     /// The minimap rail for this pass.
@@ -732,10 +738,16 @@ pub fn build_scope(
     let minimap = crate::extras::minimap::project_minimap_turns(&turns, &item_index);
     let backfill = builder.backfill;
     prune_cache(cache, scope);
+    let page_answers = page_answers_in(scope.messages);
     Projection {
         items,
         final_ids: projection.final_ids,
-        answered_pages: answered_page_ids(scope.messages),
+        answered_pages: page_answers
+            .iter()
+            .map(|answers| answers.page_id.clone())
+            .collect(),
+        question_forms: question_forms(scope.messages),
+        page_answers,
         backfill,
         minimap,
     }

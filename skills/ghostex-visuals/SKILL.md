@@ -2,10 +2,11 @@
 name: ghostex-visuals
 description: >-
   Show charts, stat tiles, tables and text layouts inline in the Ghostex chat
-  with a fenced ```visual block, and publish self-contained HTML pages (UI
-  mockups, small interactive tools, question forms whose answers come back to
-  you) with `ghostex show` so the chat shows them as a card that opens the
-  page. Use only when the user asks for $ghostex-visuals.
+  with a fenced ```visual block, ask the reader questions as a form in the
+  chat with a ```questions block, and publish self-contained HTML pages (UI
+  mockups, small interactive tools, questions that need a picture) with
+  `ghostex show` so the chat shows them as a card that opens the page. Use
+  only when the user asks for $ghostex-visuals.
 disable-model-invocation: true
 ---
 
@@ -15,8 +16,10 @@ Ghostex draws a fenced ```visual block in your reply natively, inline in the
 chat, on desktop, web and phone.
 
 - Prefer a block for charts, tables, stats and text layouts.
+- Ask questions in a ```questions block: the chat shows them as a form.
 - Use an HTML page only for what a block cannot express: UI mockups, small
-  interactive tools, and questions the reader answers on a page.
+  interactive tools, and questions the reader can only answer by seeing a
+  picture.
 - Don't restate in prose what the visual already shows. Add only what it
   doesn't: the conclusion, a caveat, the next step.
 
@@ -147,6 +150,68 @@ Stats above a table:
 }
 ```
 
+## Questions
+
+When you need the reader's decisions, put the questions in a ```questions
+block in your reply. The chat draws it as a form under your message, on
+desktop, web and phone: every question at once, choices picked with a click,
+a note box per question, and one Send button. Use it instead of asking in
+prose or as a numbered list, and instead of your agent's own question tool
+(AskUserQuestion and the like), which shows one question at a time. Only when
+the reader has to see something to answer (a UI mockup, a layout, a diagram)
+use a question page instead (see "Question pages" below).
+
+First run `ghostex visual --help`: if it doesn't mention ```questions, this
+Ghostex can't show the form, so ask in prose instead.
+
+```questions
+{
+  "title": "Settings redesign",
+  "questions": [
+    {"tag": "Q1", "title": "Which layout should I build?",
+     "detail": "Why it matters, in a sentence or two.",
+     "choices": [
+       {"label": "Tabs", "detail": "One page per area.", "value": "tabs", "recommended": true},
+       {"label": "One long page", "value": "one page"}
+     ]},
+    {"title": "Which platforms first?", "multiple": true, "choices": ["macOS", "Windows", "Phone"]},
+    {"title": "Anything else?", "type": "text"}
+  ]
+}
+```
+
+- `title` heads the form ("Questions" when left out); `submit` renames the
+  button ("Send answers").
+- Each question: `title`; `detail`, a short explanation; `tag`, an optional
+  short label such as an issue id; `name`, the answer's key (the title when
+  there is none); `multiple` for several picks; `type: "text"` for a text box
+  instead of choices (`placeholder` sets its hint). At most 20 questions.
+- Each choice is its text, or `{"label", "detail", "value", "recommended"}`:
+  `value` is what you receive (the label when there is none) and
+  `recommended` adds a Recommended badge. At most 26 choices.
+- Write only the questions. The chat letters the choices, ends every choice
+  question with "Other / none of these" and a note box, and adds the Send
+  button. Nothing is ever preselected (a pick clicked again clears), and a
+  question left blank arrives as `null`. Don't add your own "Other" choice.
+- Check the block before replying: `ghostex visual check /tmp/questions.json`
+  lists the questions and their answer keys, or names the problem.
+- Put one form in a reply and end your turn. Don't poll or wait in a loop: the
+  answers arrive as the next user message, in the same envelope a question
+  page uses, and the form then reads Answered. A note arrives under the
+  question's key plus ` (note)`:
+
+  ```text
+  <ghostex-page-answers page="5f0c…" title="Settings redesign">
+  {
+    "Which layout should I build?": "tabs",
+    "Which layout should I build? (note)": "keep search at the top",
+    "Which platforms first?": ["macOS", "Other / none of these"],
+    "Which platforms first? (note)": "Linux too",
+    "Anything else?": null
+  }
+  </ghostex-page-answers>
+  ```
+
 ## HTML pages
 
 For a mockup or a small interactive tool:
@@ -183,13 +248,14 @@ For a mockup or a small interactive tool:
 If `ghostex show` is an unknown command, say this Ghostex is too old to show
 pages and give the HTML file's path instead.
 
-### Pages that ask the reader
+### Question pages
 
-When you need the reader's decisions (a pick between options, open questions,
-choices about a mockup), write the questions with the question kit every page
-has. First run `ghostex show help`: if it doesn't mention `gx-questions`, this
-Ghostex can't take answers from a page, so ask your questions in the chat
-instead.
+Only for questions the reader can answer by seeing something: two layouts to
+choose between, a mockup to react to, a diagram to mark up. Plain questions go
+in a ```questions block (above). Write the page with the question kit every
+page has. First run `ghostex show help`: if it doesn't mention
+`gx-questions`, this Ghostex can't take answers from a page, so ask in the
+chat instead.
 
 ```html
 <gx-questions submit="Send to the agent">

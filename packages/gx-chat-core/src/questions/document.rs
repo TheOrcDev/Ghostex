@@ -67,6 +67,8 @@ pub fn document(state: &ChatState, _context: &ChatContext, into: &mut Document) 
         },
     };
 
+    into.question_forms = crate::questions::forms::project(state);
+
     into.async_questions = async_controller::project(
         &questions.async_questions,
         &state.messages.composed,

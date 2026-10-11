@@ -37,6 +37,9 @@ pub fn rpc_settled(
     request_id: u64,
     outcome: &RpcOutcome,
 ) -> Option<Vec<Effect>> {
+    if let Some(effects) = crate::questions::forms::rpc_settled(state, request_id, outcome) {
+        return Some(effects);
+    }
     if state
         .questions
         .answer_request
@@ -188,6 +191,12 @@ pub fn storage_loaded(state: &mut ChatState, key: &StorageKey, value: Option<&st
             refresh_gates(state);
             true
         }
+        DRAFTS_STORE if crate::questions::forms::form_of_key(key).is_some() => {
+            if let Some(id) = crate::questions::forms::form_of_key(key) {
+                crate::questions::forms::storage_loaded(state, &id, value);
+            }
+            true
+        }
         DRAFTS_STORE if is_async_drafts_key(key) => {
             state.questions.async_questions.drafts = value.map(decode_drafts).unwrap_or_default();
             async_controller::read_answered(&mut state.questions.async_questions);
@@ -220,6 +229,8 @@ pub fn storage_written(
     error: Option<&str>,
 ) -> Option<Vec<Effect>> {
     match key.store.as_str() {
+        // A question form's picks are saved as they change; nothing waits on the write.
+        DRAFTS_STORE if crate::questions::forms::form_of_key(key).is_some() => Some(Vec::new()),
         DRAFTS_STORE if is_async_drafts_key(key) => {
             async_controller::write_settled(&mut state.questions.async_questions, error);
             // `save()`'s own `changed()` on the write settling, which is what clears or raises the

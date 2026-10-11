@@ -55,6 +55,9 @@ pub fn owner(kind: &ActionKind) -> Option<Family> {
         | ActionKind::QuestionOption
         | ActionKind::QuestionNext
         | ActionKind::QuestionCancel
+        | ActionKind::FormChoice
+        | ActionKind::FormText
+        | ActionKind::FormSend
         | ActionKind::AsyncQuestionToggle
         | ActionKind::AsyncQuestionNavigate
         | ActionKind::AsyncQuestionText
