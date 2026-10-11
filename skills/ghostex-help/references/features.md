@@ -1014,7 +1014,8 @@ on desktop, web, and mobile: every question at once, with choices you click
 and a note box for each. Nothing is picked for you (the agent may mark the
 option it recommends), every choice question has an Other / none of these
 choice, and you can leave any question blank or click a choice again to clear
-it. Send delivers your answers to the agent as a message (when the agent is
+it. Send (or Ctrl+Enter, Cmd+Enter on macOS, from anywhere in the form or
+page) delivers your answers to the agent as a message (when the agent is
 busy, they wait in the chat's queue and go as soon as it is free), the chat
 shows them as a card, and the form then reads Answered. Questions that need a picture,
 such as choosing between two mockups, come as a page instead, where you can

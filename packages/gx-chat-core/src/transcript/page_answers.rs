@@ -249,11 +249,28 @@ pub fn project_page_answers(answers: &PageAnswers, form: Option<&QuestionForm>) 
                     .and_then(|form| form.questions.iter().find(|question| question.key == *key));
                 // The form's own question title when the card knows the form, else the key.
                 let label = asked.map_or_else(|| display_label(key), |asked| asked.title.clone());
-                let mut row = json!({"label": label, "value": display_answer(value, asked)});
+                // A question answered only in its note (no pick) shows the note as the answer
+                // rather than "Not answered" over it.
+                let unpicked = value.is_null() || value.as_array().is_some_and(Vec::is_empty);
+                let own_note = fields
+                    .get(&format!("{key}{NOTE_SUFFIX}"))
+                    .filter(|note| note.as_str().is_some_and(|note| !note.trim().is_empty()));
+                let note_as_answer = unpicked.then_some(own_note).flatten();
+                let mut row = json!({
+                    "label": label,
+                    "value": match note_as_answer {
+                        Some(note) => display_value(note),
+                        None => display_answer(value, asked),
+                    },
+                });
                 let notes: Vec<String> = fields
                     .iter()
                     .filter_map(|(note_key, note)| match note_owner(fields, note_key) {
-                        Some((owner, None)) if owner == key.as_str() => Some(display_value(note)),
+                        Some((owner, None))
+                            if owner == key.as_str() && note_as_answer.is_none() =>
+                        {
+                            Some(display_value(note))
+                        }
                         Some((owner, Some(choice))) if owner == key.as_str() => Some(format!(
                             "{}: {}",
                             display_answer(&json!(choice), asked),

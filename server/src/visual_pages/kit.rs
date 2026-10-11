@@ -35,6 +35,7 @@
 //!
 //! CDXC:SessionChat 2026-10-11 DECISION:
 //! User picked from the looks page: a question's tag is a filled chip above its title ("make it show like eyebrow"), and a choice keeps its radio or checkbox with the letter as a muted keycap on the right; the in-chat form (apps/desktop/src/app/native_chat/question_form.rs, the phone's QuestionForm.tsx) matches.
+//! User: Ctrl+Enter (Cmd+Enter on macOS) presses the page's send button from anywhere on it, a note box included; the in-chat form does the same.
 //! User: a reader picks an option right at its mockup (a Pick button by the mockup's title that picks that choice in its question, shown picked on both and cleared from either), and writes a note under each mockup that arrives with the answers keyed to that question and choice, is kept as a draft, and shows in the answers card.
 //! User: every question page offers "Other / none of these" with a note box, consistently, instead of each agent hand-rolling it, and the reader may leave a question unanswered. No choice is ever preselected; an agent marks the one it recommends with a Recommended badge and the reader picks. Mockups can use the full width of the page between or above the questions, and the Answered note is as wide as the question cards.
 //!
@@ -198,6 +199,8 @@ function setup(root){
     button.disabled=true;status.classList.remove("gx-error");status.textContent="Sending…";
     ghostex.submit(out).then(lock,function(error){button.disabled=false;status.classList.add("gx-error");status.textContent=error&&error.message||"Your answers were not sent.";});
   });
+  /* Ctrl+Enter (Cmd+Enter on macOS) presses the send button from anywhere on the page, a note box included. */
+  document.addEventListener("keydown",function(e){if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)&&!e.isComposing&&!button.disabled){e.preventDefault();button.click();}});
 }
 function init(){var root=document.querySelector("gx-questions");if(root)setup(root);}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();

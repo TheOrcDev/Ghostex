@@ -13,8 +13,8 @@ use crate::app::native_chat::cursor::ChatCursor as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, px, rgb, svg,
+    IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, div, px, rgb, svg,
 };
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use serde_json::{Value, json};
@@ -115,6 +115,10 @@ impl NativeChatView {
                                 cx,
                             )
                         }
+                        // Ctrl+Enter (Cmd+Enter on macOS) sends the form from its note or text box.
+                        InputEvent::PressEnter {
+                            secondary: true, ..
+                        } => this.invoke(json!({"type":"formSend","form":form_id}), cx),
                         InputEvent::Focus => super::focus::reclaim_keyboard_focus(window),
                         _ => {}
                     },
@@ -293,7 +297,18 @@ impl NativeChatView {
                 .child(send_label)
                 .into_any_element(),
         ];
-        self.status_card_with_header(header, body, actions, p)
+        // CDXC:SessionChat 2026-10-11 DECISION: User: Ctrl+Enter (Cmd+Enter on macOS) presses the form's send button from anywhere in it, a note box included; the page kit (server/src/visual_pages/kit.rs) does the same.
+        let send_form = id.to_string();
+        div()
+            .w_full()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "enter" && event.keystroke.modifiers.secondary() {
+                    this.invoke(json!({"type":"formSend","form":send_form}), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(self.status_card_with_header(header, body, actions, p))
+            .into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
