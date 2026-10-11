@@ -37,6 +37,7 @@ function UsageCard({ label, usage, now }: { label: string; usage?: AccountUsageW
   );
 }
 
+/** CDXC:AgentProviders 2026-10-11 DECISION: User: show {email} - {name} in the switch card when the account was renamed, respecting Hide emails. This replaces the earlier email-only label decision. */
 function Account({
   account,
   role,
@@ -54,7 +55,13 @@ function Account({
 }) {
   const text = useAccountText();
   const main = account?.usage.filter((window) => !window.model) ?? [];
-  const label = account?.email || (target ? 'Selected account' : 'Current CLI login');
+  const label = account?.email
+    ? account.name && account.name !== account.email
+      ? `${account.email} - ${account.name}`
+      : account.email
+    : target
+      ? 'Selected account'
+      : 'Current CLI login';
   return (
     <div
       className={`gx-account-switch-account gx-account-switch-account-${target ? 'to' : 'from'}`}
@@ -87,7 +94,6 @@ function Account({
  * Keep numbered steps with one animated line beneath the active step, replacing the rejected spinner around the number. The automatic third step is "Continue Session"; manual switches wait for the user's next message.
  * No heading spinner, repeated status above the composer, View terminal button, draft reassurance, or bottom bar.
  * Show plain provider logos in this card, without the account's two-character indicator inside them.
- * Identify each account by its real email on one line, respecting Hide emails, rather than account names or the preview's former invented aliases.
  *
  * `ready` is the chat's confirmation that the second account is bound and usable (see use-account-switch-status.ts). A `success` phase without it keeps the last step active and the "Switching" heading, so the card never announces completion before the account is ready.
  */
@@ -171,7 +177,7 @@ export function AccountSwitchCard({
           <p>
             {text(
               progress.reason ||
-                'We couldn’t confirm the new login. Retry this switch or use Switch Account to choose another account.'
+                'We couldn’t confirm the new login. Retry this switch or use Switch Account to choose another account.',
             )}
           </p>
           {onRetry && (
