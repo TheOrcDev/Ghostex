@@ -1,5 +1,6 @@
-//! The working strip's background-task card: a muted line saying the work continues after the reply,
-//! then one row per task with its own clock (`extras::background_tasks` in gx-chat-core words it).
+//! The working strip's background-task card: one row per task with its own clock, and an (i) beside
+//! the clock that says the work continues in the background (`extras::background_tasks` in
+//! gx-chat-core words it).
 //!
 //! CDXC:SessionChat 2026-10-11 SEE-ALSO:
 //! The phone draws the same card in apps/mobile/app/src/chat/native/cards/WorkingStrip.tsx; the
@@ -23,21 +24,19 @@ impl NativeChatView {
         reduced_motion: bool,
     ) -> AnyElement {
         let s = p.scale;
-        let header = div()
-            .min_w_0()
-            .text_size(px(13.0 * s))
-            .line_height(relative(1.5))
-            .text_color(p.muted)
-            .child(tasks["header"].as_str().unwrap_or_default().to_owned())
-            .into_any_element();
+        let info = tasks["info"].as_str().unwrap_or_default();
         let mut rows = div().flex().flex_col().gap(px(6.0 * s)).min_w_0();
-        for (index, row) in tasks["rows"].as_array().into_iter().flatten().enumerate() {
-            rows = rows.child(self.background_task_row(index, row, p, reduced_motion));
+        let named = tasks["rows"].as_array().into_iter().flatten();
+        let mut any_named = false;
+        for (index, row) in named.enumerate() {
+            any_named = true;
+            rows = rows.child(self.background_task_row(index, row, info, p, reduced_motion));
         }
         if let Some(more) = tasks["more"].as_str() {
             rows = rows.child(
                 div()
-                    .pl(px(22.0 * s))
+                    // A remainder under named rows lines up with their titles; alone it is the line.
+                    .pl(px(if any_named { 22.0 * s } else { 0.0 }))
                     .text_size(px(13.0 * s))
                     .line_height(relative(1.5))
                     .text_color(p.muted)
@@ -48,12 +47,7 @@ impl NativeChatView {
             .id("chat-working-activity")
             .role(gpui::Role::Status)
             .w_full()
-            .child(self.status_card_with_header(
-                header,
-                vec![rows.into_any_element()],
-                Vec::new(),
-                p,
-            ))
+            .child(self.status_card_with_header(rows.into_any_element(), Vec::new(), Vec::new(), p))
             .into_any_element()
     }
 
@@ -61,6 +55,7 @@ impl NativeChatView {
         &self,
         index: usize,
         row: &Value,
+        info: &str,
         p: &ChatAppearance,
         reduced_motion: bool,
     ) -> AnyElement {
@@ -125,7 +120,7 @@ impl NativeChatView {
                 gpui_component::tooltip::Tooltip::new(command.clone()).build(window, cx)
             });
         }
-        let mut line = div()
+        let line = div()
             .flex()
             .items_center()
             .gap(px(10.0 * s))
@@ -142,15 +137,38 @@ impl NativeChatView {
                     .child(glyph),
             )
             .child(name);
-        if let Some(elapsed) = row["elapsed"].as_str() {
-            line = line.child(
+        // The (i) sits right against the clock it explains.
+        let mut trailing = div().flex().items_center().gap(px(6.0 * s)).flex_shrink_0();
+        if !info.is_empty() {
+            let info = info.to_owned();
+            trailing = trailing.child(
                 div()
-                    .flex_shrink_0()
+                    .id(("chat-background-task-info", index))
+                    .role(gpui::Role::Image)
+                    .aria_label(info.clone())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(info.clone()).build(window, cx)
+                    })
+                    .child(
+                        svg()
+                            .path("titlebar/info-circle.svg")
+                            .size(px(14.0 * s))
+                            .text_color(p.muted),
+                    ),
+            );
+        }
+        if let Some(elapsed) = row["elapsed"].as_str() {
+            trailing = trailing.child(
+                div()
                     .text_color(p.muted)
                     .font_features(FontFeatures(vec![("tnum".into(), 1)].into()))
                     .child(elapsed.to_owned()),
             );
         }
+        let line = line.child(trailing);
         line.into_any_element()
     }
 }
