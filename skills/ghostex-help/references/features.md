@@ -999,10 +999,13 @@ browser. Agents do this when you ask for `$ghostex-visuals` in your
 prompt; they never use it on their own. Install the skill from Settings >
 Integrations (Ghostex Visuals) or with `ghostex visual install-skill`. Pages
 open in a sandbox and can't reach your computer's files or Ghostex. A page can
-also ask you questions: when you send your answers from it, they go to the
-agent that made the page as a message, the chat shows them as a card, and the
-page's card reads Answered. A page takes one set of answers, and opening it
-again shows what you sent. Commands:
+also ask you questions. Nothing is picked for you (the agent may mark the
+option it recommends), every choice question has an Other / none of these
+choice and a note box, and you can leave any question blank or click a choice
+again to clear it. When you send your answers, they go to the agent that made
+the page as a message, the chat shows them as a card, and the page's card
+reads Answered. A page takes one set of answers, and opening it again shows
+what you sent. Commands:
 `ghostex show <file.html>`
 publishes a page and prints the block that shows its card (`--browser` opens it
 in the browser instead of floating), and

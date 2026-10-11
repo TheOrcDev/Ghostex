@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fs};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
 use super::{
+    kit::{KIT_SCRIPT, KIT_STYLE},
     store::{clip_chars, VISUAL_PAGE_MAX_BYTES, VISUAL_PAGE_TITLE_MAX_CHARS},
     theme::{PAGE_API, PAGE_BOOTSTRAP, PAGE_STATE_MARKER, THEME_STYLE},
 };
@@ -544,6 +545,8 @@ fn inject_head(html: &str, scan: &DocumentScan) -> String {
     block.push_str(PAGE_BOOTSTRAP);
     block.push_str(PAGE_API);
     block.push_str(PAGE_STATE_MARKER);
+    block.push_str(KIT_STYLE);
+    block.push_str(KIT_SCRIPT);
     if !prologue.inside_head && !scan.has_head {
         block = format!("<head>{block}</head>");
     }

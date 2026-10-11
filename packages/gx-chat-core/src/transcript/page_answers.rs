@@ -24,6 +24,8 @@ const CLOSE: &str = "</ghostex-page-answers>";
 /// Rows the card lists before it summarises the rest.
 const MAX_ROWS: usize = 40;
 const MAX_VALUE_CHARS: usize = 600;
+/// How the question kit (server/src/visual_pages/kit.rs) names a question's note.
+const NOTE_SUFFIX: &str = " (note)";
 
 /// One answered page, as its message carries it.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,7 +101,7 @@ fn clip(text: String) -> String {
 fn display_value(value: &Value) -> String {
     clip(match value {
         Value::String(text) => text.clone(),
-        Value::Null => "—".to_string(),
+        Value::Null => "Not answered".to_string(),
         Value::Bool(true) => "Yes".to_string(),
         Value::Bool(false) => "No".to_string(),
         Value::Number(number) => number.to_string(),
@@ -118,8 +120,15 @@ fn display_value(value: &Value) -> String {
     })
 }
 
-/// A field name as a label: `preferred_name` and `preferredName` read as "Preferred name".
+/// A field name as a label: `preferred_name` and `preferredName` read as "Preferred name". A key
+/// that is already words (the question kit keys answers by question title) is shown as written.
 fn display_label(key: &str) -> String {
+    if !key
+        .chars()
+        .all(|character| character.is_alphanumeric() || character == '_' || character == '-')
+    {
+        return js_trim(key).to_string();
+    }
     let mut words = String::new();
     let mut previous_lower = false;
     for character in key.chars() {
@@ -142,24 +151,32 @@ fn display_label(key: &str) -> String {
     }
 }
 
-/// The message's `pageAnswers` key: `{pageId, title, rows: [{label, value}], more}`.
+/// The message's `pageAnswers` key: `{pageId, title, rows: [{label, value, note?}], more}`. The
+/// question kit sends a question's note as `"<key> (note)"`; it is shown under that question's
+/// answer instead of as a row of its own.
 pub fn project_page_answers(answers: &PageAnswers) -> Value {
-    let rows: Vec<(String, String)> = match &answers.answers {
+    let rows: Vec<Value> = match &answers.answers {
         Value::Object(fields) => fields
             .iter()
-            .map(|(key, value)| (display_label(key), display_value(value)))
+            .filter(|(key, _)| {
+                key.strip_suffix(NOTE_SUFFIX)
+                    .is_none_or(|question| !fields.contains_key(question))
+            })
+            .map(|(key, value)| {
+                let mut row = json!({"label": display_label(key), "value": display_value(value)});
+                if let Some(note) = fields.get(&format!("{key}{NOTE_SUFFIX}")) {
+                    row["note"] = json!(display_value(note));
+                }
+                row
+            })
             .collect(),
-        other => vec![(String::new(), display_value(other))],
+        other => vec![json!({"label": "", "value": display_value(other)})],
     };
     let more = rows.len().saturating_sub(MAX_ROWS);
     json!({
         "pageId": answers.page_id,
         "title": answers.title,
-        "rows": rows
-            .into_iter()
-            .take(MAX_ROWS)
-            .map(|(label, value)| json!({"label": label, "value": value}))
-            .collect::<Vec<_>>(),
+        "rows": rows.into_iter().take(MAX_ROWS).collect::<Vec<_>>(),
         "more": more,
     })
 }

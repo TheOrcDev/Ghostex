@@ -46,6 +46,7 @@ impl NativeChatView {
             .flatten()
             .map(|row| {
                 let label = text(row, "label");
+                let note = text(row, "note");
                 div()
                     .flex()
                     .items_start()
@@ -67,9 +68,23 @@ impl NativeChatView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(p.foreground)
-                            .child(text(row, "value")),
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(p.foreground)
+                                    .child(text(row, "value")),
+                            )
+                            .when(!note.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.5 * s))
+                                        .line_height(px(18.0 * s))
+                                        .text_color(p.muted)
+                                        .child(note),
+                                )
+                            }),
                     )
                     .into_any_element()
             })

@@ -75,11 +75,13 @@ pub(crate) const PAGE_STATE_MARKER: &str = "<!--gx-page-state-->";
 
 /// The page's side of answering: `ghostex.submit(answers)` posts any JSON to the page's own
 /// `/answers` route, and `ghostex.answered` / `ghostex.answers` tell a reopened page what was sent.
-/// A page that was answered also shows a short note above its content, so a reader who reopens it
-/// sees the answers went through even when the page itself ignores the state.
+/// A page that was answered also shows a short note, so a reader who reopens it sees the answers
+/// went through even when the page itself ignores the state. The note goes into the page's
+/// `[data-gx-answered]` element when it has one, else at the top of the question kit's column
+/// (`<gx-questions>`, kit.rs), so it is as wide as the questions, else at the top of the page.
 /// The route is answers.rs; serve.rs injects the state.
 pub(super) const PAGE_API: &str = r#"<script>(function(){var st=null;
-function note(){if(!st||!st.answered||!document.body||document.getElementById("gx-answered"))return;var b=document.createElement("div");b.id="gx-answered";b.setAttribute("role","status");b.setAttribute("style","margin:0 0 12px;padding:8px 12px;border-radius:8px;font:500 12.5px/1.4 var(--font-sans);color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent);border:1px solid color-mix(in srgb,var(--success) 32%,transparent)");var when="";try{when=st.answeredAt?" on "+new Date(st.answeredAt).toLocaleString():"";}catch(e){}b.textContent="Answered"+when+". The agent has your answers.";document.body.insertBefore(b,document.body.firstChild);}
+function note(){if(!st||!st.answered||!document.body||document.getElementById("gx-answered"))return;var b=document.createElement("div");b.id="gx-answered";b.setAttribute("role","status");b.setAttribute("style","margin:0 0 12px;padding:8px 12px;border-radius:8px;font:500 12.5px/1.4 var(--font-sans);color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent);border:1px solid color-mix(in srgb,var(--success) 32%,transparent)");var when="";try{when=st.answeredAt?" on "+new Date(st.answeredAt).toLocaleString():"";}catch(e){}b.textContent="Answered"+when+". The agent has your answers.";var slot=document.querySelector("[data-gx-answered]"),kit=document.querySelector("gx-questions");if(slot)slot.appendChild(b);else if(kit){b.style.margin="0";kit.insertBefore(b,kit.firstChild);}else document.body.insertBefore(b,document.body.firstChild);}
 window.ghostex={get answered(){return!!(st&&st.answered);},get answers(){return st&&st.answered?st.answers:null;},
 submit:function(answers){return fetch(location.pathname.replace(/\/+$/,"")+"/answers",{method:"POST",body:JSON.stringify({answers:answers===undefined?null:answers})}).then(function(r){return r.json().catch(function(){return{};}).then(function(j){if(!r.ok||!j.ok)throw new Error(j.error||"Your answers were not sent.");st={answered:true,answers:answers,answeredAt:j.answeredAt};note();return j;});});},
 __state:function(s){st=s;if(s&&s.answered){if(document.body)note();else document.addEventListener("DOMContentLoaded",note);}}};})();</script>"#;

@@ -1,9 +1,10 @@
 //! Chat visual pages: self-contained HTML pages an agent publishes with `ghostex show`, kept under
 //! the gxserver state directory and served at `/visual/<id>` so a chat card can open them in a
-//! browser page. `prepare` readies the page on the CLI side (local images, theme, CSP), `publish`
-//! is the authenticated route that stores it, `serve` answers the page itself.
+//! browser page. `prepare` readies the page on the CLI side (local images, theme, CSP, the question
+//! kit), `publish` is the authenticated route that stores it, `serve` answers the page itself.
 
 mod answers;
+mod kit;
 mod prepare;
 mod publish;
 mod serve;

@@ -163,7 +163,7 @@ For a mockup or a small interactive tool:
    and font.
 3. The page runs in a sandbox with no origin of its own: `localStorage`,
    cookies and requests to `http://` or `localhost` don't work. Keep state in
-   memory. The one way back to you is `ghostex.submit` (below).
+   memory. The one way back to you is the reader's answers (below).
 4. Publish it:
 
    ```bash
@@ -185,64 +185,70 @@ pages and give the HTML file's path instead.
 
 ### Pages that ask the reader
 
-When you need the reader's decisions (a pick between options, a form of open
-questions, choices on a mockup), the page can send the answers back to you.
-First run `ghostex show help`: if it doesn't mention `ghostex.submit`, this
+When you need the reader's decisions (a pick between options, open questions,
+choices about a mockup), write the questions with the question kit every page
+has. First run `ghostex show help`: if it doesn't mention `gx-questions`, this
 Ghostex can't take answers from a page, so ask your questions in the chat
 instead.
 
-- Call `ghostex.submit(answers)` from the page with any JSON under 64 KiB,
-  best an object keyed by short field names
-  (`{"auth": "OAuth", "keepLegacy": true}`); the chat turns the names into
-  labels. It returns a promise that resolves once Ghostex has the answers and
-  rejects with an `Error` whose message says why they weren't sent. Show that
-  message on the page.
-- A page takes one set of answers. Once they are sent, `ghostex.answered` is
-  `true` and `ghostex.answers` holds them, also when the reader opens the page
-  again later, and Ghostex adds a short Answered note at the top of the page.
-  Use them to show the sent answers read-only instead of an empty form.
-- When `window.ghostex` is missing (an older Ghostex), hide the send button
-  and tell the reader to type their answers in the chat.
+```html
+<gx-questions submit="Send to the agent">
+  <h1>Settings redesign</h1>
+  <p>Two layouts are drawn below; the questions refer to them.</p>
+  <gx-wide>
+    <!-- your mockups, as wide as the page -->
+  </gx-wide>
+  <gx-question tag="Q1" title="Which layout should I build?">
+    <p>Why it matters, in a sentence or two.</p>
+    <gx-choice value="tabs" recommended>Layout A: tabs<small>One page per area.</small></gx-choice>
+    <gx-choice value="one page">Layout B: one long page</gx-choice>
+  </gx-question>
+  <gx-question title="Which platforms first?" multiple>
+    <gx-choice>macOS</gx-choice>
+    <gx-choice>Windows</gx-choice>
+  </gx-question>
+  <gx-question title="Anything else?" type="text"></gx-question>
+</gx-questions>
+```
+
+- Put the whole page in one `<gx-questions>`. Its children sit in a centered
+  720px column. A `<gx-wide>` child spans the page's full width: put mockups
+  there, above or between the questions, and refer to them from the
+  questions ("Layout A above"). Never put a mockup inside a question.
+- `<gx-question>`: `title`; `tag`, an optional short label such as an issue
+  id; `name`, the answer's key (the title when there is none); `multiple`
+  for several picks; `type="text"` for a text box instead of choices. Content
+  before its choices, such as a `<p>`, explains the question.
+- `<gx-choice>`: its text is the choice and a `<small>` inside is a one-line
+  detail. `value` is what you receive (the text without the `<small>` when
+  there is none). `recommended` adds a Recommended badge.
+- Write only that markup. The kit letters the choices, ends every choice
+  question with "Other / none of these" and a note box, and adds the send
+  button. Nothing is ever preselected (the reader can also click a pick again
+  to clear it), and a question left blank arrives as `null`. Don't write your
+  own form, button, "Other" choice or note box.
+- Once sent, the page is locked; opening it again shows the answers and an
+  Answered note.
 - After pasting the card, end your turn. Don't poll or wait in a loop: the
   answers arrive as the next user message, which the chat shows as an answers
-  card while the page's card reads Answered:
+  card while the page's card reads Answered. A note arrives under the
+  question's key plus ` (note)`:
 
   ```text
-  <ghostex-page-answers page="7ea5c5be1f2d68ebc9e40f790db0ef29" title="Open questions">
+  <ghostex-page-answers page="7ea5c5be1f2d68ebc9e40f790db0ef29" title="Settings redesign">
   {
-    "auth": "OAuth with PKCE",
-    "notes": "keep the refresh token in the keychain"
+    "Which layout should I build?": "tabs",
+    "Which layout should I build? (note)": "keep search at the top",
+    "Which platforms first?": ["macOS", "Other / none of these"],
+    "Which platforms first? (note)": "Linux too",
+    "Anything else?": null
   }
   </ghostex-page-answers>
   ```
 
-A minimal question page:
-
-```html
-<form id="questions">
-  <label>Sign-in <select name="auth"><option>OAuth with PKCE</option><option>API keys</option></select></label>
-  <label>Notes <textarea name="notes"></textarea></label>
-  <button>Send to the agent</button>
-  <p id="status"></p>
-</form>
-<script>
-  const form = document.getElementById("questions");
-  const status = document.getElementById("status");
-  const lock = () => { for (const field of form.elements) field.disabled = true; };
-  if (!window.ghostex) {
-    form.querySelector("button").hidden = true;
-    status.textContent = "Type your answers in the chat instead.";
-  } else if (ghostex.answered) {
-    for (const [name, value] of Object.entries(ghostex.answers || {})) {
-      if (form.elements[name]) form.elements[name].value = value;
-    }
-    lock();
-  }
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    ghostex.submit(Object.fromEntries(new FormData(form)))
-      .then(() => { lock(); status.textContent = "Sent."; })
-      .catch((error) => { status.textContent = error.message; });
-  });
-</script>
-```
+For an answer the kit can't ask for, such as a ranking or a spot on a
+mockup, a page can send its own: `ghostex.submit(answers)` posts any JSON
+under 64 KiB and returns a promise that rejects with an `Error` saying why it
+wasn't sent; `ghostex.answered` and `ghostex.answers` tell a reopened page what
+was sent; an element with `data-gx-answered` is where the Answered note goes.
+A page takes one set of answers either way.
