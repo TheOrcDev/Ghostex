@@ -69,7 +69,8 @@ impl GhostexGpuiApp {
         User: the Search button is always icon-only, at every sidebar width, with the label and
         shortcut in its tooltip. Only the Commands row still switches at its width threshold.
         */
-        let compact = !footer || self.sidebar_width < SIDEBAR_COMPACT_COMMANDS_WIDTH * scale;
+        // CDXC:Sidebar 2026-10-11 DECISION: the Commands threshold is the raw stored width, unscaled (see the constant).
+        let compact = !footer || self.sidebar_width <= SIDEBAR_COMPACT_COMMANDS_WIDTH;
         /*
         CDXC:Sidebar 2026-10-05 DECISION:
         User: "i actually want search and notifications to be always shown, there's space for those

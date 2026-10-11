@@ -77,7 +77,13 @@ pub(crate) const SIDEBAR_RESET_WIDTH: f32 = 235.0;
 /// User: the Commands row collapses to an icon-only button below a 260px sidebar, with its label
 /// and shortcut moved into a tooltip and its buttons aligned right. The Search button is always
 /// icon-only, which supersedes the 2026-09-21 340px Search threshold.
-pub(crate) const SIDEBAR_COMPACT_COMMANDS_WIDTH: f32 = 260.0;
+/// CDXC:Sidebar 2026-10-11 DECISION:
+/// User: at a sidebar width of 441px or less the Commands area is just the lightning icon button
+/// (tooltip "Commands (Ctrl+Shift+P)"), because the word was cut off ("Comm"); above 441px it
+/// shows as before. "exactly at 441px as i see it don't do weird scaling calculations please":
+/// `sidebar_width` is compared with this number as stored, with no zoom or scale factor applied.
+/// This supersedes the 260px threshold above.
+pub(crate) const SIDEBAR_COMPACT_COMMANDS_WIDTH: f32 = 441.0;
 
 /*
 CDXC:Sidebar 2026-09-20 DECISION:
