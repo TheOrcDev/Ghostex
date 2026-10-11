@@ -119,6 +119,14 @@ fn decorate_notice(raw: &Value, notice: &TerminalNotice) -> Value {
     } else {
         object.insert("collapsedDetail".to_string(), json!(commands.join("\n")));
     }
+    match crate::questions::terminal_picker::passthrough_presentation(notice) {
+        Some(passthrough) => {
+            object.insert("passthrough".to_string(), passthrough);
+        }
+        None => {
+            object.remove("passthrough");
+        }
+    }
     match notice.dialog.as_ref() {
         Some(dialog) => {
             let mut decorated = raw

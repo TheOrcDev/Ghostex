@@ -125,6 +125,12 @@ impl NativeChatView {
             window.prevent_default();
             return;
         }
+        // An open `/resume` picker or pass-through screen takes the arrows, Enter and Escape.
+        if self.terminal_picker_key_down(event, window, cx) {
+            cx.stop_propagation();
+            window.prevent_default();
+            return;
+        }
         /*
         CDXC:SessionChat 2026-09-18 WHY:
         React's image viewer closed on Escape from a capture listener on the whole chat surface

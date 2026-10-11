@@ -249,8 +249,34 @@ fn notice_answer(
     }
 }
 
+/// Sends a key or search text to an open picker or pass-through screen without holding the card.
+/// gxserver types the difference between the search the agent shows and the one asked for, so
+/// search text goes one request at a time and only the newest waiting text follows.
+pub(crate) fn send_navigation(state: &mut ChatState, answer: &Value) -> Vec<Effect> {
+    let query = answer.get("pickerQuery").is_some();
+    if query && state.questions.picker_query_request.is_some() {
+        state.questions.pending_picker_query = Some(answer.clone());
+        return Vec::new();
+    }
+    let request_id = allocate(state);
+    if query {
+        state.questions.picker_query_request = Some(request_id);
+    } else {
+        state.questions.picker_requests.push(request_id);
+    }
+    state.questions.notice_error = None;
+    vec![Effect::SendRpc {
+        request_id,
+        method: ChatRpcMethod::AnswerSessionChatPrompt,
+        params: Box::new(with_identity(state, answer.clone())),
+    }]
+}
+
 /// Sends one answer, whatever asked for it.
 fn answer_prompt(state: &mut ChatState, answer: &Value) -> Vec<Effect> {
+    if crate::questions::terminal_picker::is_navigation_answer(answer) {
+        return send_navigation(state, answer);
+    }
     if state.questions.answering {
         return Vec::new();
     }
@@ -266,7 +292,9 @@ fn answer_prompt(state: &mut ChatState, answer: &Value) -> Vec<Effect> {
     // agent's screen catches up, and the user has already chosen.
     if kind == "terminalChoice"
         || (kind == "terminalDialog"
-            && (answer.get("choiceIndex").is_some_and(Value::is_number) || closes_dialog(answer)))
+            && (answer.get("choiceIndex").is_some_and(Value::is_number)
+                || answer.get("pickerRow").is_some()
+                || closes_dialog(answer)))
     {
         state.questions.answered_notice_key = state.questions.active_notice_key.clone();
     }

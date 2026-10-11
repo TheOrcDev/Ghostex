@@ -142,6 +142,7 @@ pub(crate) struct NativeChatView {
     pub(crate) answer_subscription: Option<Subscription>,
     pub(super) terminal_dialog_input: Option<super::terminal_dialog::TerminalDialogInput>,
     pub(super) terminal_dialog_key_focus: gpui::FocusHandle,
+    pub(super) terminal_picker_input: Option<super::terminal_picker::TerminalPickerInput>,
     pub(crate) note_input: Option<Entity<TextareaState>>,
     pub(crate) note_subscription: Option<Subscription>,
     /// The note and text boxes of the open question forms, by `<form id>:<question>`.
@@ -387,6 +388,7 @@ impl NativeChatView {
             answer_subscription: None,
             terminal_dialog_input: None,
             terminal_dialog_key_focus: cx.focus_handle(),
+            terminal_picker_input: None,
             note_input: None,
             note_subscription: None,
             form_inputs: Default::default(),

@@ -94,6 +94,7 @@ mod visual;
 mod visual_popup;
 
 mod terminal_dialog;
+mod terminal_picker;
 
 mod option_menu;
 

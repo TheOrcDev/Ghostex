@@ -48,6 +48,40 @@ pub fn rpc_settled(
     {
         return Some(answer_settled(state, outcome));
     }
+    let query = state.questions.picker_query_request == Some(request_id);
+    if let Some(position) = state
+        .questions
+        .picker_requests
+        .iter()
+        .position(|id| *id == request_id)
+        .or(query.then_some(usize::MAX))
+    {
+        if query {
+            state.questions.picker_query_request = None;
+        } else {
+            state.questions.picker_requests.remove(position);
+        }
+        // A refused key means the list closed or changed under it; the card says so.
+        if let RpcOutcome::Err { message, .. } = outcome {
+            state.questions.notice_error = Some(message.clone());
+            state.core.claim_refusal();
+        }
+        let effects = match state.questions.pending_picker_query.take() {
+            // Search text waiting for a list that has since closed is dropped with it.
+            Some(next)
+                if query
+                    && TerminalNotice::parse(state.session.terminal_notice.as_ref())
+                        .and_then(|notice| notice.dialog)
+                        .is_some_and(|dialog| dialog.picker.is_some()) =>
+            {
+                crate::questions::actions::send_navigation(state, &next)
+            }
+            _ => Vec::new(),
+        };
+        refresh_gates(state);
+        state.core.publish_after(&effects);
+        return Some(effects);
+    }
     if state.questions.cancel_request == Some(request_id) {
         state.questions.cancel_request = None;
         if let RpcOutcome::Err { message, code, .. } = outcome {

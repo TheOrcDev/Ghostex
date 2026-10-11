@@ -149,6 +149,7 @@ pub mod session_chat_queue;
 pub mod session_chat_queue_runtime;
 pub mod session_chat_queue_undelivered;
 pub mod session_chat_read;
+pub mod session_chat_resume_picker;
 pub mod session_chat_resume_prompt;
 pub mod session_chat_returned_prompt;
 pub mod session_chat_rewind;

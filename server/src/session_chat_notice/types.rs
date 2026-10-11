@@ -316,6 +316,21 @@ impl SessionChatTerminalNotice {
         self
     }
 
+    /// CDXC:SessionChat 2026-10-11 WHY: the chat cannot read these agents' pickers and dialogs row by row, so while one owns the input it passes Up/Down/Enter/Esc through to the terminal and shows the screen region (`screenTail`) live; see the DECISION in session_chat_resume_picker.rs.
+    pub fn passes_keys_through(&self) -> bool {
+        self.dialog.is_none()
+            && self.choices.is_empty()
+            && matches!(
+                self.kind.as_str(),
+                SESSION_CHAT_NOTICE_CURSOR_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_GROK_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_HERMES_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_OMP_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_PI_INPUT_BLOCKED
+                    | SESSION_CHAT_NOTICE_EMPRYO_INPUT_BLOCKED
+            )
+    }
+
     /// True when this notice offers rows the chat surface can answer itself.
     pub fn is_answerable(&self) -> bool {
         !self.choices.is_empty() || self.dialog.is_some()
@@ -342,6 +357,14 @@ impl SessionChatTerminalNotice {
                 // would resurrect a card they just dismissed.
                 && choice_labels(&self.choices) == choice_labels(&other.choices)
         })
+    }
+
+    /// `same_notice`, plus the screen a pass-through card shows: a moved highlight there is news
+    /// for the clients, though it is still the same instance.
+    pub fn same_frame(&self, other: Option<&SessionChatTerminalNotice>) -> bool {
+        self.same_notice(other)
+            && (!self.passes_keys_through()
+                || other.is_some_and(|other| self.screen_tail == other.screen_tail))
     }
 
     /*
@@ -406,6 +429,10 @@ impl SessionChatTerminalNotice {
             identity.push('\u{1f}');
             identity.push_str(&json!(lock).to_string());
         }
+        if self.passes_keys_through() {
+            identity.push('\u{1f}');
+            identity.push_str(self.screen_tail.as_deref().unwrap_or_default());
+        }
         // The dialog id is the plain panel's hash, which a side answer read whole does not change.
         if let Some(side_question) = self
             .dialog
@@ -436,6 +463,9 @@ impl SessionChatTerminalNotice {
         }
         if let Some(screen_tail) = self.screen_tail.as_deref() {
             map.insert("screenTail".to_string(), json!(screen_tail));
+        }
+        if self.passes_keys_through() {
+            map.insert("passthrough".to_string(), json!(true));
         }
         map.insert("source".to_string(), json!(self.source.as_str()));
         map.insert("detectedAt".to_string(), json!(self.detected_at));
@@ -477,7 +507,7 @@ pub fn same_session_chat_terminal_notice(
     published: Option<&SessionChatTerminalNotice>,
 ) -> bool {
     match current {
-        Some(current) => current.same_notice(published),
+        Some(current) => current.same_frame(published),
         None => published.is_none(),
     }
 }

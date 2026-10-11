@@ -497,6 +497,7 @@ impl NativeChatView {
                     .iter()
                     .map(|dialog| dialog.field.focus_handle(cx)),
             )
+            .chain(self.terminal_picker_focus_handle(cx))
             .any(|focus| focus.is_focused(window))
             || self.terminal_dialog_key_focus.is_focused(window)
     }

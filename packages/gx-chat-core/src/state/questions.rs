@@ -41,6 +41,12 @@ pub struct QuestionsState {
     pub answer_request: Option<AnswerRequest>,
     /// The interrupt a cancelled question card asked for.
     pub cancel_request: Option<u64>,
+    /// Keys and search text sent to an open picker or pass-through screen, which do not hold the
+    /// card (`crate::questions::terminal_picker::is_navigation_answer`).
+    pub picker_requests: Vec<u64>,
+    /// The search text in flight to an open picker, and the newest text waiting behind it.
+    pub picker_query_request: Option<u64>,
+    pub pending_picker_query: Option<serde_json::Value>,
     /// The content key the draft write in flight belongs to; a later prompt drops its answer.
     pub draft_write_content_key: Option<String>,
     /// That write was a single-select pick, so landing it moves the card on.

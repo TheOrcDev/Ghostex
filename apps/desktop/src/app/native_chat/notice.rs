@@ -19,7 +19,16 @@ impl NativeChatView {
         let notice = &snapshot["terminalNotice"];
         if !notice.is_object() || snapshot["noticeVisible"] != true {
             self.terminal_dialog_input = None;
+            self.terminal_picker_input = None;
             return None;
+        }
+        if notice["dialog"]["presentation"]["picker"].is_object() {
+            self.terminal_dialog_input = None;
+            return Some(self.terminal_picker_card(notice, p, window, cx));
+        }
+        self.terminal_picker_input = None;
+        if notice["passthrough"].is_object() {
+            return Some(self.passthrough_card(notice, p, cx));
         }
         let key = format!(
             "notice:{}:{}",

@@ -894,6 +894,13 @@ in its terminal, so sending one switches to Terminal View. Your next chat messag
 or switching back to Chat View on the computer, closes the side conversation first.
 Claude panels such as `/status` and `/usage` show as clickable tabs, tables and
 usage meters instead of terminal text.
+`/resume` works from the chat. In Claude Code and Codex chats it opens a Resume a
+conversation card listing the agent's own conversations: type to search, Up and
+Down move, Enter resumes the highlighted one, Escape cancels, or click a row (tap it
+on the phone). The card follows the agent's list as you go, and once you pick, the
+chat switches to that conversation. Other agents' pickers and menus that take over
+their terminal show that part of the terminal in a card instead: Up, Down, Enter and
+Escape in the chat box (or the card's buttons) go straight to it.
 A new Claude Code install's first-run setup is answered in the chat too: the
 text style, the login method, and Sign in to Claude, where you paste the code the
 browser sign-in page shows and press Sign in (Retry appears if the code was wrong).
