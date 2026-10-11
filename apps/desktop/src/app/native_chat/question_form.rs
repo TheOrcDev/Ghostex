@@ -325,29 +325,29 @@ impl NativeChatView {
             .w_full()
             .min_w_0()
             .child(
+                // CDXC:SessionChat 2026-10-11 DECISION: User picked from the looks page: a question's tag is a filled chip (no border) placed above its title, "b, but pls make it show like eyebrow (in terms of position)"; and choices keep the radio or checkbox with the letter as a muted keycap on the right (look A). The phone (QuestionForm.tsx) and the page kit (server/src/visual_pages/kit.rs) match.
                 div()
                     .flex()
+                    .flex_col()
                     .items_start()
-                    .gap(px(8.0 * s))
-                    .when(!tag.is_empty(), |row| {
-                        row.child(
+                    .gap(px(4.0 * s))
+                    .when(!tag.is_empty(), |header| {
+                        header.child(
                             div()
-                                .flex_shrink_0()
-                                .mt(px(1.0 * s))
                                 .px(px(7.0 * s))
                                 .rounded_full()
-                                .border_1()
-                                .border_color(p.control_border)
+                                .bg(p.muted.opacity(0.18))
                                 .font_family(super::fonts::CHAT_MONO)
-                                .text_size(px(11.0 * s))
-                                .line_height(px(17.0 * s))
+                                .text_size(px(10.5 * s))
+                                .line_height(px(18.0 * s))
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(p.muted)
                                 .child(tag),
                         )
                     })
                     .child(
                         div()
-                            .flex_1()
+                            .w_full()
                             .min_w_0()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(p.foreground)
@@ -559,7 +559,7 @@ impl NativeChatView {
                                 div()
                                     .min_w_0()
                                     .when(other && !picked, |label| label.text_color(p.card_muted))
-                                    .child(format!("{letter}) {label}")),
+                                    .child(label.clone()),
                             )
                             .when(recommended, |line| {
                                 line.child(
@@ -586,6 +586,27 @@ impl NativeChatView {
                                 .child(detail),
                         )
                     }),
+            )
+            // The letter the reader can refer to ("do b"), as a muted keycap at the row's end.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .h(px(18.0 * s))
+                    .min_w(px(18.0 * s))
+                    .px(px(4.0 * s))
+                    .mt(px(0.5 * s))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0 * s))
+                    .border_1()
+                    .border_color(p.control_border.opacity(0.6))
+                    .bg(p.background.opacity(0.4))
+                    .font_family(super::fonts::CHAT_MONO)
+                    .text_size(px(11.0 * s))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if picked { p.foreground } else { p.muted })
+                    .child(letter),
             )
             .when(enabled, |row| {
                 row.on_click(cx.listener(move |this, _, _, cx| this.invoke(action.clone(), cx)))

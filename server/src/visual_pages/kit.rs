@@ -34,6 +34,7 @@
 //! reopening the page brings them back.
 //!
 //! CDXC:SessionChat 2026-10-11 DECISION:
+//! User picked from the looks page: a question's tag is a filled chip above its title ("make it show like eyebrow"), and a choice keeps its radio or checkbox with the letter as a muted keycap on the right; the in-chat form (apps/desktop/src/app/native_chat/question_form.rs, the phone's QuestionForm.tsx) matches.
 //! User: a reader picks an option right at its mockup (a Pick button by the mockup's title that picks that choice in its question, shown picked on both and cleared from either), and writes a note under each mockup that arrives with the answers keyed to that question and choice, is kept as a draft, and shows in the answers card.
 //! User: every question page offers "Other / none of these" with a note box, consistently, instead of each agent hand-rolling it, and the reader may leave a question unanswered. No choice is ever preselected; an agent marks the one it recommends with a Recommended badge and the reader picks. Mockups can use the full width of the page between or above the questions, and the Answered note is as wide as the question cards.
 //!
@@ -52,9 +53,9 @@ gx-wide,gx-choice{display:block;min-width:0}
 :where(gx-questions>h2){margin-top:8px;font-size:15px;font-weight:600}
 :where(gx-questions>p){color:var(--muted-foreground)}
 gx-question{display:block;border:1px solid var(--border);background:var(--card);color:var(--card-foreground);border-radius:calc(var(--radius) + 2px);padding:14px 14px 12px}
-.gx-q-head{display:flex;gap:8px;align-items:baseline;margin-bottom:4px}
-.gx-q-tag{flex-shrink:0;font:11px/1.6 var(--font-mono);color:var(--muted-foreground);border:1px solid var(--border);border-radius:999px;padding:0 7px}
-.gx-q-title{font-size:14px;font-weight:600;line-height:1.45}
+.gx-q-head{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-bottom:4px}
+.gx-q-tag{font:500 10.5px/18px var(--font-mono);color:var(--muted-foreground);background:color-mix(in srgb,var(--muted-foreground) 18%,transparent);border-radius:999px;padding:0 7px}
+.gx-q-title{align-self:stretch;font-size:14px;font-weight:600;line-height:1.45}
 .gx-q-desc{color:var(--muted-foreground);font-size:12.5px;line-height:1.5;margin:2px 0 10px}
 .gx-q-desc>:first-child{margin-top:0}.gx-q-desc>:last-child{margin-bottom:0}
 .gx-choices{display:flex;flex-direction:column;gap:2px}
@@ -67,10 +68,12 @@ gx-question{display:block;border:1px solid var(--border);background:var(--card);
 .gx-mark{flex-shrink:0;width:14px;height:14px;margin-top:3px;box-sizing:border-box;border:1.5px solid var(--muted-foreground);border-radius:50%}
 .gx-choice[role=checkbox] .gx-mark{border-radius:4px}
 .gx-choice[aria-checked=true] .gx-mark{border-color:var(--primary);background:var(--primary);box-shadow:inset 0 0 0 2.5px var(--card)}
-.gx-letter{font-weight:600}
+.gx-letter{flex:none;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;margin-top:.5px;border:1px solid color-mix(in srgb,var(--border) 60%,transparent);border-radius:4px;background:color-mix(in srgb,var(--background) 40%,transparent);font:500 11px/16px var(--font-mono);color:var(--muted-foreground);text-align:center}
+.gx-choice[aria-checked=true] .gx-letter{color:var(--foreground)}
 .gx-other .gx-choice-body{color:var(--muted-foreground)}
 .gx-other[aria-checked=true] .gx-choice-body{color:inherit}
 .gx-rec{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--primary);border-radius:999px;color:var(--primary);font-size:10.5px;font-weight:600;line-height:1.5;vertical-align:1px}
+.gx-choice-body{flex:1;min-width:0}
 .gx-choice-body small{display:block;color:var(--muted-foreground);font-size:12px;margin-top:2px}
 .gx-note,.gx-text{display:block;width:100%;box-sizing:border-box;margin:8px 0 0;min-height:34px;resize:vertical;field-sizing:content;font:inherit;font-size:12.5px;color:var(--foreground);background:transparent;border:1px solid var(--border);border-radius:var(--radius);padding:7px 9px}
 .gx-text{min-height:64px}
@@ -130,10 +133,10 @@ function question(qe,index,used,changed){
   function choice(nodes,value,recommended,label){
     var button=el("button","gx-choice"),body=el("span","gx-choice-body"),index=choices.length,letter=index<26?String.fromCharCode(97+index):String(index+1);
     button.type="button";button.setAttribute("role",multiple?"checkbox":"radio");button.setAttribute("aria-checked","false");
-    body.append(el("b","gx-letter",letter+")")," ");
+
     nodes.forEach(function(node){body.append(node);});
     if(recommended)body.insertBefore(el("span","gx-rec","Recommended"),body.querySelector(":scope>small"));
-    button.append(el("span","gx-mark"),body);list.append(button);
+    button.append(el("span","gx-mark"),body,el("span","gx-letter",letter));list.append(button);
     var c={button:button,value:value,label:label,letter:letter,on:function(){return button.getAttribute("aria-checked")==="true";},set:function(v){button.setAttribute("aria-checked",v?"true":"false");}};
     button.addEventListener("click",function(){var on=!c.on();if(on&&!multiple)choices.forEach(function(o){o.set(false);});c.set(on);sync();changed();if(on&&c===other)note.focus();});
     choices.push(c);return c;
