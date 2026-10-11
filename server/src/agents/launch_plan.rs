@@ -105,6 +105,17 @@ pub(crate) fn create_agent_session_params_for_project(
         params,
         configured_command,
     )?;
+    let configured_command = if agentbox_provider.is_none() {
+        apply_thread_marked_handovers(
+            &agent_id,
+            &agent_config,
+            &launch_settings,
+            params,
+            configured_command,
+        )
+    } else {
+        configured_command
+    };
     let account_command = if agentbox_provider.is_some() {
         None
     } else {
@@ -597,6 +608,30 @@ fn apply_coordinator_role(
         .unwrap_or_else(|| family.clone());
     crate::coordinators::with_coordinator_role(&base, &family, std::path::Path::new(&role_file))
         .map(Some)
+}
+
+/// CDXC:MarkedHandovers 2026-10-11 WHY:
+/// A thread always marks its handovers, so `ghostex orchestrator start-thread` creates it with `markedHandovers`, and the note is saved in its base command beside the model flags, like an orchestrator's role, so resume, fork and account wrapping keep it whatever the setting says. ZCode threads get it from the SessionStart hook instead (activity.rs).
+fn apply_thread_marked_handovers(
+    agent_id: &str,
+    agent_config: &Map<String, Value>,
+    launch_settings: &Map<String, Value>,
+    params: &Map<String, Value>,
+    command: Option<String>,
+) -> Option<String> {
+    if params.get("markedHandovers").and_then(Value::as_bool) != Some(true) {
+        return command;
+    }
+    let Some(family) =
+        resume_agent_family_id(Some(agent_id.to_string()), agent_config, launch_settings)
+            .filter(|family| matches!(family.as_str(), "claude" | "codex"))
+    else {
+        return command;
+    };
+    let base = command
+        .or_else(|| default_agent_command(&family).map(str::to_string))
+        .unwrap_or_else(|| family.clone());
+    Some(with_thread_marked_handovers(&family, &base))
 }
 
 pub(crate) fn create_agent_session_default_title(

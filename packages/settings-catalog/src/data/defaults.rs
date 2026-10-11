@@ -502,8 +502,10 @@ pub const DEFAULT_GHOSTEX_SETTINGS: &[(&str, J)] = &[
     ("sessionChatFileEditPreviews", J::Bool(false)),
     ("sessionChatKeepComposerExpanded", J::Bool(false)),
     ("sessionChatConfirmEscapeInterrupt", J::Bool(true)),
-    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: off by default while they trial it.
+    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: "force the marked handovers for coordinators/orchestrator threads and their children by default and make it disabled by default for non-orchestrator/child threads". This switch covers every other session and stays off by default; orchestrators and threads mark regardless.
     ("markedHandovers", J::Bool(false)),
+    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: coloured labels (style D) by default, their first pick of the three.
+    ("markedHandoversStyle", J::Str("labels")),
     // CDXC:Theming 2026-06-15-11:24:
     // Custom sidebar/titlebar colors are scoped to the sidebar and titlebar.
     // The default background matches Dark Gray chrome without changing modal or

@@ -1027,8 +1027,8 @@
     },
     {
       "key": "markedHandovers",
-      "title": "Marked handovers",
-      "subtitle": "Ask agents to start each part of the message they hand back to you with a marker such as ❓ Needs you, ✅ Done, ⚠️ Read this, 🧪 Untested or 🛑 Blocked, so a quick skim shows what needs you. Applies to agent sessions started or resumed after you change it.",
+      "title": "Marked handovers in every session",
+      "subtitle": "Orchestrators and their threads always start each part of the message they hand back with a marker such as ❓ Needs you, ✅ Done, ⚠️ Read this, 🧪 Untested or 🛑 Blocked, so a quick skim shows what needs you. Turn this on to have every other agent session do the same. Applies to sessions started or resumed after you change it.",
       "tab": "settings",
       "tabTitle": "General",
       "group": "chat",
@@ -1037,6 +1037,34 @@
       "sectionTitle": "Chat",
       "type": "boolean",
       "default": false,
+      "agentWritable": true
+    },
+    {
+      "key": "markedHandoversStyle",
+      "title": "Marked sections style",
+      "subtitle": "How the chat colours the sections an agent marks: coloured labels, a thin left rule, or a coloured badge in place of the emoji. Every style also shows a summary of what needs you at the top of the message. Shown while Marked handovers is on.",
+      "tab": "settings",
+      "tabTitle": "General",
+      "group": "chat",
+      "groupTitle": "Chat",
+      "section": "chat",
+      "sectionTitle": "Chat",
+      "type": "enum",
+      "default": "labels",
+      "options": [
+        {
+          "label": "Coloured labels",
+          "value": "labels"
+        },
+        {
+          "label": "Thin left rule",
+          "value": "rule"
+        },
+        {
+          "label": "Coloured badge",
+          "value": "badge"
+        }
+      ],
       "agentWritable": true
     },
     {

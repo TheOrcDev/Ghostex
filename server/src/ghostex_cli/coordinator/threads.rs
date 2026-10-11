@@ -53,9 +53,6 @@ pub(super) fn start_thread(parsed: &ParsedArgs) -> CliResult<()> {
             instructions: agents::text(coordinator, "instructions"),
             notes: &notes,
             worktree: parsed.flags.truthy("worktree"),
-            marked_handovers: crate::agents::marked_handovers_enabled(
-                &crate::paths::get_gxserver_paths(None),
-            ),
         },
         &task,
     );
@@ -86,6 +83,7 @@ pub(super) fn start_thread(parsed: &ParsedArgs) -> CliResult<()> {
         "agentId": agent_id,
         "launchSettings": launch_settings_for(&agent_rows, &agent_id),
         "title": title,
+        "markedHandovers": true,
     });
     if let Some(model) = flag_text(&parsed.flags, "model") {
         create["agentModel"] = json!(model);

@@ -23,6 +23,7 @@ use crate::transcript::jsstr::js_trim;
 use crate::transcript::line_breaks::{agent_line_breaks, user_line_breaks, AgentLineBreaks};
 use crate::transcript::long_prompt::collapsed_prompt;
 use crate::transcript::markdown_links::markdown_references;
+use crate::transcript::marked_sections::mark_sections;
 use crate::transcript::message_text::{
     message_action_content, normalize_user_message_markdown, split_reasoning_headline,
     user_turn_copy_markdown,
@@ -146,6 +147,12 @@ pub fn project_message(
     } else {
         native_markdown(&displayed_body, false)
     };
+    // The reply's marked sections, tagged after its references are read so the marks carry none.
+    let marked_body = if message.role == ChatRole::Assistant {
+        mark_sections(native_body.clone())
+    } else {
+        native_body.clone()
+    };
     // A long prompt's first lines, which its bubble shows until it is expanded.
     let collapsed_body = is_user
         .then(|| collapsed_prompt(&displayed_body))
@@ -170,7 +177,7 @@ pub fn project_message(
     }
 
     let mut projected = message_keys(message);
-    projected.insert("text".to_string(), native_body.clone().into());
+    projected.insert("text".to_string(), marked_body.into());
     projected.insert("copyText".to_string(), copy_text.clone().into());
     projected.insert(
         "canRewind".to_string(),

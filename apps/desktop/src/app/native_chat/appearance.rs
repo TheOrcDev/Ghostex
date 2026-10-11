@@ -35,6 +35,8 @@ pub(crate) struct ChatAppearance {
     pub(crate) simple: bool,
     pub(crate) file_previews: bool,
     pub(crate) transcript_width: Option<f32>,
+    /// How marked sections in agents' replies are drawn.
+    pub(crate) marked_sections: super::marked_sections::MarkerStyle,
 }
 
 impl ChatAppearance {
@@ -225,6 +227,7 @@ impl ChatAppearance {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true),
             file_previews: enabled("sessionChatFileEditPreviews"),
+            marked_sections: super::marked_sections::MarkerStyle::from_settings(settings),
             transcript_width: enabled("sessionChatCustomTranscriptWidthEnabled").then(|| {
                 settings
                     .get("sessionChatTranscriptWidthPercent")

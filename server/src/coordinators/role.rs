@@ -38,8 +38,19 @@ pub fn coordinator_role_file(paths: &GxserverPaths) -> PathBuf {
 /// coordinator at its next launch or resume.
 pub fn ensure_coordinator_role_file(paths: &GxserverPaths) -> std::io::Result<PathBuf> {
     let path = coordinator_role_file(paths);
-    write_if_changed(&path, COORDINATOR_ROLE_PROMPT)?;
+    write_if_changed(&path, &coordinator_role_with_marked_handovers())?;
     Ok(path)
+}
+
+/// The playbook with the Marked handovers note after it: an orchestrator always marks its
+/// handovers (CDXC:MarkedHandovers in agents/marked_handovers.rs), so the role it loads at launch
+/// carries the note whatever the setting says.
+fn coordinator_role_with_marked_handovers() -> String {
+    format!(
+        "{}\n\n{}\n",
+        COORDINATOR_ROLE_PROMPT.trim(),
+        crate::agents::MARKED_HANDOVERS_NOTE
+    )
 }
 
 fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
@@ -86,8 +97,8 @@ pub fn ensure_empryo_coordinator_agent_file(paths: &GxserverPaths) -> std::io::R
     write_if_changed(
         &path,
         &format!(
-            "---\nname: {EMPRYO_COORDINATOR_AGENT_NAME}\ndescription: The Ghostex orchestrator role. Ghostex starts an orchestrator session with it; never delegate a task to it.\n---\n\n{}\n",
-            COORDINATOR_ROLE_PROMPT.trim()
+            "---\nname: {EMPRYO_COORDINATOR_AGENT_NAME}\ndescription: The Ghostex orchestrator role. Ghostex starts an orchestrator session with it; never delegate a task to it.\n---\n\n{}",
+            coordinator_role_with_marked_handovers()
         ),
     )?;
     Ok(path)

@@ -26,7 +26,7 @@ use serde_json::{Value, json};
  */
 
 /// The transcript's prose line height, which a fenced block's code lines take too.
-const PROSE_LINE_HEIGHT: f32 = 22.75;
+pub(super) const PROSE_LINE_HEIGHT: f32 = 22.75;
 /// The padding a fenced block's code sits in under its header (GPUI Kit's `p_3`).
 const CODE_PADDING: f32 = 12.0;
 
@@ -72,8 +72,16 @@ fn escaped_raw_html(content: String) -> String {
 /// Hovering anywhere over a table is what brings its actions up.
 const TABLE_GROUP: &str = "native-chat-table";
 
-enum Segment {
+pub(super) enum Segment {
     Markdown(String),
+    /// A marked section of an agent's reply (`marked_sections.rs`): what the core said about it,
+    /// and its lines as written.
+    Section {
+        meta: super::marked_sections::SectionMeta,
+        lines: Vec<String>,
+    },
+    /// The chips that count a reply's marked sections.
+    Summary(Vec<super::marked_sections::SummaryChip>),
     Alert {
         kind: String,
         children: Vec<Segment>,
@@ -92,7 +100,7 @@ enum Segment {
     Flow(Vec<FlowPart>),
 }
 
-enum FlowPart {
+pub(super) enum FlowPart {
     Text(String),
     Image(Value),
 }
@@ -148,7 +156,7 @@ fn alert_style(kind: &str, light: bool) -> (&'static str, &'static str, gpui::Hs
     )
 }
 
-fn parse(lines: &[&str]) -> Vec<Segment> {
+pub(super) fn parse(lines: &[&str]) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut prose: Vec<&str> = Vec::new();
     let mut index = 0;
@@ -178,6 +186,31 @@ fn parse(lines: &[&str]) -> Vec<Segment> {
             segments.push(Segment::Alert {
                 kind: kind.trim().to_owned(),
                 children: parse(&lines[index + 1..end.min(lines.len())]),
+            });
+            index = end + 1;
+            continue;
+        }
+        if let Some(chips) = line.strip_prefix(super::marked_sections::SUMMARY_OPEN) {
+            flush(&mut prose, &mut segments);
+            segments.push(Segment::Summary(
+                serde_json::from_str(chips).unwrap_or_default(),
+            ));
+            index += 1;
+            continue;
+        }
+        if let Some(meta) = line.strip_prefix(super::marked_sections::SECTION_OPEN) {
+            let end = lines[index + 1..]
+                .iter()
+                .position(|line| *line == super::marked_sections::SECTION_CLOSE)
+                .map(|offset| index + 1 + offset)
+                .unwrap_or(lines.len());
+            flush(&mut prose, &mut segments);
+            segments.push(Segment::Section {
+                meta: serde_json::from_str(meta).unwrap_or_default(),
+                lines: lines[index + 1..end.min(lines.len())]
+                    .iter()
+                    .map(|line| (*line).to_string())
+                    .collect(),
             });
             index = end + 1;
             continue;
@@ -555,6 +588,54 @@ impl NativeChatView {
                     }
                 }))
                 .into_any_element(),
+            Segment::Summary(chips) => {
+                let chat = cx.weak_entity();
+                let message = id.to_string();
+                super::marked_sections::summary_strip(id, chips, &super::marked_sections::look(p), move |section, _, cx| {
+                    let _ = chat.update(cx, |chat, cx| {
+                        chat.jump_to_marked_section(&message, section, cx)
+                    });
+                })
+            }
+            Segment::Section { meta, lines } => {
+                let key = format!("{id}:{index}");
+                let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+                let draw = |lines: &[&str]| -> Vec<AnyElement> {
+                    parse(lines)
+                        .iter()
+                        .enumerate()
+                        .map(|(child, segment)| {
+                            self.segment(&key, child, segment, references, p, cx)
+                        })
+                        .collect()
+                };
+                match p.marked_sections {
+                    style @ super::marked_sections::MarkerStyle::Rule => {
+                        super::marked_sections::section(
+                            style,
+                            meta,
+                            None,
+                            draw(&lines),
+                            vec![super::marked_sections::top_recorder(id, meta.index)],
+                            &super::marked_sections::look(p),
+                        )
+                    }
+                    style => {
+                        let lead = (!meta.lead.is_empty()).then(|| {
+                            self.text_view(format!("{key}:lead"), meta.lead.clone(), references, p, cx)
+                        });
+                        let rest = lines.get(1..).unwrap_or_default();
+                        super::marked_sections::section(
+                            style,
+                            meta,
+                            lead,
+                            draw(rest),
+                            vec![super::marked_sections::top_recorder(id, meta.index)],
+                            &super::marked_sections::look(p),
+                        )
+                    }
+                }
+            }
             Segment::Alert { kind, children } => {
                 let (label, icon, accent) = alert_style(kind, p.light);
                 div()
