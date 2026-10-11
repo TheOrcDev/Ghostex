@@ -226,7 +226,14 @@ fn queueing_prompts(state: &ChatState, queued: &[QueuedPrompt]) -> Vec<QueuedPro
 
 fn queued_prompt(prompt: &Value) -> QueuedPrompt {
     let mut row: QueuedPrompt = serde_json::from_value(prompt.clone()).unwrap_or_default();
-    row.preview = queue_row_preview(&row.text);
+    // Answers a page or question form queued (`transcript/page_answers.rs`) read as what they are,
+    // not as their envelope.
+    row.preview = match crate::transcript::page_answers::split_page_answers(&row.text) {
+        Some((answers, rest)) if rest.is_empty() => {
+            queue_row_preview(&format!("Answers to \u{201c}{}\u{201d}", answers.title))
+        }
+        _ => queue_row_preview(&row.text),
+    };
     row.busy = is_queue_row_busy(&row.state);
     row
 }

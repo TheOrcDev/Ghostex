@@ -158,7 +158,7 @@ fn write_record(
     .and_then(|()| fs::rename(&temporary, &path))
 }
 
-/// Notes on the record how delivering the answers to the agent went.
+/// Notes on the record how handing the answers to the agent went: queued (`queuedAt`) or why not.
 pub(super) fn note_delivery(gxserver_state_dir: &Path, id: &str, error: Option<&str>) {
     let _guard = RECORD_WRITE_LOCK
         .lock()
@@ -168,7 +168,7 @@ pub(super) fn note_delivery(gxserver_state_dir: &Path, id: &str, error: Option<&
     };
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     match error {
-        None => record["deliveredAt"] = json!(now),
+        None => record["queuedAt"] = json!(now),
         Some(error) => record["deliveryError"] = json!(clip_chars(error, 500)),
     }
     let _ = write_record(gxserver_state_dir, id, &record);

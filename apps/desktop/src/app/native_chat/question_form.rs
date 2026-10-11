@@ -241,6 +241,7 @@ impl NativeChatView {
         let can_send = form["canSend"] == true;
         let status = match phase.as_str() {
             "answered" => "Sent to the agent.".to_string(),
+            "queued" => "Queued: it goes to the agent once it's ready.".to_string(),
             "sending" => "Sending…".to_string(),
             _ if !send_error.is_empty() => send_error,
             _ => "Questions you leave blank are sent as unanswered.".to_string(),
@@ -251,10 +252,10 @@ impl NativeChatView {
             p.muted
         };
         let send_id = SharedString::from(format!("question-form-send:{id}"));
-        let send_label = if phase == "answered" {
-            "Sent".to_string()
-        } else {
-            text(form, "submit")
+        let send_label = match phase.as_str() {
+            "answered" => "Sent".to_string(),
+            "queued" => "Queued".to_string(),
+            _ => text(form, "submit"),
         };
         let form_id = id.to_string();
         let actions = vec![

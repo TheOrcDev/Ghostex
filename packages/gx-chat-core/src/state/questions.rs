@@ -93,19 +93,20 @@ pub struct FormState {
     pub load_requested: bool,
     /// The reader changed the form, so saved picks that arrive later no longer replace it.
     pub touched: bool,
+    /// The saved picks were forgotten once the transcript carried the answers.
+    pub cleared: bool,
     /// The send in flight: its call, what it drew, and the answers it carries.
     pub send: Option<FormSend>,
-    /// The answers that went out, which the form shows until the transcript carries them.
+    /// The answers that were queued, which the form shows until the transcript carries them.
     pub sent: Option<serde_json::Value>,
     /// Why the last send was refused.
     pub error: Option<String>,
 }
 
-/// A question form's answers on their way to the agent.
+/// A question form's answers on their way into the session's chat queue.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FormSend {
     pub request_id: u64,
-    pub drawn: crate::composer::send::AgentSend,
     pub answers: serde_json::Value,
 }
 

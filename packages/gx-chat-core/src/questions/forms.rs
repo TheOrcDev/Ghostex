@@ -4,22 +4,21 @@
 //! A choice question's picks follow the page kit (`server/src/visual_pages/kit.rs`): nothing starts
 //! picked, clicking a pick again clears it, one of N replaces the pick while many of N toggles, and
 //! "Other / none of these" (the row after the last choice) is a pick of its own whose note says
-//! what instead. The answers go to the agent as an ordinary chat send of the
-//! `<ghostex-page-answers>` message; the form reads Answered from that message once the transcript
-//! carries it, and from the accepted send until then.
+//! what instead. The answers go into the session's chat queue as the `<ghostex-page-answers>`
+//! message, which gxserver types once the agent is idle; the form reads Queued until then and
+//! Answered once the transcript carries the message.
 
 use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::composer::send::{send_to_agent, undo_agent_send};
 use crate::document::QuestionDraft;
 use crate::effect::Effect;
 use crate::event::StorageKey;
 use crate::questions::drafts::{decode_drafts, encode_drafts, form_drafts_key, AnswerDrafts};
 use crate::state::{ChatContext, ChatState, FormSend, FormState};
 use crate::transcript::question_forms::{answers_message, QuestionForm, NOTE_SUFFIX, OTHER_CHOICE};
-use crate::wire::RpcOutcome;
+use crate::wire::{ChatRpcMethod, RpcOutcome};
 
 fn form<'a>(state: &'a ChatState, id: &str) -> Option<&'a QuestionForm> {
     state
@@ -198,18 +197,26 @@ pub fn send(state: &mut ChatState, context: &ChatContext, id: &str) -> Vec<Effec
         return Vec::new();
     }
     let answers = answers(&form, &drafts);
-    let (drawn, effects) =
-        send_to_agent(state, context, &answers_message(&form, &answers), None, &[]);
+    // See the SessionChat 2026-10-11 DECISION in server/src/visual_pages/answers.rs: answers go
+    // into the session's chat queue, which types them once the agent is idle, like a page's.
+    let request_id = state.core.allocate_request_id();
+    let effect = Effect::SendRpc {
+        request_id,
+        method: ChatRpcMethod::QueueSessionChatPrompt,
+        params: Box::new(json!({
+            "text": answers_message(&form, &answers),
+            "sendRequestId": format!("question-form-{id}-{}", context.now_millis()),
+        })),
+    };
     if let Some(entry) = state.questions.forms.get_mut(id) {
         entry.error = None;
         entry.send = Some(FormSend {
-            request_id: drawn.request_id,
-            drawn,
+            request_id,
             answers,
         });
     }
     state.core.request_publish();
-    effects
+    vec![effect]
 }
 
 /// The send's answer, or `None` when the id is not a form's.
@@ -232,18 +239,15 @@ pub fn rpc_settled(
     let sent = state.questions.forms.get_mut(&id)?.send.take()?;
     state.core.request_publish();
     match outcome {
+        // Queued: the saved picks stay until the transcript carries the answers (`sync`), so a
+        // queued message the user removes again leaves the form as it was after a reload.
         RpcOutcome::Ok { .. } => {
             if let Some(entry) = state.questions.forms.get_mut(&id) {
                 entry.sent = Some(sent.answers);
             }
-            Some(vec![Effect::WriteStorage {
-                key: form_drafts_key(&state.identity.session_key, &id),
-                value: None,
-                durable: false,
-            }])
+            Some(Vec::new())
         }
         RpcOutcome::Err { message, .. } => {
-            undo_agent_send(state, &sent.drawn);
             if let Some(entry) = state.questions.forms.get_mut(&id) {
                 entry.error = Some(message.clone());
             }
@@ -270,10 +274,27 @@ pub fn storage_loaded(state: &mut ChatState, id: &str, value: Option<&str>) {
     state.core.request_publish();
 }
 
-/// Gives every open form its blank picks and asks for the saved ones, once.
+/// Gives every open form its blank picks and asks for the saved ones, once, and forgets the saved
+/// picks of a form whose answers the transcript now carries.
 pub fn sync(state: &mut ChatState) -> Vec<Effect> {
     let mut effects = Vec::new();
     let session_key = state.identity.session_key.clone();
+    let answered: Vec<String> = state
+        .transcript_view
+        .page_answers
+        .iter()
+        .map(|answers| answers.page_id.clone())
+        .collect();
+    for (id, entry) in state.questions.forms.iter_mut() {
+        if !entry.cleared && answered.contains(id) {
+            entry.cleared = true;
+            effects.push(Effect::WriteStorage {
+                key: form_drafts_key(&session_key, id),
+                value: None,
+                durable: false,
+            });
+        }
+    }
     let open_forms: Vec<(String, usize)> = state
         .transcript_view
         .question_forms
@@ -343,7 +364,10 @@ pub fn project(state: &ChatState) -> BTreeMap<String, Value> {
             let entry = entry.unwrap_or(&fallback);
             let sent = received_answers(state, &form.id).or(entry.sent.as_ref());
             let (phase, drafts) = match (sent, entry.send.as_ref()) {
-                (Some(answers), _) => ("answered", drafts_from_answers(form, answers)),
+                (Some(answers), _) if received_answers(state, &form.id).is_some() => {
+                    ("answered", drafts_from_answers(form, answers))
+                }
+                (Some(answers), _) => ("queued", drafts_from_answers(form, answers)),
                 (None, Some(send)) => ("sending", drafts_from_answers(form, &send.answers)),
                 (None, None) if entry.drafts.len() == form.questions.len() => {
                     ("open", entry.drafts.clone())

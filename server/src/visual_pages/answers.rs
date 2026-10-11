@@ -5,7 +5,6 @@ use axum::{
     http::{header, HeaderValue, Response, StatusCode},
 };
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 use crate::server::{AppState, RoutedResponse};
 
@@ -24,10 +23,10 @@ pub(crate) fn is_answers_route(path: &str) -> bool {
 }
 
 /// `POST /visual/<id>/answers` `{"answers": <any JSON>}`: the page's `ghostex.submit(answers)`.
-/// Stores the answers with the page and types them into the session that published it.
+/// Stores the answers with the page and queues them for the session that published it.
 ///
 /// CDXC:SessionChat 2026-10-11 DECISION:
-/// User: agents ask questions in a ghostex-visuals HTML page and "see the answers once the user submits", with the card in the chat showing "Answered". The page posts its answers here; gxserver keeps them with the page and delivers them to the publishing session as a `<ghostex-page-answers page="<id>" title="…">` message, which the chat draws as an answers card and which marks the page's card Answered.
+/// User: agents ask questions in a ghostex-visuals HTML page and "see the answers once the user submits", with the card in the chat showing "Answered". The page posts its answers here; gxserver keeps them with the page and queues them for the publishing session as a `<ghostex-page-answers page="<id>" title="…">` message, which the chat draws as an answers card and which marks the page's card Answered.
 /// CDXC:ServerApi 2026-10-11 WHY:
 /// Answered before the auth gate like `GET /visual/<id>`: the page has no token, and its unguessable id is the grant. The page has an opaque origin, so it posts plain text with `Origin: null` (no preflight) and reads the reply through `Access-Control-Allow-Origin: *`; its content policy lets it reach this one URL and nothing else on gxserver. The first submission wins, so a page cannot type a stream of messages into the agent.
 pub(crate) async fn submit(
@@ -115,39 +114,52 @@ pub(crate) async fn submit(
         .unwrap_or("Page")
         .to_string();
     let message = answers_message(&id, &title, &answers);
-    let delivery_state = state.clone();
-    tokio::spawn(async move {
-        let body = json!({"params": {
-            "projectId": project_id,
-            "sessionId": session_id,
-            "text": message,
-            // One delivery per page: a retried send is answered from the first one's record.
-            "sendRequestId": format!("visual-page-answers-{id}"),
-        }});
-        let routed = crate::session_chat_send::handle_send_session_chat_message_http(
-            &delivery_state,
-            "/api/sendSessionChatMessage".to_string(),
-            Uuid::new_v4().to_string(),
-            &body,
+    // CDXC:SessionChat 2026-10-11 DECISION: User: answers sent from a page or a question form while the agent is busy wait or queue like a normal chat send instead of ending up in the agent's input box to be sent again by hand. They go into the session's chat queue, which types them only once the agent has been idle and unblocked for a moment, so they arrive as a turn of their own and are never mixed into, or handed back from, the agent's own input queue.
+    let queue_state = state.clone();
+    let queued = tokio::task::spawn_blocking(move || {
+        let mut params = serde_json::Map::new();
+        params.insert("projectId".to_string(), json!(project_id));
+        params.insert("sessionId".to_string(), json!(session_id));
+        params.insert("text".to_string(), json!(message));
+        crate::session_chat_queue::handle_session_chat_queue_endpoint(
+            &queue_state.paths,
+            queue_state.metadata.server_id.as_str(),
+            "/api/queueSessionChatPrompt",
+            &params,
         )
-        .await;
-        let error = if routed.response.status().is_success() {
+        .map(|result| (result.broadcast, project_id, session_id))
+        .map_err(|error| error.message)
+    })
+    .await
+    .unwrap_or_else(|_| Err("The answers could not be queued.".to_string()));
+    let error = match queued {
+        Ok((broadcast, project_id, session_id)) => {
+            if broadcast {
+                crate::session_chat_queue_runtime::broadcast_session_chat_queue_state(
+                    &state,
+                    &project_id,
+                    &session_id,
+                );
+            }
             None
-        } else {
-            let bytes = axum::body::to_bytes(routed.response.into_body(), 16 * 1024)
-                .await
-                .unwrap_or_default();
-            Some(String::from_utf8_lossy(&bytes).to_string())
-        };
-        let state_dir = delivery_state.paths.root_dir.clone();
-        let _ =
-            tokio::task::spawn_blocking(move || note_delivery(&state_dir, &id, error.as_deref()))
-                .await;
-    });
-    reply(
-        StatusCode::OK,
-        json!({"ok": true, "answeredAt": answered_at, "delivered": true}),
-    )
+        }
+        Err(error) => Some(error),
+    };
+    let state_dir = state.paths.root_dir.clone();
+    let noted = error.clone();
+    let _ =
+        tokio::task::spawn_blocking(move || note_delivery(&state_dir, &id, noted.as_deref())).await;
+    match error {
+        None => reply(
+            StatusCode::OK,
+            json!({"ok": true, "answeredAt": answered_at, "queued": true}),
+        ),
+        Some(error) => reply(
+            StatusCode::OK,
+            json!({"ok": true, "answeredAt": answered_at, "queued": false,
+                   "error": format!("Saved, but the agent was not told: {error}")}),
+        ),
+    }
 }
 
 /// The message the publishing agent receives.
