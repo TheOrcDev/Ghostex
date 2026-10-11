@@ -39,6 +39,7 @@ pub(crate) fn read_options(
                 message: "Invalid chat option selection.".into(),
             })?;
     let valid_mode = options.mode.as_deref().is_none_or(|mode| match provider {
+        "opencode" => !mode.trim().is_empty() && mode.len() <= 160,
         "codex" => matches!(mode, "plan" | "default"),
         "claude" => matches!(mode, "bypass" | "auto" | "manual" | "accept-edits" | "plan"),
         _ => false,
@@ -62,6 +63,45 @@ pub(crate) async fn selection_requested() {
     SELECTION_REQUESTED.notified().await;
 }
 
+pub(crate) const SCOPE_SESSION: &str = "session";
+pub(crate) const SCOPE_DEFAULT: &str = "default";
+
+/// CDXC:SessionChat 2026-09-27 DECISION:
+/// User: a chat model pick can apply to this session alone instead of changing the agent's saved default (2026-09-18), and Codex uses its own session choice too (2026-09-27).
+/// Claude's `/model` list answers `s` with "for this session only"; Codex 0.157 added `s session` to its reasoning lists, answered with "for this conversation". This supersedes Claude-only session picks, from when confirming Codex's picker always rewrote `model` and `model_reasoning_effort` in `~/.codex/config.toml`; an older Codex refuses the session pick instead of saving the default.
+/// An absent scope stays `default`, so a client that predates the field keeps its old behaviour.
+/// SEE-ALSO: server/src/session_chat_codex_picker.rs drives both scopes, packages/shared/session-chat-agents.ts carries the wire type.
+pub(crate) fn read_scope(
+    provider: &str,
+    params: &Map<String, Value>,
+) -> Result<String, DomainStateError> {
+    let scope = params
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(SCOPE_DEFAULT);
+    if provider == "opencode" && matches!(scope, SCOPE_DEFAULT | SCOPE_SESSION) {
+        return Ok(scope.to_string());
+    }
+    if scope == SCOPE_DEFAULT {
+        return Ok(SCOPE_DEFAULT.to_string());
+    }
+    if scope != SCOPE_SESSION {
+        return Err(DomainStateError {
+            code: "invalidParams",
+            message: "A model selection scope is either session or default.".into(),
+        });
+    }
+    if !matches!(provider, "claude" | "codex") {
+        return Err(DomainStateError {
+            code: "invalidParams",
+            message: "This agent's model picker always saves the choice as its default.".into(),
+        });
+    }
+    Ok(SCOPE_SESSION.to_string())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingModelSelection {
@@ -69,6 +109,8 @@ pub struct PendingModelSelection {
     pub model: String,
     pub effort: String,
     pub options: SelectionOptions,
+    /// Always serialized so a client can tell a scope-aware daemon from one that dropped the field.
+    pub scope: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
@@ -95,10 +137,17 @@ pub fn read_pending(
     session: &str,
 ) -> Option<PendingModelSelection> {
     db.query_row(
-        "SELECT selectionId, model, effort, state, errorMessage, retryAt, options FROM session_chat_model_selections WHERE projectId = ?1 AND sessionId = ?2",
+        "SELECT selectionId, model, effort, state, errorMessage, retryAt, options, scope FROM session_chat_model_selections WHERE projectId = ?1 AND sessionId = ?2",
         params![project, session],
-        |row| Ok(PendingModelSelection { id: row.get(0)?, model: row.get(1)?, effort: row.get(2)?, state: row.get(3)?, error_message: row.get(4)?, retry_at: row.get(5)?, options: serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error)))? }),
+        |row| Ok(PendingModelSelection { id: row.get(0)?, model: row.get(1)?, effort: row.get(2)?, state: row.get(3)?, error_message: row.get(4)?, retry_at: row.get(5)?, options: serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error)))?, scope: row.get(7)? }),
     ).optional().ok().flatten()
+}
+
+/// Whether a model or option change is waiting, applying or failed for this session; a new chat
+/// message then waits behind it.
+pub(crate) fn has_pending_selection(state: &AppState, project: &str, session: &str) -> bool {
+    open_gxserver_database(&state.paths)
+        .is_ok_and(|db| read_pending(&db, project, session).is_some())
 }
 
 /// The published catalog can grow without rebuilding gxserver; the terminal is the authority on availability.
@@ -112,11 +161,20 @@ pub(crate) fn validate_selection(
             && value.len() <= 160
             && value
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-._[]():/".contains(&byte))
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._[]():/@+".contains(&byte))
     };
     if !matches!(
         provider,
-        "codex" | "claude" | "cursor" | "grok" | "antigravity"
+        "codex"
+            | "claude"
+            | "cursor"
+            | "grok"
+            | "antigravity"
+            | "opencode"
+            | "hermes"
+            | "pi"
+            | "omp"
+            | "empryo"
     ) || !token(model)
         || (!effort.is_empty() && !token(effort))
     {
@@ -167,9 +225,10 @@ pub(crate) fn enqueue(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let incoming_options = read_options(&provider, params)?;
+    let scope = read_scope(&provider, params)?;
     if !model.is_empty() || incoming_options.is_empty() {
         validate_selection(&provider, model, effort)?;
-    } else if !matches!(provider.as_str(), "codex" | "claude") || !effort.is_empty() {
+    } else if !matches!(provider.as_str(), "codex" | "claude" | "opencode") || !effort.is_empty() {
         return Err(DomainStateError {
             code: "invalidParams",
             message: "An effort change requires its model.".into(),
@@ -179,7 +238,12 @@ pub(crate) fn enqueue(
     let transaction =
         rusqlite::Transaction::new_unchecked(&db, rusqlite::TransactionBehavior::Immediate)
             .map_err(storage_error)?;
-    let previous = read_pending(&transaction, project, session_id);
+    // CDXC:SessionChat 2026-09-29 WHY:
+    // A failed change never reached the agent and never will, so a new pick replaces it instead of
+    // merging into it: inheriting a Fast mode the account cannot turn on made every later Mode or
+    // model pick fail on that toggle again, and the pick itself was never applied.
+    let previous =
+        read_pending(&transaction, project, session_id).filter(|pending| pending.state != "failed");
     let model = if model.is_empty() {
         previous
             .as_ref()
@@ -209,12 +273,35 @@ pub(crate) fn enqueue(
     if incoming_options.fast_mode.is_some() {
         options.fast_mode = incoming_options.fast_mode;
     }
+    // CDXC:SessionChat 2026-09-19 WHY:
+    // Only a request that names a model carries a scope of its own; an absent one means `default`
+    // even while a session-only pick is pending, so an older client keeps its old behaviour. An
+    // options-only change keeps the pending model choice's scope so it cannot turn a session-only
+    // pick into a default one, and with no pending choice it is `default`: a session-only row without
+    // a model would be refused by the driver and retried every five seconds forever.
+    let replaces_model = !params
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .is_empty();
+    let scope = if replaces_model {
+        scope
+    } else {
+        previous
+            .as_ref()
+            .map_or(SCOPE_DEFAULT, |pending| pending.scope.as_str())
+            .to_string()
+    };
     let id = uuid::Uuid::new_v4().to_string();
     transaction.execute(
-        "INSERT INTO session_chat_model_selections (projectId, sessionId, selectionId, model, effort, state, retryAt, options) VALUES (?1, ?2, ?3, ?4, ?5, 'queued', 0, ?6) ON CONFLICT(projectId, sessionId) DO UPDATE SET selectionId = excluded.selectionId, model = excluded.model, effort = excluded.effort, options = excluded.options, state = 'queued', errorMessage = NULL, retryAt = 0",
-        params![project, session_id, id, model, effort, serde_json::to_string(&options).map_err(storage_error)?],
+        "INSERT INTO session_chat_model_selections (projectId, sessionId, selectionId, model, effort, state, retryAt, options, scope) VALUES (?1, ?2, ?3, ?4, ?5, 'queued', 0, ?6, ?7) ON CONFLICT(projectId, sessionId) DO UPDATE SET selectionId = excluded.selectionId, model = excluded.model, effort = excluded.effort, options = excluded.options, scope = excluded.scope, state = 'queued', errorMessage = NULL, retryAt = 0",
+        params![project, session_id, id, model, effort, serde_json::to_string(&options).map_err(storage_error)?, scope],
     ).map_err(storage_error)?;
     transaction.commit().map_err(storage_error)?;
+    // A new pick is a new attempt; a failure it meets marks the session again.
+    crate::session_chat_model_selection_alert::clear_model_selection_failure(
+        state, project, session_id,
+    );
     let pending = read_pending(&db, &project, &session_id);
     crate::session_chat_queue_runtime::broadcast_session_chat_queue_state(
         state,
@@ -223,7 +310,7 @@ pub(crate) fn enqueue(
     );
     SELECTION_REQUESTED.notify_one();
     Ok(
-        json!({ "ok": true, "model": model, "effort": effort, "queued": true, "pendingModelSelection": pending }),
+        json!({ "ok": true, "model": model, "effort": effort, "scope": scope, "queued": true, "pendingModelSelection": pending }),
     )
 }
 
@@ -242,20 +329,47 @@ pub(crate) fn sender(state: &Arc<AppState>) -> ModelSelectionSender {
             crate::session_chat_queue_runtime::broadcast_session_chat_queue_state(
                 &state, &project, &session,
             );
-            let params = json!({ "projectId": project, "sessionId": session, "model": pending.model, "effort": pending.effort, "options": pending.options });
+            let params = json!({ "projectId": project, "sessionId": session, "model": pending.model, "effort": pending.effort, "options": pending.options, "scope": pending.scope });
             let result = crate::session_chat_codex_picker::select_session_chat_model(
                 &state,
                 params.as_object().unwrap(),
             )
             .await;
+            let final_failure = result.as_ref().is_err_and(|error| {
+                error.code == crate::session_chat_codex_picker::UNSUPPORTED_SELECTION_CODE
+            });
             if let Ok(db) = open_gxserver_database(&state.paths) {
-                match result {
+                match &result {
                     Ok(_) => {
                         let _ = db.execute("DELETE FROM session_chat_model_selections WHERE projectId = ?1 AND sessionId = ?2 AND selectionId = ?3", params![project, session, pending.id]);
+                    }
+                    // CDXC:SessionChat 2026-09-18 WHY:
+                    // A selection the terminal can never accept stops here instead of retrying:
+                    // one model the CLI does not list for an account retyped `/model` into the
+                    // user's pane 181 times. The row stays to carry its reason to the chat, and
+                    // `failed` keeps it out of delivery, wake-keeping and the desired model.
+                    Err(error) if final_failure => {
+                        let _ = db.execute("UPDATE session_chat_model_selections SET state = 'failed', errorMessage = ?4, retryAt = 0 WHERE projectId = ?1 AND sessionId = ?2 AND selectionId = ?3", params![project, session, pending.id, error.message]);
                     }
                     Err(error) => {
                         let _ = db.execute("UPDATE session_chat_model_selections SET state = 'queued', errorMessage = ?4, retryAt = ?5 WHERE projectId = ?1 AND sessionId = ?2 AND selectionId = ?3", params![project, session, pending.id, error.message, chrono::Utc::now().timestamp_millis() + 5_000]);
                     }
+                }
+            }
+            match &result {
+                Ok(_) => crate::session_chat_model_selection_alert::clear_model_selection_failure(
+                    &state, &project, &session,
+                ),
+                Err(error) => {
+                    crate::session_chat_model_selection_alert::note_model_selection_failure(
+                        &state,
+                        &project,
+                        &session,
+                        &pending,
+                        error,
+                        final_failure,
+                    )
+                    .await
                 }
             }
             crate::session_chat_queue_runtime::broadcast_session_chat_queue_state(

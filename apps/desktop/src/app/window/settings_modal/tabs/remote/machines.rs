@@ -1,0 +1,1139 @@
+//! Remote machines: the compact tile grid (remote-machine-grid.tsx (deleted 2026-10-01)) and the Add a machine / edit
+//! dialog with its fields (remote-machine-dialog.tsx (deleted 2026-10-01), remote-machine-fields.tsx (deleted 2026-10-01)).
+//!
+//! CDXC:RemotePairing 2026-09-03 DECISION:
+//! User: "simplify the machines area here like we simplified it in the mobile app exactly. It has too much info here. No need to show all available machines and a card for creating a new machine. just make it show 4 compact cards with ability to hide a machine from sidebar (disable toggle). and when i click on one of the machines then show that machine's details as a pop up in settings so i can edit it. First compact card needs to be 'Add a machine'".
+//! The grid mirrors the mobile MachineCard: icon tile, name, one `user@host` (or "Easy Connect") line, and a Show-in-sidebar switch where the phone has its chevron. The switch is a sibling of the tile's button, so flipping it never opens the editor; a hidden machine renders dimmed. Every saved machine is listed; "4" is the column count, not a cap.
+//!
+//! CDXC:RemotePairing 2026-09-03 DECISION:
+//! User: clicking a machine card shows "that machine's details as a pop up in settings so i can edit it", with "a dark overlay on the settings main area and sidebar (fully)" that closes the pop-up when clicked.
+//! The dialog owns the draft while open and writes Settings.remoteMachines only on Save. Passwords keep their one-shot keychain path: the save icon posts immediately, and Save flushes a password still sitting in the field (CDXC:RemoteMachines 2026-06-09: the settings JSON never retains the secret).
+use super::super::super::super::native_modal_kit::*;
+use super::super::super::fields::{
+    ButtonSize, ButtonVariant, icon, settings_button_sized, settings_icon, settings_icon_button,
+    settings_switch, tooltip_text,
+};
+use super::model::*;
+use super::style::*;
+use super::{HEADER_GAP, RemoteTab, management_header};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyElement, AppContext as _, ClickEvent, Context, Entity, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
+};
+use gpui_component::input::{InputEvent, InputState};
+use gpui_component::{h_flex, v_flex};
+use serde_json::{Value, json};
+
+/// The dialog's inputs, one per field.
+struct DialogInputs {
+    code: Entity<InputState>,
+    name: Entity<InputState>,
+    host: Entity<InputState>,
+    user: Entity<InputState>,
+    password: Entity<InputState>,
+    port: Entity<InputState>,
+    identity: Entity<InputState>,
+    wsl: Entity<InputState>,
+}
+
+/// Which draft field an input edits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DraftField {
+    Code,
+    Name,
+    Host,
+    User,
+    Password,
+    Port,
+    Identity,
+    Wsl,
+}
+
+impl DraftField {
+    /// The input's `maxLength`.
+    fn max_length(self) -> usize {
+        match self {
+            Self::Code => 4000,
+            Self::Name => 80,
+            Self::Host => 200,
+            Self::User => 120,
+            Self::Password => 500,
+            Self::Port => 5,
+            Self::Identity => 500,
+            Self::Wsl => 120,
+        }
+    }
+}
+
+/// The open Add a machine / edit dialog (`RemoteMachineDialogContent`).
+pub(crate) struct MachineDialog {
+    /// The saved machine being edited; `None` for Add a machine.
+    machine_id: Option<String>,
+    machine_name: String,
+    draft: MachineDraft,
+    advanced_open: bool,
+    focus: FocusHandle,
+    inputs: DialogInputs,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl RemoteTab {
+    /// Opens the dialog on `machine` (edit) or empty (Add a machine).
+    pub(super) fn open_machine_dialog(
+        &mut self,
+        machine: Option<&Value>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let draft = match machine {
+            Some(machine) => machine_draft_from_settings(machine),
+            None => create_remote_machine_draft(),
+        };
+        let make = |field: DraftField,
+                    value: &str,
+                    placeholder: &str,
+                    window: &mut Window,
+                    cx: &mut Context<Self>| {
+            let value = value.to_string();
+            let placeholder = placeholder.to_string();
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .masked(field == DraftField::Password)
+                    .default_value(value)
+            })
+        };
+        let inputs = DialogInputs {
+            code: make(
+                DraftField::Code,
+                &draft.easy_connect_code,
+                "Paste the code copied from the other computer",
+                window,
+                cx,
+            ),
+            name: make(DraftField::Name, &draft.name, "Machine one", window, cx),
+            host: make(DraftField::Host, &draft.ssh_host, "100.77.81.4", window, cx),
+            user: make(
+                DraftField::User,
+                &draft.ssh_user,
+                "machine username",
+                window,
+                cx,
+            ),
+            password: make(
+                DraftField::Password,
+                "",
+                if draft.ssh_password_saved {
+                    "Saved in Keychain"
+                } else {
+                    "SSH password"
+                },
+                window,
+                cx,
+            ),
+            port: make(DraftField::Port, &draft.ssh_port, "22", window, cx),
+            identity: make(
+                DraftField::Identity,
+                &draft.ssh_identity_file,
+                "~/.ssh/id_ed25519",
+                window,
+                cx,
+            ),
+            wsl: make(
+                DraftField::Wsl,
+                &draft.wsl_distribution,
+                "Ubuntu-24.04",
+                window,
+                cx,
+            ),
+        };
+        let mut subscriptions = Vec::new();
+        for (field, input) in [
+            (DraftField::Code, &inputs.code),
+            (DraftField::Name, &inputs.name),
+            (DraftField::Host, &inputs.host),
+            (DraftField::User, &inputs.user),
+            (DraftField::Password, &inputs.password),
+            (DraftField::Port, &inputs.port),
+            (DraftField::Identity, &inputs.identity),
+            (DraftField::Wsl, &inputs.wsl),
+        ] {
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |tab: &mut Self, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let text = input.read(cx).value().to_string();
+                        tab.dialog_field_changed(field, text, input.clone(), window, cx);
+                    }
+                },
+            ));
+        }
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.machine_dialog = Some(MachineDialog {
+            machine_id: machine.and_then(|machine| {
+                machine
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+            machine_name: machine
+                .and_then(|machine| machine.get("name").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string(),
+            draft,
+            advanced_open: false,
+            focus,
+            inputs,
+            _subscriptions: subscriptions,
+        });
+        cx.notify();
+    }
+
+    fn close_machine_dialog(&mut self, cx: &mut Context<Self>) {
+        self.machine_dialog = None;
+        cx.notify();
+    }
+
+    /// One field's `onChange`: the draft follows it, clipped to its `maxLength` (and digits only
+    /// for the port); a pasted Easy Connect code fills the name, user and port it carries.
+    fn dialog_field_changed(
+        &mut self,
+        field: DraftField,
+        text: String,
+        input: Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut next: String = if field == DraftField::Port {
+            text.chars().filter(char::is_ascii_digit).collect()
+        } else {
+            text.clone()
+        };
+        if next.chars().count() > field.max_length() {
+            next = next.chars().take(field.max_length()).collect();
+        }
+        if next != text {
+            let value = next.clone();
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        let Some(dialog) = self.machine_dialog.as_mut() else {
+            return;
+        };
+        match field {
+            DraftField::Code => {
+                apply_easy_connect_code(&mut dialog.draft, &next);
+                // The code brings the name, user and port with it.
+                let draft = dialog.draft.clone();
+                for (input, value) in [
+                    (&dialog.inputs.name, draft.name.clone()),
+                    (&dialog.inputs.user, draft.ssh_user.clone()),
+                    (&dialog.inputs.port, draft.ssh_port.clone()),
+                ] {
+                    if input.read(cx).value().as_ref() != value {
+                        input.update(cx, |input, cx| input.set_value(value, window, cx));
+                    }
+                }
+            }
+            DraftField::Name => dialog.draft.name = next,
+            DraftField::Host => dialog.draft.ssh_host = next,
+            DraftField::User => dialog.draft.ssh_user = next,
+            DraftField::Password => dialog.draft.ssh_password = next,
+            DraftField::Port => dialog.draft.ssh_port = next,
+            DraftField::Identity => dialog.draft.ssh_identity_file = next,
+            DraftField::Wsl => dialog.draft.wsl_distribution = next,
+        }
+        cx.notify();
+    }
+
+    /// `setTransport`: switching modes keeps the shared fields and drops only the other mode's
+    /// address.
+    fn set_dialog_transport(
+        &mut self,
+        easy_connect: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.machine_dialog.as_mut() else {
+            return;
+        };
+        dialog.draft.easy_connect = easy_connect;
+        let cleared = if easy_connect {
+            dialog.draft.ssh_host.clear();
+            dialog.draft.ssh_port.clear();
+            vec![&dialog.inputs.host, &dialog.inputs.port]
+        } else {
+            dialog.draft.easy_connect_code.clear();
+            dialog.draft.easy_connect_address.clear();
+            vec![&dialog.inputs.code]
+        };
+        for input in cleared {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
+    /// `savePassword`: the one-shot keychain save of the edit dialog's floppy button.
+    fn save_dialog_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.machine_dialog.as_mut() else {
+            return;
+        };
+        let Some(machine_id) = dialog.machine_id.clone() else {
+            return;
+        };
+        let password = dialog.draft.ssh_password.clone();
+        let was_saved = self
+            .remote_machines(cx)
+            .iter()
+            .find(|machine| machine.get("id").and_then(Value::as_str) == Some(machine_id.as_str()))
+            .is_some_and(|machine| {
+                machine.get("sshPasswordSaved").and_then(Value::as_bool) == Some(true)
+            });
+        if password.is_empty() && !was_saved {
+            return;
+        }
+        let Some(dialog) = self.machine_dialog.as_mut() else {
+            return;
+        };
+        dialog.draft.ssh_password.clear();
+        dialog.draft.ssh_password_saved = !password.trim().is_empty();
+        let saved = dialog.draft.ssh_password_saved;
+        let input = dialog.inputs.password.clone();
+        input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder(
+                if saved {
+                    "Saved in Keychain"
+                } else {
+                    "SSH password"
+                },
+                window,
+                cx,
+            );
+        });
+        self.post(
+            json!({ "password": password, "remoteMachineId": machine_id, "type": "saveRemoteMachinePassword" }),
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// `saveMachine`: replaces or appends the machine, then sends a password still in the field.
+    fn save_dialog_machine(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.machine_dialog.as_ref() else {
+            return;
+        };
+        let Some(machine) = normalize_remote_machine_draft(&dialog.draft) else {
+            return;
+        };
+        let password = dialog.draft.ssh_password.clone();
+        let id = machine
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut machines = self.remote_machines(cx);
+        match machines
+            .iter()
+            .position(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id.as_str()))
+        {
+            Some(index) => machines[index] = machine,
+            None => machines.push(machine),
+        }
+        self.save_remote_machines(normalize_remote_machines(&Value::Array(machines)), cx);
+        if !password.trim().is_empty() {
+            self.post(
+                json!({ "password": password, "remoteMachineId": id, "type": "saveRemoteMachinePassword" }),
+                cx,
+            );
+        }
+        self.close_machine_dialog(cx);
+    }
+
+    fn remove_machine(&mut self, machine_id: String, cx: &mut Context<Self>) {
+        let machines: Vec<Value> = self
+            .remote_machines(cx)
+            .into_iter()
+            .filter(|machine| {
+                machine.get("id").and_then(Value::as_str) != Some(machine_id.as_str())
+            })
+            .collect();
+        self.save_remote_machines(machines, cx);
+        self.close_machine_dialog(cx);
+    }
+
+    /// `setMachineVisible`: the tile switch writes `disabled`.
+    fn set_machine_visible(&mut self, machine_id: &str, visible: bool, cx: &mut Context<Self>) {
+        let machines: Vec<Value> = self
+            .remote_machines(cx)
+            .into_iter()
+            .map(|mut machine| {
+                if machine.get("id").and_then(Value::as_str) == Some(machine_id) {
+                    machine["disabled"] = json!(!visible);
+                }
+                machine
+            })
+            .collect();
+        self.save_remote_machines(normalize_remote_machines(&Value::Array(machines)), cx);
+    }
+}
+
+/// The preview binary's `remote-add-ec` state: Easy Connect code mode with a code pasted.
+pub(super) fn preview_paste_easy_connect_code(
+    tab: &mut RemoteTab,
+    window: &mut Window,
+    cx: &mut Context<RemoteTab>,
+) {
+    tab.set_dialog_transport(true, window, cx);
+    let Some(input) = tab
+        .machine_dialog
+        .as_ref()
+        .map(|dialog| dialog.inputs.code.clone())
+    else {
+        return;
+    };
+    let code = json!({
+        "v": 1,
+        "address": "tc1q8v3k2m9x7p4r6t8w1y5z2a4c6e8g0j3l5n7q9s1u3w5y7a9c1e3g5i7k9m1o3q5s7u9w1y3",
+        "name": "Studio",
+        "user": "madda",
+        "port": 58744,
+        "sshPort": 22,
+    });
+    let payload = {
+        use base64::Engine as _;
+        format!(
+            "ghostex-ec1:{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_string(&code).unwrap_or_default())
+        )
+    };
+    input.update(cx, |input, cx| input.set_value(payload.clone(), window, cx));
+    tab.dialog_field_changed(DraftField::Code, payload, input, window, cx);
+}
+
+/// "Remote machines": the header and the tile grid.
+pub(super) fn machines_section(
+    tab: &mut RemoteTab,
+    t: &RemoteTokens,
+    _window: &mut Window,
+    cx: &mut Context<RemoteTab>,
+) -> AnyElement {
+    let machines = tab.remote_machines(cx);
+    // An edited machine that went away closes its dialog.
+    if let Some(dialog) = tab.machine_dialog.as_ref()
+        && let Some(id) = dialog.machine_id.as_deref()
+        && !machines
+            .iter()
+            .any(|machine| machine.get("id").and_then(Value::as_str) == Some(id))
+    {
+        tab.machine_dialog = None;
+    }
+    let mut tiles = vec![add_tile(t, cx)];
+    tiles.extend(machines.iter().map(|machine| machine_tile(t, machine, cx)));
+    let mut rows = Vec::new();
+    let mut tiles = tiles.into_iter().peekable();
+    while tiles.peek().is_some() {
+        let mut row = h_flex().w_full().gap(px(8.0)).items_stretch();
+        let mut count = 0;
+        for tile in tiles.by_ref().take(4) {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .flex_basis(px(0.0))
+                    .min_w_0()
+                    .flex()
+                    .child(tile),
+            );
+            count += 1;
+        }
+        for _ in count..4 {
+            row = row.child(div().flex_1().flex_basis(px(0.0)).min_w_0());
+        }
+        rows.push(row);
+    }
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(px(HEADER_GAP))
+        .child(management_header(
+            t,
+            "Remote machines",
+            "Other computers this one connects to, over SSH or with an Easy Connect code. Their projects show up as separate sidebar sections; the switch hides a machine from the sidebar without deleting it.",
+        ))
+        .child(v_flex().w_full().gap(px(8.0)).children(rows))
+        .into_any_element()
+}
+
+/// The 32px icon tile of a machine tile.
+fn tile_icon(t: &RemoteTokens, path: &'static str) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .size(px(32.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(hsla(t.edge(0.76)))
+        .bg(hsla(t.card(0.58)))
+        .child(settings_icon(
+            path,
+            18.0,
+            css_mix(t.muted, 0.70, t.foreground),
+        ))
+        .into_any_element()
+}
+
+fn tile_text(t: &RemoteTokens, title: String, detail_text: String) -> AnyElement {
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(2.0))
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(14.0))
+                .line_height(px(20.0))
+                .text_color(hsla(t.foreground))
+                .child(title),
+        )
+        .child(detail(t, detail_text, false))
+        .into_any_element()
+}
+
+fn add_tile(t: &RemoteTokens, cx: &mut Context<RemoteTab>) -> AnyElement {
+    let hover = t.card(0.58);
+    h_flex()
+        .id("remote-add-machine-tile")
+        .w_full()
+        .min_w_0()
+        .min_h(px(60.0))
+        .px(px(12.0))
+        .py(px(10.0))
+        .gap(px(8.0))
+        .items_center()
+        .rounded(px(MODAL_RADIUS_SECTION))
+        .border_1()
+        .border_dashed()
+        .border_color(hsla(t.edge(0.92)))
+        .bg(hsla(t.card(0.38)))
+        .cursor_pointer()
+        .hover(move |this| this.bg(hsla(hover)))
+        .on_click(cx.listener(|tab, _: &ClickEvent, window, cx| {
+            tab.open_machine_dialog(None, window, cx);
+        }))
+        .child(tile_icon(t, icon::PLUS))
+        .child(tile_text(
+            t,
+            "Add a machine".to_string(),
+            "SSH details or an Easy Connect code".to_string(),
+        ))
+        .into_any_element()
+}
+
+fn machine_tile(t: &RemoteTokens, machine: &Value, cx: &mut Context<RemoteTab>) -> AnyElement {
+    let id = machine
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let name = machine
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let visible = machine.get("disabled").and_then(Value::as_bool) != Some(true);
+    let hover = t.card(0.58);
+    let open_machine = machine.clone();
+    let switch_id = id.clone();
+    h_flex()
+        .id(SharedString::from(format!("remote-machine-tile-{id}")))
+        .w_full()
+        .min_w_0()
+        .min_h(px(60.0))
+        .pr(px(10.0))
+        .gap(px(8.0))
+        .items_center()
+        .rounded(px(MODAL_RADIUS_SECTION))
+        .border_1()
+        .border_color(hsla(t.edge(0.92)))
+        .bg(hsla(t.card(0.38)))
+        .hover(move |this| this.bg(hsla(hover)))
+        .child(
+            h_flex()
+                .id(SharedString::from(format!("remote-machine-open-{id}")))
+                .flex_1()
+                .min_w_0()
+                .pl(px(12.0))
+                .py(px(10.0))
+                .gap(px(10.0))
+                .items_center()
+                .cursor_pointer()
+                .when(!visible, |this| this.opacity(0.55))
+                .on_click(cx.listener(move |tab, _: &ClickEvent, window, cx| {
+                    tab.open_machine_dialog(Some(&open_machine), window, cx);
+                }))
+                .child(tile_icon(t, ICON_DEVICE_DESKTOP))
+                .child(tile_text(
+                    t,
+                    name,
+                    format_remote_machine_ssh_target(machine),
+                )),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("remote-machine-switch-{id}")))
+                .flex_shrink_0()
+                .cursor_pointer()
+                .on_click(cx.listener(move |tab, _: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    tab.set_machine_visible(&switch_id, !visible, cx);
+                }))
+                .child(small_switch(&t.p, visible)),
+        )
+        .into_any_element()
+}
+
+// ---- the dialog ------------------------------------------------------------------------------------
+
+/// A labelled field (`Field` + `FieldLabel` + control + `FieldDescription`).
+fn field(
+    t: &RemoteTokens,
+    colors: &DialogColors,
+    label: &'static str,
+    control: AnyElement,
+    description: Option<(String, Option<gpui::Rgba>)>,
+) -> AnyElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(px(6.0))
+        .child(
+            div()
+                .text_size(px(14.0))
+                .line_height(px(19.25))
+                .text_color(hsla(t.muted))
+                .child(label),
+        )
+        .child(control)
+        .children(description.map(|(text, color)| {
+            div()
+                .w_full()
+                .text_size(px(13.0))
+                .line_height(px(18.85))
+                .text_color(hsla(color.unwrap_or(colors.muted)))
+                .child(text)
+        }))
+        .into_any_element()
+}
+
+pub(super) fn machine_dialog(
+    tab: &mut RemoteTab,
+    t: &RemoteTokens,
+    window: &mut Window,
+    cx: &mut Context<RemoteTab>,
+) -> Option<AnyElement> {
+    let dialog = tab.machine_dialog.as_ref()?;
+    let colors = dialog_colors(t);
+    let p = t.p;
+    let is_new = dialog.machine_id.is_none();
+    let draft = dialog.draft.clone();
+    let advanced_open = dialog.advanced_open;
+    let focus = dialog.focus.clone();
+    let machine_id = dialog.machine_id.clone();
+    let title = if is_new {
+        "Add a machine".to_string()
+    } else {
+        dialog.machine_name.clone()
+    };
+    let inputs = (
+        dialog.inputs.code.clone(),
+        dialog.inputs.name.clone(),
+        dialog.inputs.host.clone(),
+        dialog.inputs.user.clone(),
+        dialog.inputs.password.clone(),
+        dialog.inputs.port.clone(),
+        dialog.inputs.identity.clone(),
+        dialog.inputs.wsl.clone(),
+    );
+    let (
+        code_input,
+        name_input,
+        host_input,
+        user_input,
+        password_input,
+        port_input,
+        identity_input,
+        wsl_input,
+    ) = inputs;
+    let input = |state: &Entity<InputState>, window: &Window, cx: &gpui::App| {
+        remote_input(&p, state, 32.0, 10.0, None, false, false, window, cx)
+    };
+    let easy_connect = draft.easy_connect;
+    let code_reading = if easy_connect {
+        Some(if !draft.easy_connect_code.trim().is_empty() {
+            read_easy_connect_code_input(&draft.easy_connect_code)
+        } else if !draft.easy_connect_address.is_empty() {
+            CodeReading::Accepted {
+                address: draft.easy_connect_address.clone(),
+                name: None,
+                user: None,
+                ssh_port: None,
+                summary: "Paired through Easy Connect.".to_string(),
+            }
+        } else {
+            CodeReading::Empty
+        })
+    } else {
+        None
+    };
+    let normalized = normalize_remote_machine_draft(&draft);
+    let can_save = normalized.is_some();
+    let save_reason = if easy_connect {
+        if matches!(
+            read_easy_connect_code_input(&draft.easy_connect_code),
+            CodeReading::Accepted { .. }
+        ) || !draft.easy_connect_address.is_empty()
+        {
+            "Enter a machine name first."
+        } else {
+            "Paste a valid Easy Connect code first."
+        }
+    } else if !draft.name.trim().is_empty() && !draft.ssh_host.trim().is_empty() {
+        "Check the WSL distribution name."
+    } else {
+        "Enter a machine name and SSH host first."
+    };
+    let has_endpoint = if easy_connect {
+        !draft.easy_connect_address.is_empty()
+    } else {
+        !draft.ssh_host.trim().is_empty()
+    };
+    let install = machine_id
+        .as_ref()
+        .and_then(|id| tab.installs.get(id).cloned());
+
+    let mut fields: Vec<AnyElement> = Vec::new();
+    if !is_new {
+        let visible = !draft.disabled;
+        fields.push(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(px(12.0))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .line_height(px(19.25))
+                                .text_color(hsla(t.muted))
+                                .child("Show in sidebar"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .line_height(px(18.85))
+                                .text_color(hsla(colors.muted))
+                                .child("Turn off to hide this machine from the sidebar without deleting it."),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("remote-machine-dialog-visible")
+                        .flex_shrink_0()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |tab, _: &ClickEvent, _window, cx| {
+                            if let Some(dialog) = tab.machine_dialog.as_mut() {
+                                dialog.draft.disabled = visible;
+                            }
+                            cx.notify();
+                        }))
+                        .child(settings_switch(&p, visible, false)),
+                )
+                .into_any_element(),
+        );
+    }
+    if let Some(reading) = &code_reading {
+        let (text, color) = match reading {
+            CodeReading::Accepted { summary, .. } => (
+                summary.clone(),
+                Some(css_mix(gpui::rgb(0x4ade80), 0.78, t.foreground)),
+            ),
+            CodeReading::Rejected(reason) => (
+                reason.clone(),
+                Some(css_mix(gpui::rgb(0xf87171), 0.82, t.foreground)),
+            ),
+            CodeReading::Empty => (
+                "On the other computer, open Settings → Remote → Easy Connect → Connect a Remote machine and click \"Copy Easy Connect code\".".to_string(),
+                None,
+            ),
+        };
+        fields.push(field(
+            t,
+            &colors,
+            "Easy Connect code",
+            input(&code_input, window, cx),
+            Some((text, color)),
+        ));
+    }
+    fields.push(field(
+        t,
+        &colors,
+        "Name",
+        input(&name_input, window, cx),
+        None,
+    ));
+    if !easy_connect {
+        fields.push(field(
+            t,
+            &colors,
+            "SSH host",
+            input(&host_input, window, cx),
+            None,
+        ));
+    }
+    fields.push(field(
+        t,
+        &colors,
+        "SSH username",
+        input(&user_input, window, cx),
+        Some((
+            "The account you sign in with on the other computer.".to_string(),
+            None,
+        )),
+    ));
+    let password_row = if is_new {
+        input(&password_input, window, cx)
+    } else {
+        let can_save_password = !draft.ssh_password.trim().is_empty() || draft.ssh_password_saved;
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .child(input(&password_input, window, cx)),
+            )
+            .child(
+                div()
+                    .id("remote-machine-password-save-tooltip")
+                    .flex_shrink_0()
+                    .w(px(34.0))
+                    .flex()
+                    .justify_center()
+                    .when(!can_save_password, |this| {
+                        this.tooltip(tooltip_text("Enter a password to save first."))
+                    })
+                    .child(settings_icon_button(
+                        &p,
+                        "remote-machine-password-save",
+                        ICON_DEVICE_FLOPPY,
+                        16.0,
+                        28.0,
+                        ButtonVariant::Secondary,
+                        None,
+                        !can_save_password,
+                        |tab: &mut RemoteTab, window, cx| tab.save_dialog_password(window, cx),
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    };
+    fields.push(field(
+        t,
+        &colors,
+        "SSH password",
+        password_row,
+        Some((
+            if is_new {
+                "Use the password for this username on the other computer. If you already use SSH keys, leave this blank and set the key under Advanced.".to_string()
+            } else {
+                "Passwords are stored in secure system storage. Leave blank and press Save to remove a saved password.".to_string()
+            },
+            None,
+        )),
+    ));
+    // CDXC:RemotePairing 2026-09-05 DECISION: User: simplify adding a machine and hide the WSL version details under Advanced.
+    let mut advanced = v_flex()
+        .w_full()
+        .pt(px(8.0))
+        .border_t_1()
+        // The dialog is portaled out of the themed Settings root, so `--app-border` is the dark
+        // app's white hairline in both appearances (invisible on the light surface).
+        .border_color(hsla(modal_rgba(0xffffff, 0.11)))
+        .child(div().flex().child(compact_button(
+            &p,
+            "remote-machine-advanced-toggle",
+            "Advanced",
+            Some(chevron(advanced_open, 16.0, colors.foreground)),
+            Look::Ghost,
+            28.0,
+            14.0,
+            Some(colors.foreground),
+            false,
+            None,
+            |tab: &mut RemoteTab, _window, cx| {
+                if let Some(dialog) = tab.machine_dialog.as_mut() {
+                    dialog.advanced_open = !dialog.advanced_open;
+                }
+                cx.notify();
+            },
+            cx,
+        )));
+    if advanced_open {
+        let mut advanced_fields = v_flex().w_full().gap(px(12.0)).pt(px(12.0));
+        if !easy_connect {
+            advanced_fields = advanced_fields.child(field(
+                t,
+                &colors,
+                "SSH port",
+                input(&port_input, window, cx),
+                None,
+            ));
+        }
+        advanced_fields = advanced_fields
+            .child(field(
+                t,
+                &colors,
+                "Identity file",
+                input(&identity_input, window, cx),
+                Some(("Optional. Use an SSH private key instead of a password.".to_string(), None)),
+            ))
+            .child(field(
+                t,
+                &colors,
+                "Windows WSL distribution",
+                input(&wsl_input, window, cx),
+                Some((
+                    "Optional. Enter a distribution to use WSL2. Leave blank to follow Windows Environment on the remote computer, which defaults to native PowerShell.".to_string(),
+                    None,
+                )),
+            ));
+        advanced = advanced.child(advanced_fields);
+    }
+    fields.push(advanced.into_any_element());
+
+    let mut body = v_flex().w_full().min_w_0().gap(px(12.0)).pr(px(2.0));
+    if is_new {
+        body = body.child(div().mb(px(2.0)).child(raised_segmented(
+            &p,
+            "remote-machine-add-mode",
+            &[
+                Segment {
+                    value: "ssh",
+                    label: "SSH details",
+                    icon: None,
+                },
+                Segment {
+                    value: "easyConnect",
+                    label: "Easy Connect code",
+                    icon: None,
+                },
+            ],
+            if easy_connect { "easyConnect" } else { "ssh" },
+            true,
+            |tab: &mut RemoteTab, value, window, cx| {
+                tab.set_dialog_transport(value == "easyConnect", window, cx);
+            },
+            cx,
+        )));
+    }
+    body = body.child(v_flex().w_full().gap(px(12.0)).children(fields));
+    if let Some(machine_id) = machine_id.clone() {
+        // CDXC:RemoteMachines 2026-06-23-08:30: the gxserver install action reuses the reconnect flow, so native opens the approval modal only after SSH proves gxserver is missing, and otherwise connects the existing remote daemon.
+        let installed = install.as_ref().is_some_and(|install| install.installed);
+        let version_text = install
+            .as_ref()
+            .filter(|install| install.installed)
+            .map(|install| {
+                install
+                    .version
+                    .as_ref()
+                    .map(|version| format!("gxserver {version}"))
+                    .unwrap_or_else(|| "gxserver installed".to_string())
+            });
+        body = body.child(
+            h_flex()
+                .w_full()
+                .mt(px(8.0))
+                .items_center()
+                .gap(px(8.0))
+                .justify_end()
+                .children(version_text.map(|text| {
+                    div()
+                        .mr_auto()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(13.0))
+                        .line_height(px(18.2))
+                        .text_color(hsla(colors.muted))
+                        .child(text)
+                }))
+                .child(settings_button_sized(
+                    &p,
+                    "remote-machine-install-gxserver",
+                    if installed {
+                        "Update gxserver"
+                    } else {
+                        "Install / Connect gxserver"
+                    },
+                    Some(if installed { ICON_REFRESH } else { icon::DOWNLOAD }),
+                    ButtonVariant::Secondary,
+                    ButtonSize::Default,
+                    !has_endpoint,
+                    Some(
+                        if easy_connect {
+                            "Paste a valid Easy Connect code first."
+                        } else {
+                            "Enter an SSH host first."
+                        }
+                        .into(),
+                    ),
+                    move |tab: &mut RemoteTab, _window, cx| {
+                        tab.post(
+                            json!({ "remoteMachineId": machine_id, "type": "reconnectRemoteMachine" }),
+                            cx,
+                        );
+                    },
+                    cx,
+                )),
+        );
+    }
+
+    let mut footer = h_flex().w_full().items_center().justify_end().gap(px(8.0));
+    if let Some(machine_id) = dialog_machine_id(tab) {
+        footer = footer.child(div().mr_auto().child(settings_button_sized(
+            &p,
+            "remote-machine-remove",
+            "Remove",
+            Some(icon::TRASH),
+            ButtonVariant::DestructiveDialog,
+            ButtonSize::Default,
+            false,
+            None,
+            move |tab: &mut RemoteTab, _window, cx| tab.remove_machine(machine_id.clone(), cx),
+            cx,
+        )));
+    }
+    footer = footer
+        .child(settings_button_sized(
+            &p,
+            "remote-machine-cancel",
+            "Cancel",
+            None,
+            ButtonVariant::Outline,
+            ButtonSize::Default,
+            false,
+            None,
+            |tab: &mut RemoteTab, _window, cx| tab.close_machine_dialog(cx),
+            cx,
+        ))
+        .child(settings_button_sized(
+            &p,
+            "remote-machine-save",
+            if is_new { "Add machine" } else { "Save" },
+            None,
+            ButtonVariant::Default,
+            ButtonSize::Default,
+            !can_save,
+            Some(save_reason.into()),
+            |tab: &mut RemoteTab, _window, cx| tab.save_dialog_machine(cx),
+            cx,
+        ));
+
+    let viewport = window.viewport_size();
+    let sheet = v_flex()
+        .id("remote-machine-dialog")
+        .track_focus(&focus)
+        .occlude()
+        .w(px(512.0))
+        .max_w(viewport.width - px(32.0))
+        .max_h(viewport.height - px(32.0))
+        .p(px(16.0))
+        .gap(px(12.0))
+        .rounded(px(MODAL_RADIUS_SECTION))
+        .border_1()
+        .border_color(hsla(colors.border))
+        .bg(hsla(colors.background))
+        .shadow(vec![gpui::BoxShadow {
+            color: hsla(css_fade(colors.foreground, 0.1)),
+            offset: gpui::point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(1.0),
+            inset: false,
+        }])
+        .font_family(MODAL_UI_FONT)
+        .text_size(px(14.0))
+        .line_height(px(20.0))
+        .text_color(hsla(colors.foreground))
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_key_down(cx.listener(|tab, event: &KeyDownEvent, _window, cx| {
+            if event.keystroke.key == "escape" {
+                cx.stop_propagation();
+                tab.close_machine_dialog(cx);
+            }
+        }))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .line_height(px(16.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(hsla(colors.foreground))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .text_color(hsla(colors.muted))
+                        .child(if is_new {
+                            "Paste an Easy Connect code or enter the other computer’s address, then use that computer’s SSH username and password to sign in."
+                        } else {
+                            "Connection details for this machine. Changes apply when you save."
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .id("remote-machine-dialog-body")
+                .w_full()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(body),
+        )
+        .child(footer)
+        .into_any_element();
+    Some(dialog_overlay(
+        "remote-machine-dialog-overlay",
+        sheet,
+        |tab: &mut RemoteTab, _window, cx| tab.close_machine_dialog(cx),
+        window,
+        cx,
+    ))
+}
+
+fn dialog_machine_id(tab: &RemoteTab) -> Option<String> {
+    tab.machine_dialog
+        .as_ref()
+        .and_then(|dialog| dialog.machine_id.clone())
+}

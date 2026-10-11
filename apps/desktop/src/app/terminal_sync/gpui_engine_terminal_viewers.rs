@@ -20,6 +20,9 @@ pub(crate) struct GpuiRetiringTerminalViewer {
     _observation: gpui::Subscription,
 }
 
+/// Windows: how many recently shown terminals keep their viewer while their chat is shown.
+const WARM_TERMINAL_VIEWERS: usize = 3;
+
 pub(crate) struct GpuiTerminalChatClaimState {
     runtime_session_id: AgentsTerminalRuntimeSessionId,
     owner: Option<terminal_chat_claim::TerminalChatClaim>,
@@ -29,18 +32,14 @@ pub(crate) struct GpuiTerminalChatClaimState {
 impl GhostexGpuiApp {
     fn agents_terminal_chat_is_visible(&self, session_id: TerminalSessionId) -> bool {
         self.agents_chat_mode_sessions.contains(&session_id)
-            && if self.active_mode == TitlebarMode::Agents {
-                self.agents_workspace
-                    .rendered_leaf_order()
-                    .iter()
-                    .any(|pane_id| {
-                        self.agents_workspace.active_session_in_pane(*pane_id) == Some(session_id)
-                    })
-            } else {
-                self.current_project_editor_companion_terminal_body_mount_slots()
-                    .iter()
-                    .any(|slot| slot.session_id == session_id)
-            }
+            && self.agents_workspace_visible()
+            && self
+                .agents_workspace
+                .rendered_leaf_order()
+                .iter()
+                .any(|pane_id| {
+                    self.agents_workspace.active_session_in_pane(*pane_id) == Some(session_id)
+                })
     }
 
     pub(crate) fn sync_agents_terminal_chat_claims(&mut self, cx: &mut gpui::Context<Self>) {
@@ -53,6 +52,12 @@ impl GhostexGpuiApp {
             for id in ids {
                 self.ensure_agents_gpui_engine_terminal_view(id, cx);
             }
+            self.agents_terminal_chat_claims.clear();
+            return;
+        }
+        // Windows: gxserver holds the chat claim for a shown chat (`chat_grid_claims.rs`); a second
+        // attach here would cost a PowerShell start and its `ZMX_CHAT` would never reach wmx.
+        if cfg!(windows) {
             self.agents_terminal_chat_claims.clear();
             return;
         }
@@ -152,22 +157,19 @@ impl GhostexGpuiApp {
     /// CDXC:Terminal 2026-09-13 DECISION:
     /// User: create terminal viewers only when needed, and release unused viewers while zmx daemons and their agents remain running.
     /// Keep direct PTY owners and pending native operations attached; a detached zmx viewer retains only its native attach recipe, never its emulator or rendering subscription.
+    /// Carve-out 2026-09-19: viewers that were on screen when their project was left stay attached for the `projectSwitchKeepAliveMinutes` window (see `project_keep_alive.rs`); hidden tabs still release as above.
     pub(crate) fn agents_terminal_viewer_is_visible(&self, session_id: TerminalSessionId) -> bool {
         if self.agents_chat_mode_sessions.contains(&session_id) {
             return false;
         }
-        if self.active_mode == TitlebarMode::Agents {
-            self.agents_workspace
+        self.agents_workspace_visible()
+            && self
+                .agents_workspace
                 .rendered_leaf_order()
                 .iter()
                 .any(|pane_id| {
                     self.agents_workspace.active_session_in_pane(*pane_id) == Some(session_id)
                 })
-        } else {
-            self.current_project_editor_companion_terminal_body_mount_slots()
-                .iter()
-                .any(|slot| slot.session_id == session_id)
-        }
     }
 
     pub(crate) fn agents_terminal_has_detachable_viewer(
@@ -203,7 +205,7 @@ impl GhostexGpuiApp {
         target: GpuiEngineTerminalEventTarget,
     ) -> bool {
         if !cfg!(unix) {
-            return false;
+            return self.agents_terminal_is_local_wmx_viewer(target);
         }
         match target {
             GpuiEngineTerminalEventTarget::Agents(id) => {
@@ -217,6 +219,48 @@ impl GhostexGpuiApp {
                         .is_some()
             }
         }
+    }
+
+    /// Windows: an Agents viewer whose command attaches to a session on this computer's wmx, the
+    /// only viewer whose claims and detach can use the attach control pipe. A remote session's
+    /// viewer runs `zmx attach` over SSH, where nothing reaches it around ConPTY.
+    pub(crate) fn agents_terminal_is_local_wmx_viewer(
+        &self,
+        target: GpuiEngineTerminalEventTarget,
+    ) -> bool {
+        let GpuiEngineTerminalEventTarget::Agents(id) = target else {
+            return false;
+        };
+        cfg!(windows)
+            && self
+                .agents_workspace
+                .session(id)
+                .is_some_and(|session| session.zmx_session_name.is_some())
+            && !self
+                .remote_attach_sessions
+                .values()
+                .any(|remote_session_id| *remote_session_id == id)
+    }
+
+    /// CDXC:Zmx 2026-10-08 DECISION:
+    /// User: "pls dont break things for users who set default to terminal at all". On Windows a viewer costs a PowerShell start (about 0.6 s), so only a session shown in Chat View waits for its viewer (it is spawned on the first switch to its terminal) or gives it up; a session in terminal view keeps its viewer exactly as before, shown or hidden, in this project or a parked one. macOS and Linux keep their existing policy, where a viewer is a cheap `zmx attach`.
+    pub(crate) fn agents_terminal_viewer_may_wait(&self, session_id: TerminalSessionId) -> bool {
+        !cfg!(windows) || self.agents_chat_mode_sessions.contains(&session_id)
+    }
+
+    /// Windows: the sessions whose terminal was shown most recently keep their viewer while their
+    /// chat is shown, so switching back to their terminal starts no PowerShell.
+    pub(crate) fn note_agents_terminal_viewer_shown(&mut self, session_id: TerminalSessionId) {
+        if !cfg!(windows) {
+            return;
+        }
+        let warm = &mut self.agents_terminal_warm_viewers;
+        if warm.front() == Some(&session_id) {
+            return;
+        }
+        warm.retain(|id| *id != session_id);
+        warm.push_front(session_id);
+        warm.truncate(WARM_TERMINAL_VIEWERS);
     }
 
     pub(crate) fn remember_gpui_terminal_viewer_recipe(
@@ -274,6 +318,15 @@ impl GhostexGpuiApp {
             return false;
         };
         self.agents_gpui_engine_terminals.insert(session_id, record);
+        if crate::support_logs::scenario_enabled(
+            crate::support_logs::GpuiDiagnosticScenario::TerminalFocus,
+        ) {
+            crate::support_logs::append(
+                crate::support_logs::GpuiSupportLog::TerminalFocus,
+                "engineViewerSpawned",
+                serde_json::json!({"session": session_id.0}),
+            );
+        }
         cx.notify();
         true
     }
@@ -315,13 +368,25 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn agents_terminal_viewer_has_pending_work(&self, id: TerminalSessionId) -> bool {
-        self.agents_workspace.session(id).is_some_and(|session| session.delayed_send_active)
+        self.agents_workspace
+            .session(id)
+            .is_some_and(|session| session.delayed_send_active)
             || self.agents_delayed_send_timers.contains_key(&id)
             || self.agents_send_when_stopped_watchers.contains_key(&id)
-            || self.pending_session_terminal_composer_insert.contains_key(&id)
+            || self
+                .pending_session_terminal_composer_insert
+                .contains_key(&id)
             || self.pending_session_chat_draft_handoffs.contains(&id)
             || self.agents_sessions_pending_surface_transfer.contains(&id)
-            || self.source_code_server_runtime.pending_remote_prompt_editor_request.as_ref().is_some_and(|request| request.shell_session_id == id && matches!(request.delivery_target, RemotePromptEditorDeliveryTarget::GpuiEngineTerminal { runtime_session_id, .. } if self.agents_terminal_runtime_sessions.runtime_session_id_for_shell_session(id) == Some(runtime_session_id)))
+            || self
+                .agents_terminal_runtime_sessions
+                .runtime_session_id_for_shell_session(id)
+                .is_some_and(|runtime| {
+                    self.has_pending_remote_prompt_editor_for_engine_target(
+                        GpuiEngineTerminalEventTarget::Agents(id),
+                        runtime,
+                    )
+                })
             || self.terminal_paste_confirmation_dialog_open
     }
 
@@ -394,6 +459,7 @@ impl GhostexGpuiApp {
     pub(crate) fn release_unused_agents_gpui_terminal_viewers(
         &mut self,
         parking: bool,
+        kept_alive: &HashSet<TerminalSessionId>,
         cx: &mut gpui::Context<Self>,
     ) {
         self.finish_retiring_gpui_terminal_viewers(cx);
@@ -412,8 +478,7 @@ impl GhostexGpuiApp {
             && (self.workspace_tab_drag_active
                 || self.command_tab_drag_active
                 || self.workspace_split_drag.is_some()
-                || self.project_editor_companion_drag.is_some()
-                || self.project_editor_companion_split_drag.is_some())
+                || self.workarea_split_drag.is_some())
         {
             return;
         }
@@ -422,9 +487,14 @@ impl GhostexGpuiApp {
             .iter()
             .filter_map(|(id, record)| {
                 (self.agents_terminal_has_detachable_viewer(*id)
+                    && !(parking && kept_alive.contains(id))
                     && (parking || !self.agents_terminal_viewer_is_visible(*id))
+                    && (!cfg!(windows)
+                        || (self.agents_terminal_viewer_may_wait(*id)
+                            && !self.agents_terminal_warm_viewers.contains(id)))
                     && (parking
                         || !self.agents_terminal_chat_is_visible(*id)
+                        || cfg!(windows)
                         || self
                             .agents_terminal_chat_claims
                             .get(id)
@@ -447,6 +517,15 @@ impl GhostexGpuiApp {
             .collect::<Vec<_>>();
         for id in remove {
             if let Some(record) = self.agents_gpui_engine_terminals.remove(&id) {
+                if crate::support_logs::scenario_enabled(
+                    crate::support_logs::GpuiDiagnosticScenario::TerminalFocus,
+                ) {
+                    crate::support_logs::append(
+                        crate::support_logs::GpuiSupportLog::TerminalFocus,
+                        "engineViewerRetired",
+                        serde_json::json!({"session": id.0}),
+                    );
+                }
                 let owner = Self::terminal_viewer_owner(
                     self.agents_workspace_project_id.as_deref(),
                     GpuiEngineTerminalEventTarget::Agents(id),
@@ -459,7 +538,13 @@ impl GhostexGpuiApp {
             }
         }
         let mut retired = Vec::new();
-        for (project_id, parked) in &mut self.parked_agents_terminal_runtimes_by_project {
+        let keep = self.project_switch_keep_alive();
+        // Windows keeps a parked project's viewers, as it always did (`agents_terminal_viewer_may_wait`).
+        for (project_id, parked) in self
+            .parked_agents_terminal_runtimes_by_project
+            .iter_mut()
+            .filter(|_| !cfg!(windows))
+        {
             let ids = parked
                 .gpui_engine_terminals
                 .iter()
@@ -469,6 +554,7 @@ impl GhostexGpuiApp {
                     }) && !record.viewer_is_pinned()
                         && !record.view.read(cx).model().has_pending_input()
                         && !parked.protected_viewer_sessions.contains(id)
+                        && !parked.viewer_kept_alive(*id, keep)
                         && record.view.read(cx).exit_status().is_none()
                         && !self.retiring_gpui_terminal_viewers.contains_key(
                             &Self::terminal_viewer_owner(
@@ -539,6 +625,10 @@ impl GhostexGpuiApp {
                 let session = self.command_pane.session(*id)?;
                 (self.command_gpui_terminal_viewer_recipes.contains_key(id)
                     && !visible.contains(id)
+                    && !self.has_pending_remote_prompt_editor_for_engine_target(
+                        GpuiEngineTerminalEventTarget::Command(*id),
+                        record.runtime_session_id,
+                    )
                     && !record.viewer_is_pinned()
                     && !record.view.read(cx).model().has_pending_input()
                     && !session.delayed_send_active

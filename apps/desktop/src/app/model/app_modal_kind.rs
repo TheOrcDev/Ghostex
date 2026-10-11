@@ -10,7 +10,6 @@ pub(crate) enum GpuiAppModalKind {
     AddProject,
     AgentHooksRequired,
     Settings,
-    ModelPicker,
     Hotkeys,
     MissingProjectFolder,
     CommandPalette,
@@ -27,14 +26,11 @@ pub(crate) enum GpuiAppModalKind {
     ConfigureAgents,
     ConfigureActions,
     OpenTargets,
-    FirstLaunchSetup,
-    /// CDXC:Onboarding 2026-09-15 SEE-ALSO:
-    /// `onboarding` is the five-panel modal that the automatic first run, Tips > Setup and Quick Access > Setup open (user decision, see modals.rs `open_gpui_first_launch_setup_with_sidebar_state`); `firstLaunchSetup` is the older modal, kept under its own id and opened by nothing by default.
-    /// Every guard that treats `FirstLaunchSetup` as "setup in progress" (no-projects close guard, completion on close, `completeFirstLaunchSetup`) must match both; the React side is `isFirstLaunchSetupModalKind` in apps/desktop/views/modal-host.tsx and the component contract is packages/core-ui/onboarding/contract.ts.
+    /// CDXC:Onboarding 2026-09-27 SEE-ALSO:
+    /// `onboarding` is the five-panel modal that the automatic first run, Tips > Setup and Quick Access > Setup open (user decision, see modals/modal_window.rs `open_gpui_first_launch_setup_with_sidebar_state`). The older first-launch setup modal was deleted on 2026-09-27 (user: "delete old setup one not new one that's active").
+    /// The guards that treat Onboarding as "setup in progress" (no-projects close guard, completion on close, `completeFirstLaunchSetup`) have a React twin, `isFirstLaunchSetupModalKind` in apps/desktop/views/modal-host/settings-routing.ts (deleted 2026-10-01), and the component contract is packages/core-ui/onboarding/contract.ts (deleted 2026-10-01).
     Onboarding,
-    WatchGhostexVideo,
     RemoteGxserverInstall,
-    RemoteProjectPicker,
     RemoteSetup,
     Worktree,
     DeleteWorktree,
@@ -44,10 +40,25 @@ pub(crate) enum GpuiAppModalKind {
     GitFileDiff,
     MermaidDiagram,
     MarkdownTable,
+    /// An agent's published HTML page, floating over the chat (visual_page_modal_lifecycle.rs).
+    VisualPage,
     PortlessSetup,
-    DiscoverGhostex,
     Extension(ExtensionId),
     UpdateAvailable,
+    /// Name, agent, goal and first request of a new coordinator (new_coordinator_modal_lifecycle.rs).
+    NewCoordinator,
+    /// Make an existing session a coordinator, with an optional goal (new_coordinator_modal_lifecycle.rs).
+    MakeCoordinator,
+    /// Send Feedback, from the sidebar's chat-bubble button (feedback_modal_lifecycle.rs).
+    Feedback,
+    /// Create a Linear ticket and start work on it, from a work-mode project's menu
+    /// (create_linear_ticket_modal_lifecycle.rs).
+    CreateLinearTicket,
+    /// Link a work-mode session to a PR, Linear issues, a Linear project or a GitHub issue, from
+    /// the session's Link to submenu (work_link_picker_modal_lifecycle.rs).
+    WorkLinkPicker,
+    /// "Paste potentially unsafe text?" for terminal paste protection (terminal_input/paste_and_shortcuts.rs).
+    TerminalPasteConfirm,
 }
 
 impl GpuiAppModalKind {
@@ -56,7 +67,6 @@ impl GpuiAppModalKind {
             "addProject" => Some(Self::AddProject),
             "agentHooksRequired" => Some(Self::AgentHooksRequired),
             "settings" => Some(Self::Settings),
-            "modelPicker" => Some(Self::ModelPicker),
             "hotkeys" => Some(Self::Hotkeys),
             "missingProjectFolder" => Some(Self::MissingProjectFolder),
             "commandPalette" => Some(Self::CommandPalette),
@@ -73,11 +83,8 @@ impl GpuiAppModalKind {
             "configureAgents" => Some(Self::ConfigureAgents),
             "configureActions" => Some(Self::ConfigureActions),
             "openTargets" => Some(Self::OpenTargets),
-            "firstLaunchSetup" | "tipsAndTricks" => Some(Self::FirstLaunchSetup),
             "onboarding" => Some(Self::Onboarding),
-            "watchGhostexVideo" => Some(Self::WatchGhostexVideo),
             "remoteGxserverInstall" => Some(Self::RemoteGxserverInstall),
-            "remoteProjectPicker" => Some(Self::RemoteProjectPicker),
             "remoteSetup" => Some(Self::RemoteSetup),
             "worktree" => Some(Self::Worktree),
             "deleteWorktree" => Some(Self::DeleteWorktree),
@@ -87,12 +94,18 @@ impl GpuiAppModalKind {
             "gitFileDiff" => Some(Self::GitFileDiff),
             "mermaidDiagram" => Some(Self::MermaidDiagram),
             "markdownTable" => Some(Self::MarkdownTable),
+            "visualPage" => Some(Self::VisualPage),
             "portlessSetup" => Some(Self::PortlessSetup),
-            "discoverGhostex" => Some(Self::DiscoverGhostex),
             value if value.starts_with("extension:") => {
                 ExtensionId::new(value.trim_start_matches("extension:")).map(Self::Extension)
             }
             "updateAvailable" => Some(Self::UpdateAvailable),
+            "newCoordinator" => Some(Self::NewCoordinator),
+            "makeCoordinator" => Some(Self::MakeCoordinator),
+            "feedback" => Some(Self::Feedback),
+            "createLinearTicket" => Some(Self::CreateLinearTicket),
+            "workLinkPicker" => Some(Self::WorkLinkPicker),
+            "terminalPasteConfirm" => Some(Self::TerminalPasteConfirm),
             _ => None,
         }
     }
@@ -102,7 +115,6 @@ impl GpuiAppModalKind {
             Self::AddProject => "addProject",
             Self::AgentHooksRequired => "agentHooksRequired",
             Self::Settings => "settings",
-            Self::ModelPicker => "modelPicker",
             Self::Hotkeys => "hotkeys",
             Self::MissingProjectFolder => "missingProjectFolder",
             Self::CommandPalette => "commandPalette",
@@ -119,11 +131,8 @@ impl GpuiAppModalKind {
             Self::ConfigureAgents => "configureAgents",
             Self::ConfigureActions => "configureActions",
             Self::OpenTargets => "openTargets",
-            Self::FirstLaunchSetup => "firstLaunchSetup",
             Self::Onboarding => "onboarding",
-            Self::WatchGhostexVideo => "watchGhostexVideo",
             Self::RemoteGxserverInstall => "remoteGxserverInstall",
-            Self::RemoteProjectPicker => "remoteProjectPicker",
             Self::RemoteSetup => "remoteSetup",
             Self::Worktree => "worktree",
             Self::DeleteWorktree => "deleteWorktree",
@@ -133,10 +142,16 @@ impl GpuiAppModalKind {
             Self::GitFileDiff => "gitFileDiff",
             Self::MermaidDiagram => "mermaidDiagram",
             Self::MarkdownTable => "markdownTable",
+            Self::VisualPage => "visualPage",
             Self::PortlessSetup => "portlessSetup",
-            Self::DiscoverGhostex => "discoverGhostex",
             Self::Extension(id) => extension_modal_id(id),
             Self::UpdateAvailable => "updateAvailable",
+            Self::NewCoordinator => "newCoordinator",
+            Self::MakeCoordinator => "makeCoordinator",
+            Self::Feedback => "feedback",
+            Self::CreateLinearTicket => "createLinearTicket",
+            Self::WorkLinkPicker => "workLinkPicker",
+            Self::TerminalPasteConfirm => "terminalPasteConfirm",
         }
     }
 
@@ -146,7 +161,6 @@ impl GpuiAppModalKind {
             Self::AddProject => "Ghostex Add Project",
             Self::AgentHooksRequired => "Ghostex Install Required Hooks",
             Self::Settings => "Ghostex Settings",
-            Self::ModelPicker => "",
             Self::Hotkeys => "Ghostex Hotkeys",
             Self::MissingProjectFolder => "Ghostex Project Folder Missing",
             Self::CommandPalette
@@ -162,10 +176,8 @@ impl GpuiAppModalKind {
             Self::ConfigureAgents => "Ghostex Configure Agents",
             Self::ConfigureActions => "Ghostex Actions",
             Self::OpenTargets => "Ghostex Open Targets",
-            Self::FirstLaunchSetup | Self::Onboarding => "Welcome to Ghostex",
-            Self::WatchGhostexVideo => "Ghostex Tutorial Video",
+            Self::Onboarding => "Welcome to Ghostex",
             Self::RemoteGxserverInstall => "Ghostex Remote Setup",
-            Self::RemoteProjectPicker => "Ghostex Remote Project",
             Self::RemoteSetup => "Ghostex Mobile & Remote",
             Self::Worktree => "Ghostex Add Worktree",
             Self::DeleteWorktree => "Ghostex Delete Worktree",
@@ -173,18 +185,59 @@ impl GpuiAppModalKind {
             Self::SidebarSpaceEditor => "Ghostex Space",
             Self::GitCommit => "Ghostex Commit Changes",
             Self::GitFileDiff => "Ghostex File Diff",
-            Self::MermaidDiagram | Self::MarkdownTable => "",
+            Self::MermaidDiagram | Self::MarkdownTable | Self::VisualPage => "",
             Self::PortlessSetup => "Ghostex Portless Setup",
-            Self::DiscoverGhostex => "Discover Ghostex",
             Self::Extension(_) => "Ghostex Extension",
             Self::UpdateAvailable => "Ghostex Update",
+            Self::NewCoordinator => "Ghostex New Orchestrator",
+            Self::MakeCoordinator => "Ghostex Make Orchestrator",
+            Self::Feedback => "Ghostex Send Feedback",
+            Self::CreateLinearTicket => "Ghostex Create Linear Ticket",
+            Self::WorkLinkPicker => "Ghostex Link Session",
+            Self::TerminalPasteConfirm => "Ghostex Paste",
         }
     }
 
     pub(crate) fn window_size(self) -> Size<Pixels> {
+        let base = self.base_window_size();
+        let (width, height) = self.large_panel_size(f32::from(base.width), f32::from(base.height));
+        size(px(width), px(height))
+    }
+
+    /// The large panel modals that open centred over the app: the Settings dialog (every entry),
+    /// Search by Prompt, the Agents Hub, Commit Changes and File Diff. Quick Access, Browser
+    /// History, the compact forms and confirmations, onboarding and the chat's diagram and table
+    /// popups are not in this class.
+    pub(crate) fn is_large_panel(self) -> bool {
+        matches!(
+            self,
+            Self::Settings
+                | Self::Hotkeys
+                | Self::ConfigureAgents
+                | Self::ConfigureActions
+                | Self::OpenTargets
+                | Self::FindPrompts
+                | Self::AgentsHub
+                | Self::GitCommit
+                | Self::GitFileDiff
+        )
+    }
+
+    /// CDXC:AppModal 2026-10-01 DECISION:
+    /// User: Settings and Search by Prompt "open way too big. they should open centered in the page like the size that the quick access modal opens, not biggger", then "please make the settings and find by prompt modals to be bigger by 30% width and height" (2026-09-30), then "the bigger modals that pop up in the centre of the screen, like Find by Prompt and Settings: the size needs to be 10% bigger." Settings and Search by Prompt keep the Quick Access frame 30% wider and taller as their base (900 x 663), and every large panel modal opens 10% wider and taller than its base frame (Settings and Search by Prompt 990 x 729); the opener still shrinks it to fit the screen it opens on. This supersedes the 2026-09-30 opening size.
+    pub(crate) fn large_panel_size(self, width: f32, height: f32) -> (f32, f32) {
+        if !self.is_large_panel() {
+            return (width, height);
+        }
+        crate::app::window::large_panel_modal_size(width, height)
+    }
+
+    fn base_window_size(self) -> Size<Pixels> {
         match self {
-            Self::BrowserHistory => Self::PreviousSessions.window_size(),
-            Self::ModelPicker => size(px(1260.0), px(1050.0)),
+            Self::BrowserHistory => size(
+                px(APP_MODAL_HOST_COMMAND_PALETTE_WINDOW_WIDTH),
+                px(APP_MODAL_HOST_BROWSER_HISTORY_WINDOW_HEIGHT),
+            ),
             /* All four Quick Access tabs share one stable child-window frame. */
             Self::CommandPalette
             | Self::PreviousSessions
@@ -223,24 +276,23 @@ impl GpuiAppModalKind {
             CDXC:AppModal 2026-07-26-07:20:
             Settings, Hotkeys, Configure Agents, Configure Actions, and Open Targets all render the one tabbed Settings dialog in the modal host, so they must keep the full Settings frame even though their legacy standalone stylesheets are narrower.
             */
+            // The Settings and Search by Prompt base frame; they open 10% bigger (CDXC:AppModal 2026-10-01 on `large_panel_size`).
             Self::Settings
             | Self::Hotkeys
             | Self::FindPrompts
-            | Self::AgentsHub
             | Self::ConfigureAgents
             | Self::ConfigureActions
-            | Self::OpenTargets
-            | Self::GitFileDiff => size(
+            | Self::OpenTargets => size(
+                px(APP_MODAL_HOST_SETTINGS_WINDOW_WIDTH),
+                px(APP_MODAL_HOST_SETTINGS_WINDOW_HEIGHT),
+            ),
+            Self::AgentsHub | Self::GitFileDiff => size(
                 px(APP_MODAL_HOST_WINDOW_WIDTH),
                 px(APP_MODAL_HOST_WINDOW_HEIGHT),
             ),
             Self::AddProject => size(
                 px(APP_MODAL_HOST_ADD_PROJECT_WINDOW_WIDTH),
                 px(APP_MODAL_HOST_ADD_PROJECT_WINDOW_HEIGHT),
-            ),
-            Self::RemoteProjectPicker => size(
-                px(APP_MODAL_HOST_REMOTE_PROJECT_PICKER_WINDOW_WIDTH),
-                px(APP_MODAL_HOST_REMOTE_PROJECT_PICKER_WINDOW_HEIGHT),
             ),
             Self::Worktree => size(
                 px(APP_MODAL_HOST_WORKTREE_WINDOW_WIDTH),
@@ -282,8 +334,29 @@ impl GpuiAppModalKind {
                 px(APP_MODAL_HOST_UPDATE_AVAILABLE_WINDOW_WIDTH),
                 px(APP_MODAL_HOST_UPDATE_AVAILABLE_WINDOW_HEIGHT),
             ),
-            Self::DiscoverGhostex => size(px(1120.0), px(850.0)),
+            Self::NewCoordinator => size(
+                px(crate::app::window::NEW_COORDINATOR_MODAL_WIDTH),
+                px(crate::app::window::NEW_COORDINATOR_MODAL_INITIAL_HEIGHT),
+            ),
+            Self::MakeCoordinator => size(
+                px(crate::app::window::NEW_COORDINATOR_MODAL_WIDTH),
+                px(crate::app::window::MAKE_COORDINATOR_MODAL_INITIAL_HEIGHT),
+            ),
+            Self::Feedback => size(
+                px(crate::app::window::FEEDBACK_MODAL_WIDTH),
+                px(crate::app::window::FEEDBACK_MODAL_INITIAL_HEIGHT),
+            ),
+            Self::CreateLinearTicket => size(
+                px(crate::app::window::CREATE_LINEAR_TICKET_MODAL_WIDTH),
+                px(crate::app::window::CREATE_LINEAR_TICKET_MODAL_INITIAL_HEIGHT),
+            ),
+            Self::WorkLinkPicker => size(
+                px(crate::app::window::WORK_LINK_PICKER_MODAL_WIDTH),
+                px(crate::app::window::WORK_LINK_PICKER_MODAL_INITIAL_HEIGHT),
+            ),
             Self::Extension(id) => extension_modal_window_size(id),
+            // `TERMINAL_PASTE_CONFIRM_MODAL_WIDTH` / `_INITIAL_HEIGHT` in window/terminal_paste_confirm_modal.rs.
+            Self::TerminalPasteConfirm => size(px(440.0), px(180.0)),
             Self::RemoteGxserverInstall => size(
                 px(APP_MODAL_HOST_REMOTE_GXSERVER_INSTALL_WINDOW_WIDTH),
                 px(APP_MODAL_HOST_REMOTE_GXSERVER_INSTALL_WINDOW_HEIGHT),
@@ -292,35 +365,25 @@ impl GpuiAppModalKind {
                 px(APP_MODAL_HOST_REMOTE_SETUP_WINDOW_WIDTH),
                 px(APP_MODAL_HOST_REMOTE_SETUP_WINDOW_HEIGHT),
             ),
-            Self::FirstLaunchSetup => size(px(1120.0), px(850.0)),
             // CDXC:Onboarding 2026-09-11 WHY:
             // The new onboarding renders a 1672x941 stage scaled to fit its window, so the frame keeps that aspect ratio at a size that still fits a 1440x900 screen with the menu bar and Dock.
             Self::Onboarding => size(px(1400.0), px(788.0)),
-            Self::WatchGhostexVideo => size(px(1120.0), px(750.0)),
             // CDXC:SessionChat 2026-09-06 DECISION:
             // User: start only the diagram dialog 20% wider and taller (1248x912, previously 1040x760).
-            // SEE-ALSO: packages/core-ui/mermaid/mermaid-diagram.tsx and mermaid.css own the shared React dialog dimensions.
+            // SEE-ALSO: apps/desktop/src/app/window/mermaid_diagram_modal.rs and markdown_table_modal.rs open at this size.
             Self::MermaidDiagram => size(px(1248.0), px(912.0)),
             Self::MarkdownTable => size(px(1248.0), px(912.0)),
+            Self::VisualPage => size(px(1120.0), px(820.0)),
         }
     }
 
-    /// CDXC:AppModal 2026-09-08 DECISION:
-    /// User: increase both terminal picker dimensions by 40%, to 1260x910 for Codex and 1260x1050 for Claude, centered on the main window with no window title or titlebar.
-    /// This supersedes the previous 900x650 Codex and 900x750 Claude sizes.
-    pub(crate) fn window_size_for_open(self, message: &serde_json::Value) -> Size<Pixels> {
-        if self == Self::ModelPicker
-            && message.get("provider").and_then(serde_json::Value::as_str) == Some("codex")
-        {
-            size(px(1260.0), px(910.0))
-        } else {
-            self.window_size()
-        }
+    pub(crate) fn window_size_for_open(self, _message: &serde_json::Value) -> Size<Pixels> {
+        self.window_size()
     }
 
     /// CDXC:AppModal 2026-09-08 DECISION:
     /// User: use the terminal quick picker's borderless style for all app modals, including Settings, Quick Access, Add Project, Search by Prompt, Rename Session, and Delayed Send.
-    /// This extends the earlier table and Mermaid popup decision; Settings and Quick Access need no close button because clicking outside dismisses them.
+    /// This extends the earlier table and Mermaid popup decision. Clicking outside no longer closes a modal; the hover-only corner close button of `window/modal_window_frame.rs` is the close control instead (CDXC:AppModal 2026-09-30).
     pub(crate) fn has_titlebar(self) -> bool {
         false
     }
@@ -344,13 +407,6 @@ impl GpuiAppModalKind {
         self.window_size_for_open(open_message)
     }
 
-    pub(crate) fn uses_react_modal_host(self) -> bool {
-        !matches!(
-            self,
-            Self::FindPrompts | Self::WatchGhostexVideo | Self::Extension(_)
-        )
-    }
-
     pub(crate) fn is_settings_modal_entry(self) -> bool {
         matches!(
             self,
@@ -362,20 +418,6 @@ impl GpuiAppModalKind {
         )
     }
 
-    /// CDXC:Settings 2026-09-07 WHY:
-    /// Configure Agents and the other Settings entry points expose Accounts and Extensions too; omitting their server connection made Accounts incorrectly ask the local user to connect a computer.
-    /// CDXC:Onboarding 2026-09-15 WHY:
-    /// The Agents panel installs missing agent CLIs through gxserver's `/api/agentCliMaintenance` (the same transport as
-    /// Settings > Agents), which reads `window.ghostexGpui.gxserverBootstrap`. Without the bootstrap the panel silently
-    /// downgrades every Install button to "Install guide", so Onboarding must be in this allowlist.
-    pub(crate) fn needs_gxserver_bootstrap(self) -> bool {
-        self.is_settings_modal_entry()
-            || matches!(
-                self,
-                Self::FindPrompts | Self::RemoteSetup | Self::Onboarding
-            )
-    }
-
     pub(crate) fn requires_sidebar_state(self) -> bool {
         matches!(
             self,
@@ -384,7 +426,6 @@ impl GpuiAppModalKind {
                 | Self::ConfigureAgents
                 | Self::ConfigureActions
                 | Self::OpenTargets
-                | Self::FirstLaunchSetup
                 | Self::Onboarding
                 | Self::AgentsHub
                 | Self::DelayedSend
@@ -403,7 +444,6 @@ impl GpuiAppModalKind {
                 | Self::GitCommit
                 | Self::GitFileDiff
                 | Self::PortlessSetup
-                | Self::DiscoverGhostex
         )
     }
 
@@ -414,8 +454,7 @@ impl GpuiAppModalKind {
                 "modal": self.modal_id(),
                 "type": "open",
             }),
-            Self::ModelPicker
-            | Self::BrowserHistory
+            Self::BrowserHistory
             | Self::Settings
             | Self::Hotkeys
             | Self::FindPrompts
@@ -429,9 +468,9 @@ impl GpuiAppModalKind {
             | Self::DelayedSend
             | Self::RenameSession
             | Self::SessionNote
-            | Self::WatchGhostexVideo
             | Self::RemoteSetup
-            | Self::FirstLaunchSetup
+            | Self::Feedback
+            | Self::TerminalPasteConfirm
             | Self::Onboarding => serde_json::json!({
                 "modal": self.modal_id(),
                 "type": "open",
@@ -439,7 +478,18 @@ impl GpuiAppModalKind {
             Self::MermaidDiagram | Self::MarkdownTable => serde_json::json!({
                 "modal": self.modal_id(), "source": "", "type": "open",
             }),
-            Self::Extension(_) => serde_json::Value::Null,
+            Self::VisualPage => serde_json::json!({
+                "modal": self.modal_id(), "url": "", "type": "open",
+            }),
+            // A New Coordinator open names its project and a Make Coordinator open its session,
+            // which only the sidebar knows.
+            Self::Extension(_)
+            | Self::NewCoordinator
+            | Self::MakeCoordinator
+            | Self::CreateLinearTicket
+            | Self::WorkLinkPicker => {
+                serde_json::Value::Null
+            }
             Self::UpdateAvailable => serde_json::json!({
                 "modal": self.modal_id(),
                 "type": "open",
@@ -461,12 +511,6 @@ impl GpuiAppModalKind {
                 "remoteMachineName": "Remote",
                 "type": "open",
             }),
-            Self::RemoteProjectPicker => serde_json::json!({
-                "modal": self.modal_id(),
-                "remoteMachineId": "",
-                "remoteMachineName": "Remote",
-                "type": "open",
-            }),
             // These modals are normally opened through bridge messages that
             // carry their full payload (worktree and diff drafts); the bare
             // open message is the menu-path shape. For the Space editor it is
@@ -479,7 +523,6 @@ impl GpuiAppModalKind {
             | Self::GitCommit
             | Self::GitFileDiff
             | Self::PortlessSetup
-            | Self::DiscoverGhostex
             | Self::ExportTranscriptResult
             | Self::MissingProjectFolder => serde_json::json!({
                 "modal": self.modal_id(),
@@ -502,6 +545,7 @@ pub(crate) fn gpui_app_modal_kind_for_hotkey_action_id(
         "openCommandPalette" => Some(GpuiAppModalKind::CommandPalette),
         "openFindPrompts" => Some(GpuiAppModalKind::FindPrompts),
         "openSessionSearchPalette" => Some(GpuiAppModalKind::PreviousSessions),
+        "openProjectSearchPalette" => Some(GpuiAppModalKind::RecentProjects),
         "openPreviousSessions" => Some(GpuiAppModalKind::PreviousSessions),
         "agentsHub" | "openAgentsHub" => Some(GpuiAppModalKind::AgentsHub),
         "configureAgents" => Some(GpuiAppModalKind::ConfigureAgents),

@@ -1,6 +1,5 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui_component::tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement};
 use gpui_component::{
     ElementExt as _, Side,
     menu::{PopupMenu, PopupMenuItem},
@@ -51,19 +50,19 @@ impl GhostexGpuiApp {
             .flex()
             .flex_shrink_0()
             .when(in_toolbar, |this| {
-                this.h(px(BROWSER_TOOLBAR_HEIGHT - 1.0))
-                    .w(px(BROWSER_TOOLBAR_BUTTON_WIDTH - 1.0))
-                    .border_color(titlebar_button_border_color())
+                this.h(px(TITLEBAR_CONTROL_HEIGHT))
+                    .w(px(BROWSER_TOOLBAR_BUTTON_WIDTH))
+                    .rounded(px(TITLEBAR_BUTTON_RADIUS))
             })
             .when(!in_toolbar, |this| {
                 this.h_full()
                     .w(px(BROWSER_TAB_ACTION_BUTTON_SIZE))
+                    .border_l_1()
                     .border_color(browser_tab_separator_color())
                     .bg(browser_tab_action_cluster_color())
             })
             .items_center()
             .justify_center()
-            .border_l_1()
             .cursor_default()
             .when(open, |this| this.bg(titlebar_active_segment_color()))
             .hover(|this| this.bg(titlebar_button_hover_color()))
@@ -78,11 +77,6 @@ impl GhostexGpuiApp {
             .on_prepaint({
                 let trigger_bounds = trigger_bounds.clone();
                 move |bounds, _, _| trigger_bounds.set(Some(bounds))
-            })
-            .when(!open, |this| {
-                this.managed_tooltip_with_placement(ManagedTooltipPlacement::Left, |window, cx| {
-                    titlebar_tooltip("Browser pane actions menu", window, cx)
-                })
             })
             .child(self.render_browser_tab_overflow_icon())
             .into_any_element()

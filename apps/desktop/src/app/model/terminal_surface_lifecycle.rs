@@ -42,7 +42,7 @@ pub(crate) fn confirmed_agents_terminal_ghostty_surface_close_slots(
 }
 
 #[cfg(target_os = "macos")]
-#[allow(dead_code)] // no caller: the live path uses the same-named GhostexGpuiApp method in app/focus.rs
+#[allow(dead_code)] // no caller: the live path uses the same-named GhostexGpuiApp method in app/focus/agents_tab_actions.rs
 pub(crate) fn consume_confirmed_agents_terminal_ghostty_surface_closes(
     workspace: &mut WorkspaceModel,
     runtime_sessions: &AgentsTerminalRuntimeSessionRegistry,
@@ -192,9 +192,7 @@ pub(crate) fn focused_agents_terminal_surface_mount_slot(
     CDXC:Terminal 2026-06-22-22:59:
     Real Agents Ghostty surface focus is a runtime decision derived from shell focus only: Agents mode, an AgentsPane focus target, a rendered pane, and that pane's selected Running session. Command pane, Browser/project-editor modes, sleeping or hidden Focus-mode panes, stale panes, and missing sessions must leave every mounted terminal surface unfocused without adding input routing or persisted focus ids.
     */
-    if active_mode != TitlebarMode::Agents {
-        return None;
-    }
+    let _ = active_mode;
     let ShellFocusTarget::AgentsPane(focused_pane_id) = shell_focus else {
         return None;
     };
@@ -203,23 +201,6 @@ pub(crate) fn focused_agents_terminal_surface_mount_slot(
         .rendered_terminal_body_mount_slots()
         .into_iter()
         .find(|slot_id| slot_id.pane_id == focused_pane_id)
-}
-
-pub(crate) fn focused_project_editor_companion_terminal_surface_mount_slot(
-    active_mode: TitlebarMode,
-    shell_focus: ShellFocusTarget,
-    selected_session_id: Option<TerminalSessionId>,
-) -> Option<ProjectEditorCompanionTerminalBodyMountSlotId> {
-    let ShellFocusTarget::ProjectEditorCompanion(mode) = shell_focus else {
-        return None;
-    };
-    if active_mode != mode || !mode.is_project_editor_mode() {
-        return None;
-    }
-    Some(ProjectEditorCompanionTerminalBodyMountSlotId {
-        mode,
-        session_id: selected_session_id?,
-    })
 }
 
 pub(crate) fn agents_terminal_surface_focus_states_for_slots(
@@ -389,9 +370,8 @@ pub(crate) fn focused_sleeping_agents_placeholder_wake_target(
     agents_workspace: &WorkspaceModel,
     keystroke: &Keystroke,
 ) -> Option<(WorkspacePaneId, TerminalSessionId)> {
-    if active_mode != TitlebarMode::Agents
-        || !command_pane_sleeping_placeholder_keystroke_requests_wake(keystroke)
-    {
+    let _ = active_mode;
+    if !command_pane_sleeping_placeholder_keystroke_requests_wake(keystroke) {
         return None;
     }
     let ShellFocusTarget::AgentsPane(pane_id) = shell_focus else {
@@ -426,7 +406,7 @@ pub(crate) fn focused_sleeping_command_placeholder_wake_target(
     Keyboard wake resolves through the visible command body owner, so only the exact focused selected sleeping tab can wake. Stale selected ids, missing sessions, inactive siblings, and collapsed panes have no visible placeholder owner and must not wake or create a terminal.
     */
     if shell_focus != ShellFocusTarget::CommandPane
-        || !command_pane.is_expanded()
+        || !command_pane.focused_group_dock_visible()
         || !command_pane_sleeping_placeholder_keystroke_requests_wake(keystroke)
     {
         return None;

@@ -105,10 +105,8 @@ impl GhostexGpuiApp {
                 self.close_titlebar_extension_popup(window, cx);
                 self.set_active_mode(TitlebarMode::Extension(id), window, cx)
             }
-            GpuiExtensionLaunch::ChatBar(id) => {
-                self.close_titlebar_extension_popup(window, cx);
-                self.toggle_chat_bar_extension(id, cx)
-            }
+            // CDXC:Extensions 2026-09-21 WHY: chat-bar panels were hosted only by the React chat page, which the desktop app no longer ships; GPUI chat has no chat-bar panel host yet.
+            GpuiExtensionLaunch::ChatBar(_) => false,
             GpuiExtensionLaunch::Popup(id) => {
                 self.set_titlebar_extension_popup_open(id, trigger_bounds, window, cx)
             }
@@ -119,70 +117,6 @@ impl GhostexGpuiApp {
             GpuiExtensionLaunch::TerminalPane(id) => {
                 self.close_titlebar_extension_popup(window, cx);
                 self.launch_terminal_pane_extension(id, cx)
-            }
-        }
-    }
-
-    fn toggle_chat_bar_extension(&mut self, id: ExtensionId, cx: &mut gpui::Context<Self>) -> bool {
-        let Some(session_id) = self
-            .focused_agents_or_companion_shell_session_id()
-            .or_else(|| {
-                self.agents_workspace
-                    .active_session_in_pane(self.agents_workspace.focused_pane)
-            })
-        else {
-            return false;
-        };
-        if !self.show_agents_session_chat_mode(session_id, cx) {
-            return false;
-        }
-        self.extensions_snapshot
-            .pending_chat_bar_toggles
-            .entry(session_id)
-            .or_default()
-            .push_back(id);
-        self.flush_pending_chat_bar_extension_toggles(session_id, cx);
-        true
-    }
-
-    fn deliver_chat_bar_extension_toggle(
-        &mut self,
-        session_id: TerminalSessionId,
-        id: ExtensionId,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(surface) = self.agents_chat_surfaces.get(&session_id).cloned() else {
-            return false;
-        };
-        let payload = serde_json::json!({
-            "type": "ghostexChatBarPanelToggle",
-            "extensionId": id.as_str(),
-        });
-        let script = format!(
-            "(function(){{const payload={payload};let attempts=0;const send=()=>{{const ns=window.ghostexGpui;if(ns&&typeof ns.onSessionChatExtensionRequested==='function'){{ns.onSessionChatExtensionRequested(payload);return;}}if(++attempts<250){{setTimeout(send,20);}}}};send();}})(); undefined;"
-        );
-        surface.update(cx, |surface, _| surface.execute_app_owned_script(&script))
-    }
-
-    pub(crate) fn flush_pending_chat_bar_extension_toggles(
-        &mut self,
-        session_id: TerminalSessionId,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Some(mut pending) = self
-            .extensions_snapshot
-            .pending_chat_bar_toggles
-            .remove(&session_id)
-        else {
-            return;
-        };
-        while let Some(id) = pending.pop_front() {
-            if !self.deliver_chat_bar_extension_toggle(session_id, id, cx) {
-                pending.push_front(id);
-                self.extensions_snapshot
-                    .pending_chat_bar_toggles
-                    .insert(session_id, pending);
-                return;
             }
         }
     }
@@ -244,12 +178,6 @@ impl GhostexGpuiApp {
         else {
             return false;
         };
-        if self.titlebar_tips_panel_open {
-            self.set_gpui_titlebar_tips_panel_open(false, window, cx);
-        }
-        if self.titlebar_resources_panel_open {
-            self.set_gpui_titlebar_resources_panel_open(false, window, cx);
-        }
         self.close_gpui_titlebar_popup(None, window, cx);
         self.close_titlebar_extension_popup(window, cx);
         self.titlebar_extension_popup_generation =
@@ -269,6 +197,7 @@ impl GhostexGpuiApp {
             generation,
             panel: None,
             error: None,
+            waiting_for_web_runtime: None,
         });
         cx.notify();
 
@@ -483,6 +412,23 @@ impl GhostexGpuiApp {
             }
             return;
         };
+        // A page can only be created once CEF runs: the popup shows the web runtime prompt (or
+        // its skeleton while CEF starts) and `retry_titlebar_extension_popup_after_cef_ready`
+        // creates it then.
+        if !cef::context_initialized() {
+            if let Some(state) = self
+                .titlebar_extension_popup
+                .as_mut()
+                .filter(|state| state.generation == generation && state.id == id)
+            {
+                state.waiting_for_web_runtime = Some(url);
+                cx.notify();
+            }
+            if crate::app::helpers::web_runtime::web_runtime_available() {
+                cef::request_runtime();
+            }
+            return;
+        }
         let parent_ns_view = self.parent_ns_view;
         let event_handler = self.titlebar_extension_bridge_event_handler(generation, id, cx);
         let app = cx.entity().downgrade();
@@ -503,6 +449,33 @@ impl GhostexGpuiApp {
                 });
             })
             .detach();
+    }
+
+    /// Creates the open popup's page once CEF is ready (or asks CEF to start after an install).
+    pub(crate) fn retry_titlebar_extension_popup_after_cef_ready(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some((generation, id, waiting)) =
+            self.titlebar_extension_popup.as_ref().and_then(|state| {
+                state
+                    .waiting_for_web_runtime
+                    .clone()
+                    .map(|url| (state.generation, state.id, url))
+            })
+        else {
+            return;
+        };
+        if !cef::context_initialized() {
+            if crate::app::helpers::web_runtime::web_runtime_available() {
+                cef::request_runtime();
+            }
+            return;
+        }
+        if let Some(state) = self.titlebar_extension_popup.as_mut() {
+            state.waiting_for_web_runtime = None;
+        }
+        self.schedule_titlebar_extension_panel_creation(generation, id, waiting, cx);
     }
 
     pub(crate) fn attach_titlebar_extension_panel(

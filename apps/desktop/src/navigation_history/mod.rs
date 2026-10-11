@@ -10,11 +10,10 @@ every time the active project's title changed length.
 
 Ownership is deliberately split:
 - gxserver owns the trail and the cursor (`server/src/navigation_history`).
-- The CEF sidebar runtime owns the conversation with it and the activation of a
-  target, because it already owns project/session selection — the web app runs
-  the exact same controller, so the two apps cannot drift.
-- This module owns pixels and nothing else. It renders from a cached state the
-  sidebar pushes over the native-host bridge, and a click sends one intent back.
+- `controller.rs` owns the conversation with it and the activation of a target
+  (since 2026-09-25; before that the CEF sidebar runtime did).
+- This file owns pixels and nothing else. It renders from the cached state the
+  controller keeps, and a click sends one intent to it.
 
 That split is what keeps the buttons off the frame-rate path: `render_titlebar`
 runs on every frame, so it may only read `navigation_history_state`. There is no
@@ -23,54 +22,43 @@ the same discipline the Actions snapshot and the git menu state follow after a
 per-frame `readSidebarHud` call once cost this titlebar its frame rate.
 */
 
+mod controller;
 #[cfg(target_os = "macos")]
 mod native_gestures;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_mouse;
+
+pub(crate) use controller::NavigationHistoryHost;
 
 use gpui::{
     AnyElement, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
     ParentElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::h_flex;
+use gpui_component::tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement};
 
+use crate::app::model::{ShellFocusTarget, TitlebarMode};
 use crate::{
-    GhostexGpuiApp, TITLEBAR_CONTROL_HEIGHT, TITLEBAR_LEADING_BUTTON_WIDTH,
-    TITLEBAR_LEADING_TALL_BUTTON_HEIGHT, titlebar_button_hover_color, titlebar_disabled_text_color,
-    titlebar_icon_color, titlebar_svg_icon,
+    GhostexGpuiApp, TITLEBAR_BUTTON_HORIZONTAL_PADDING, TITLEBAR_BUTTON_RADIUS,
+    TITLEBAR_CONTROL_HEIGHT, TITLEBAR_LEADING_TALL_BUTTON_HEIGHT, titlebar_button_hover_color,
+    titlebar_disabled_text_color, titlebar_icon_color, titlebar_svg_icon, titlebar_tooltip,
+    titlebar_tooltip_label,
 };
-
-/// Page-side event the sidebar runtime listens for. Must stay identical to
-/// GPUI_SIDEBAR_NAVIGATION_HISTORY_COMMAND_EVENT_NAME in gxserver-runtime.ts.
-const NAVIGATION_HISTORY_COMMAND_EVENT_NAME: &str =
-    "ghostex-gpui-sidebar-navigation-history-command";
-/// Bridge message the sidebar runtime posts whenever the buttons should change.
-pub(crate) const NAVIGATION_HISTORY_STATE_MESSAGE_TYPE: &str = "navigationHistoryState";
 
 const NAVIGATION_ICON_SIZE: f32 = 15.0;
 const NAVIGATION_ICON_BACK: &str = "titlebar/chevron-left.svg";
 const NAVIGATION_ICON_FORWARD: &str = "titlebar/chevron-right.svg";
 
 /// Availability only. The arrows carry no hover tooltip, so the destination
-/// labels the sidebar also sends are deliberately not read here — two arrows
-/// beside the project name do not need a hover card to explain themselves.
+/// labels the daemon also answers with are deliberately not read here: two
+/// arrows beside the project name do not need a hover card to explain themselves.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GpuiNavigationHistoryState {
     pub(crate) can_go_back: bool,
     pub(crate) can_go_forward: bool,
 }
 
-impl GpuiNavigationHistoryState {
-    /// Strictly parse the sidebar's bridge payload. A malformed message leaves
-    /// the previous state alone rather than blanking the buttons: this is the
-    /// only source of truth the titlebar has, and it cannot re-query it.
-    pub(crate) fn from_bridge_message(message: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            can_go_back: message.get("canGoBack")?.as_bool()?,
-            can_go_forward: message.get("canGoForward")?.as_bool()?,
-        })
-    }
-}
-
-/// Map the shared hotkey action ids (`packages/shared/ghostex-hotkeys.ts`) onto a trail
+/// Map the shared hotkey action ids (`packages/shared/ghostex-hotkeys.ts` (deleted 2026-10-01)) onto a trail
 /// direction, so a keypress and a titlebar click enter the exact same route.
 pub(crate) fn navigation_history_hotkey_direction(action_id: &str) -> Option<&'static str> {
     match action_id {
@@ -81,40 +69,56 @@ pub(crate) fn navigation_history_hotkey_direction(action_id: &str) -> Option<&'s
 }
 
 impl GhostexGpuiApp {
-    /// `{ "type": "navigationHistoryState", … }` from the sidebar's native-host
-    /// bridge. Repaints only when the buttons would actually look different.
-    pub(crate) fn receive_navigation_history_state_message(
-        &mut self,
-        message: &serde_json::Value,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Some(state) = GpuiNavigationHistoryState::from_bridge_message(message) else {
-            return;
-        };
-        if self.navigation_history_state == state {
-            return;
-        }
-        self.navigation_history_state = state;
-        cx.notify();
-    }
-
-    /// Ask the sidebar runtime to walk the trail. Rust deliberately does not
-    /// call gxserver itself: the runtime owns both the daemon conversation and
-    /// the project/session activation that has to follow it.
+    /// Walk the trail one stop (`controller.rs`).
     pub(crate) fn request_navigation_history_navigation(
         &mut self,
         direction: &'static str,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return;
+        self.navigate_history(direction, cx);
+    }
+
+    /// CDXC:Navigation 2026-10-01 DECISION:
+    /// User: when the browser is focused, mouse 4/5 and the Back/Forward hotkeys go back and forward in the browser, not in the rest of the app.
+    /// A focused Browser pane keeps the press even when its page has nowhere to go; the titlebar arrows always walk the app trail.
+    /// Supersedes the browser-tab part of the 2026-09-08 decision in GpuiNavigationGestures.m.
+    pub(crate) fn navigate_focused_browser_history(
+        &mut self,
+        back: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let ShellFocusTarget::BrowserPane(pane_id) = self.shell_focus else {
+            return false;
         };
-        let script = format!(
-            "window.dispatchEvent(new CustomEvent('{NAVIGATION_HISTORY_COMMAND_EVENT_NAME}', {{ detail: {{ direction: '{direction}' }} }})); undefined;"
-        );
-        sidebar.update(cx, |surface, _| {
-            surface.execute_app_owned_script(&script);
+        if self.active_mode != TitlebarMode::Browser {
+            return false;
+        }
+        let Some(surface) = self.browser_surface_for_pane(pane_id) else {
+            return false;
+        };
+        surface.update(cx, |surface, _| {
+            if back {
+                surface.go_back();
+            } else {
+                surface.go_forward();
+            }
         });
+        true
+    }
+
+    /// Mouse 4/5, swipes and the Back/Forward hotkeys: the focused browser first, then the trail.
+    pub(crate) fn navigate_history_from_input(&mut self, back: bool, cx: &mut gpui::Context<Self>) {
+        if self.navigate_focused_browser_history(back, cx) {
+            return;
+        }
+        let enabled = if back {
+            self.navigation_history_state.can_go_back
+        } else {
+            self.navigation_history_state.can_go_forward
+        };
+        if enabled {
+            self.request_navigation_history_navigation(if back { "back" } else { "forward" }, cx);
+        }
     }
 
     pub(crate) fn render_titlebar_navigation_history_buttons(
@@ -123,9 +127,9 @@ impl GhostexGpuiApp {
     ) -> impl IntoElement {
         h_flex()
             .h(px(TITLEBAR_CONTROL_HEIGHT))
-            .ml(px(4.0))
-            .mr(px(2.0))
             .mt(px(2.0))
+            .ml(px(2.0))
+            .gap(px(2.0))
             .flex_shrink_0()
             .items_center()
             .child(self.render_titlebar_navigation_history_button(true, cx))
@@ -156,6 +160,11 @@ impl GhostexGpuiApp {
         } else {
             titlebar_disabled_text_color()
         };
+        let tooltip = if back {
+            titlebar_tooltip_label("Back", "navigateHistoryBack")
+        } else {
+            titlebar_tooltip_label("Forward", "navigateHistoryForward")
+        };
 
         div()
             .id(if back {
@@ -165,18 +174,20 @@ impl GhostexGpuiApp {
             })
             .flex()
             /*
-            CDXC:Navigation 2026-09-06 DECISION:
-            User: Back/Forward are square (no corner rounding), as wide as the
-            sidebar collapse and update buttons, and their hit and hover area
-            reaches 1px past the titlebar control height at the top and the
-            bottom, so the arrows sit in a taller strip than the sidebar
-            toggle next to them.
+            CDXC:Navigation 2026-09-20 DECISION:
+            User: Back/Forward carry the same corner rounding as the Quick Actions
+            split button, like every other header button. This supersedes the
+            2026-09-06 rule that they are square; the rest of that decision still
+            holds, so their hit and hover area keeps reaching 1px past the titlebar
+            control height at the top and the bottom and the arrows still sit in a
+            taller strip than the sidebar toggle next to them.
             */
             .h(px(TITLEBAR_LEADING_TALL_BUTTON_HEIGHT))
-            .w(px(TITLEBAR_LEADING_BUTTON_WIDTH))
+            .px(px(TITLEBAR_BUTTON_HORIZONTAL_PADDING))
             .flex_shrink_0()
             .items_center()
             .justify_center()
+            .rounded(px(TITLEBAR_BUTTON_RADIUS))
             .cursor_default()
             .when(enabled, |this| {
                 this.hover(|this| this.bg(titlebar_button_hover_color()))
@@ -191,6 +202,9 @@ impl GhostexGpuiApp {
                             );
                         }),
                     )
+            })
+            .managed_tooltip_with_placement(ManagedTooltipPlacement::Right, move |window, cx| {
+                titlebar_tooltip(tooltip.clone(), window, cx)
             })
             .child(titlebar_svg_icon(icon, NAVIGATION_ICON_SIZE, icon_color))
             .into_any_element()

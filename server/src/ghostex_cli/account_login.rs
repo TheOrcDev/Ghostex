@@ -46,8 +46,12 @@ pub(crate) fn run(args: &[String]) -> CliResult<()> {
         }
         _ => return Err(failure(HELP)),
     };
-    let home = std::env::var_os("HOME")
+    // Windows has no HOME; USERPROFILE is the home the account helpers themselves resolve.
+    let home = ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
         .map(std::path::PathBuf::from)
+        .find(|path| path.is_absolute())
         .ok_or_else(|| failure("The home directory is unavailable."))?;
     let claude = helpers::executable(&home, "claude")
         .ok_or_else(|| failure("Install Claude Code first."))?;

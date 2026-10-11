@@ -8,9 +8,20 @@ on:
         required: true
         default: 2.6.1
         type: string
+      archive_only:
+        description: Stop after xcodebuild archive (compile and sign check; nothing is uploaded, no build number is used)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+
+# One run at a time: an upload uses up its build number, and the certificate cleanup reads the
+# account's certificates while it runs.
+concurrency:
+  group: release-mobile-ios-testflight
+  cancel-in-progress: false
 
 jobs:
   build-and-upload:
@@ -44,7 +55,7 @@ jobs:
           node-version: 24.13.1
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.1'
           cache-dependency-path: apps/mobile/tailcat-bridge/go.sum
       - name: Build the tailcat gomobile bridge
         env:
@@ -56,6 +67,16 @@ jobs:
           apps/mobile/tailcat-bridge/build.sh --target ios
           test -s apps/mobile/app/modules/ghostex-native/ios/Vendor/Tailcatbridge.xcframework/ios-arm64/Tailcatbridge.framework/Tailcatbridge
           test -s apps/mobile/app/modules/ghostex-native/ios/Vendor/Tailcatbridge.xcframework/ios-arm64_x86_64-simulator/Tailcatbridge.framework/Tailcatbridge
+      - name: Build the Rust chat core for iOS
+        run: |
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' packages/gx-chat-mobile/rust-toolchain.toml)"
+          test -n "$toolchain"
+          tooling/release-gpui/retry.sh 3 5 -- rustup toolchain install "$toolchain" --profile minimal
+          packages/gx-chat-mobile/build.sh --target ios
+          MODULE=apps/mobile/app/modules/gx-chat-core/ios
+          test -s "$MODULE/Generated/gx_chat_mobile.swift"
+          test -s "$MODULE/Vendor/GxChatMobile.xcframework/ios-arm64/libgx_chat_mobile.a"
+          test -s "$MODULE/Vendor/GxChatMobile.xcframework/ios-arm64-simulator/libgx_chat_mobile.a"
       - name: Install repository dependencies
         run: bun install --frozen-lockfile
       - name: Install JavaScript dependencies
@@ -76,11 +97,57 @@ jobs:
           echo "GHOSTEX_ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
           echo "GHOSTEX_ASC_KEY_ID=$ASC_KEY_ID" >> "$GITHUB_ENV"
           echo "GHOSTEX_ASC_ISSUER_ID=$ASC_ISSUER_ID" >> "$GITHUB_ENV"
+      # The one Apple Development certificate every run reuses (tooling/release-mobile/ios-signing-certificate.sh
+      # creates and renews it), so xcodebuild's automatic signing finds an identity and creates none.
+      - name: Import the reused iOS signing certificate
+        env:
+          P12_BASE64: ${{ secrets.APPLE_IOS_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_IOS_SIGNING_P12_PASSWORD }}
+        run: |
+          set -o pipefail
+          if [[ -z "$P12_BASE64" || -z "$P12_PASSWORD" ]]; then
+            echo "::error::APPLE_IOS_SIGNING_P12_BASE64 and APPLE_IOS_SIGNING_P12_PASSWORD are not set; run tooling/release-mobile/ios-signing-certificate.sh"
+            exit 1
+          fi
+          P12_PATH="$RUNNER_TEMP/ios-signing.p12"
+          CERT_PATH="$RUNNER_TEMP/ios-signing-certificate.pem"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ghostex-ios-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$P12_PATH"
+          openssl pkcs12 -in "$P12_PATH" -passin env:P12_PASSWORD -nokeys -clcerts | openssl x509 -out "$CERT_PATH"
+          EXPIRES="$(openssl x509 -in "$CERT_PATH" -noout -enddate | cut -d= -f2)"
+          if ! openssl x509 -in "$CERT_PATH" -noout -checkend 0 > /dev/null; then
+            echo "::error::The reused iOS signing certificate expired $EXPIRES; renew it with tooling/release-mobile/ios-signing-certificate.sh"
+            exit 1
+          fi
+          if ! openssl x509 -in "$CERT_PATH" -noout -checkend 2592000 > /dev/null; then
+            echo "::warning::The reused iOS signing certificate expires $EXPIRES; renew it with tooling/release-mobile/ios-signing-certificate.sh"
+          fi
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$P12_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "Reused iOS signing certificate expires $EXPIRES"
+          echo "GHOSTEX_IOS_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "GHOSTEX_IOS_SIGNING_CERT_PEM=$CERT_PATH" >> "$GITHUB_ENV"
+          echo "GHOSTEX_IOS_SIGNING_CERT_SHA256=$(openssl x509 -in "$CERT_PATH" -outform DER | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_ENV"
+      - name: Revoke leftover CI development certificates
+        run: node tooling/release-mobile/asc-revoke-ci-certificates.mjs KTKP595G3B --keep-cert "$GHOSTEX_IOS_SIGNING_CERT_PEM"
       - name: Build and upload TestFlight release
+        env:
+          GHOSTEX_IOS_ARCHIVE_ONLY: ${{ inputs.archive_only }}
         run: tooling/release-mobile/ios-testflight.sh "${{ inputs.version }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !inputs.archive_only }}
         with:
           name: ghostex-mobile-${{ inputs.version }}-ios-testflight
           path: build/release-gpui/${{ inputs.version }}/ios-testflight/
           if-no-files-found: error
           retention-days: 90
+      - name: Remove the signing keychain
+        if: ${{ always() && env.GHOSTEX_IOS_SIGNING_KEYCHAIN != '' }}
+        run: security delete-keychain "$GHOSTEX_IOS_SIGNING_KEYCHAIN"

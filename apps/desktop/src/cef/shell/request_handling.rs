@@ -18,89 +18,29 @@ never receive this request handler or the project path.
 pub(crate) const MANAGE_DOCS_RESOURCE_BASE_URL: &str =
     PROJECT_WORKAREA_MANAGE_DOCS_RESOURCE_BASE_URL;
 
-pub(crate) type ManageDocsRemoteResourceLoader = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
-
-/*
-CDXC:Docs 2026-08-09:
-The local Docs root is a configurable folder now, and resolving it reads the
-project's Docs directory from the daemon. That resolution must not run on the
-main thread while a CEF surface is being created, so the scope carries a
-resolver that runs on the same blocking-capable worker sequence as the file
-open, memoized so one document's images cost one lookup.
-
-CDXC:Docs 2026-08-09: Docs serves TWO roots — the project's own and
-the mounted Docs directory — so the resolver answers with every mount, each
-carrying the path segment that addresses it and the relative roots a resource
-may live under inside it. Which mounts exist and what they allow both come out
-of the same daemon lookup, so neither can be answered before it.
-*/
-pub(crate) type ManageDocsLocalRootResolver =
-    Arc<dyn Fn() -> Option<Vec<ManageDocsResourceRoot>> + Send + Sync>;
-pub(crate) type ManageDocsDynamicRootResolver =
-    Arc<dyn Fn() -> Option<ManageDocsResourceRoot> + Send + Sync>;
-
-/// One mounted Docs root as the resource scope sees it: the reserved first path
-/// segment that addresses it (empty for the project root, which owns bare
-/// paths), the root itself, and the relative roots inside it a resource may
-/// live under. An empty relative root means the whole tree.
-#[derive(Clone)]
-pub struct ManageDocsResourceRoot {
-    pub allowed_relative_roots: Vec<String>,
-    pub mount_segment: String,
-    pub path: PathBuf,
-}
-
-#[derive(Clone)]
-pub(crate) enum ManageDocsResourceSource {
-    Local {
-        resolve_dynamic_root: ManageDocsDynamicRootResolver,
-        resolve_root: ManageDocsLocalRootResolver,
-        /*
-        CDXC:Docs 2026-08-10:
-        Memoize only a successful resolution. The lookup reads the project's
-        Docs directory from the daemon, so it can answer `None` for a reason
-        that passes — daemon not reachable yet, project row not loaded. Sealing
-        that first answer would leave every image and stylesheet in the document
-        broken until the surface is recreated, with nothing shown to say why.
-        */
-        resolved_root: Arc<Mutex<Option<Vec<ManageDocsResourceRoot>>>>,
-    },
-    Remote {
-        loader: ManageDocsRemoteResourceLoader,
-    },
-}
-
-#[derive(Clone)]
-pub struct ManageDocsResourceScope {
-    pub(crate) source: ManageDocsResourceSource,
-}
+/// The scope's types and file reads live in `app/helpers/manage_docs_resources.rs` so the native
+/// Files view works without CEF; this module only serves them to the embed page.
+pub use crate::app::helpers::manage_docs_resources::ManageDocsResourceScope;
+pub(crate) use crate::app::helpers::manage_docs_resources::{
+    ManageDocsResourceSource, resolve_manage_docs_local_resource,
+};
 
 impl ManageDocsResourceScope {
-    pub fn new(
-        resolve_root: ManageDocsLocalRootResolver,
-        resolve_dynamic_root: ManageDocsDynamicRootResolver,
-    ) -> Self {
-        Self {
-            source: ManageDocsResourceSource::Local {
-                resolve_dynamic_root,
-                resolve_root,
-                resolved_root: Arc::new(Mutex::new(None)),
-            },
-        }
-    }
-
-    pub fn new_remote(loader: ManageDocsRemoteResourceLoader) -> Self {
-        Self {
-            source: ManageDocsResourceSource::Remote { loader },
-        }
-    }
-
     pub fn base_url(&self) -> &'static str {
         MANAGE_DOCS_RESOURCE_BASE_URL
     }
 
-    pub(crate) fn request_handler(&self) -> RequestHandler {
-        GhostexManageDocsRequestHandler::new(self.source.clone())
+    /// `page_url` is the embed page the surface opens, the one main-frame document it may show.
+    pub(crate) fn request_handler(
+        &self,
+        page_url: &str,
+        bridge_event_handler: Option<ProjectWorkareaBridgeEventHandler>,
+    ) -> RequestHandler {
+        GhostexManageDocsRequestHandler::new(
+            self.source.clone(),
+            first_party_page_entry_identity(page_url),
+            bridge_event_handler,
+        )
     }
 }
 
@@ -137,10 +77,12 @@ pub(crate) fn manage_docs_resource_relative_path(url: &str) -> Option<String> {
     Some(relative_path.to_string())
 }
 
-/// Opens a Docs resource. Runs on a CEF worker sequence, never the IO thread.
+/// Opens a Docs resource, from `range_header`'s first byte range when the request carries a
+/// satisfiable one. Runs on a CEF worker sequence, never the IO thread.
 pub(crate) fn open_manage_docs_resource(
     source: &ManageDocsResourceSource,
     relative_path: &str,
+    range_header: Option<&str>,
 ) -> Option<ManageDocsResourceBody> {
     match source {
         ManageDocsResourceSource::Local {
@@ -148,73 +90,71 @@ pub(crate) fn open_manage_docs_resource(
             resolve_root,
             resolved_root,
         } => {
-            /*
-            CDXC:Docs 2026-08-09:
-            The requested path names its own root through the reserved mount
-            segment, exactly as the Docs bridge routes it, so an image beside a
-            note in the mounted Docs directory resolves there and a path can
-            never be resolved against the root it did not name.
-            */
-            let mut mounts = {
-                let mut resolved = resolved_root.lock().ok()?;
-                if resolved.is_none() {
-                    *resolved = resolve_root();
-                }
-                resolved.clone()?
-            };
-            if let Some(dynamic_root) = resolve_dynamic_root() {
-                mounts.retain(|mount| mount.mount_segment != dynamic_root.mount_segment);
-                mounts.push(dynamic_root);
-            }
-            // A named mount claims its own segment first; the project root owns
-            // every path no mount claimed.
-            let (mount, relative_path) = mounts
-                .iter()
-                .filter(|mount| !mount.mount_segment.is_empty())
-                .find_map(|mount| {
-                    relative_path
-                        .strip_prefix(&format!("{}/", mount.mount_segment))
-                        .map(|inner| (mount, inner))
-                })
-                .or_else(|| {
-                    mounts
-                        .iter()
-                        .find(|mount| mount.mount_segment.is_empty())
-                        .map(|mount| (mount, relative_path))
-                })?;
-            let root = std::fs::canonicalize(&mount.path).ok()?;
-            let candidate = std::fs::canonicalize(
-                relative_path
-                    .split('/')
-                    .fold(root.clone(), |path, component| path.join(component)),
-            )
-            .ok()?;
-            if !candidate.is_file() || !candidate.starts_with(&root) {
-                return None;
-            }
-            let allowed = mount.allowed_relative_roots.iter().any(|relative_root| {
-                let allowed_root = root.join(relative_root);
-                std::fs::canonicalize(allowed_root)
-                    .ok()
-                    .is_some_and(|allowed_root| {
-                        allowed_root.starts_with(&root) && candidate.starts_with(allowed_root)
-                    })
-            });
-            if !allowed {
-                return None;
-            }
+            let candidate = resolve_manage_docs_local_resource(
+                resolve_dynamic_root,
+                resolve_root,
+                resolved_root,
+                relative_path,
+            )?;
+            let total = std::fs::metadata(&candidate)
+                .ok()
+                .map(|metadata| metadata.len());
             let file_name = candidate.to_string_lossy();
             let stream = stream_reader_create_for_file(Some(&CefString::from(file_name.as_ref())))?;
-            Some(ManageDocsResourceBody::Stream(stream))
+            let range = total.and_then(|total| manage_docs_byte_range(range_header?, total));
+            // SEEK_SET; a stream that cannot seek answers the whole file instead.
+            let range = range.filter(|(start, _)| stream.seek(*start as i64, 0) == 0);
+            Some(ManageDocsResourceBody::new(
+                ManageDocsResourceBytes::Stream(stream),
+                total,
+                range,
+            ))
         }
         ManageDocsResourceSource::Remote { loader } => {
             let data = loader(relative_path)?;
-            Some(ManageDocsResourceBody::Buffer { data, offset: 0 })
+            let total = data.len() as u64;
+            let range = range_header.and_then(|header| manage_docs_byte_range(header, total));
+            let offset = range.map(|(start, _)| start as usize).unwrap_or(0);
+            Some(ManageDocsResourceBody::new(
+                ManageDocsResourceBytes::Buffer { data, offset },
+                Some(total),
+                range,
+            ))
         }
     }
 }
 
-pub(crate) enum ManageDocsResourceBody {
+/// The inclusive byte range a `Range: bytes=…` header asks of a `total`-byte resource: its first
+/// range only, clamped to the end, `None` when it is malformed or starts past the end.
+///
+/// CDXC:Docs 2026-09-27 WHY:
+/// The Files view plays video and audio in the embed page from this origin; a media element seeks by asking for byte ranges, and without a 206 answer it could only play from the start and would read a long video whole.
+fn manage_docs_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = header
+        .trim()
+        .strip_prefix("bytes=")?
+        .split(',')
+        .next()?
+        .trim();
+    let (start, end) = spec.split_once('-')?;
+    if total == 0 {
+        return None;
+    }
+    let (start, end) = match (start.trim(), end.trim()) {
+        ("", suffix) => {
+            let suffix = suffix.parse::<u64>().ok().filter(|suffix| *suffix > 0)?;
+            (total.saturating_sub(suffix), total - 1)
+        }
+        (start, "") => (start.parse::<u64>().ok()?, total - 1),
+        (start, end) => (
+            start.parse::<u64>().ok()?,
+            end.parse::<u64>().ok()?.min(total - 1),
+        ),
+    };
+    (start <= end && start < total).then_some((start, end))
+}
+
+pub(crate) enum ManageDocsResourceBytes {
     /// Local files stream from disk so a large Docs asset is never buffered whole.
     Stream(StreamReader),
     Buffer {
@@ -223,18 +163,62 @@ pub(crate) enum ManageDocsResourceBody {
     },
 }
 
+/// What one Docs resource response sends: the bytes, the resource's whole size when known, and
+/// the byte range answered for a `Range` request.
+pub(crate) struct ManageDocsResourceBody {
+    bytes: ManageDocsResourceBytes,
+    total: Option<u64>,
+    range: Option<(u64, u64)>,
+    remaining: u64,
+}
+
 impl ManageDocsResourceBody {
-    pub(crate) fn response_length(&self) -> i64 {
-        match self {
-            Self::Stream(_) => -1,
-            Self::Buffer { data, .. } => data.len() as i64,
+    fn new(bytes: ManageDocsResourceBytes, total: Option<u64>, range: Option<(u64, u64)>) -> Self {
+        let remaining = match (range, total) {
+            (Some((start, end)), _) => end - start + 1,
+            (None, Some(total)) => total,
+            (None, None) => u64::MAX,
+        };
+        Self {
+            bytes,
+            total,
+            range,
+            remaining,
         }
     }
 
+    pub(crate) fn response_length(&self) -> i64 {
+        match (self.range, self.total) {
+            (Some(_), _) | (None, Some(_)) => self.remaining as i64,
+            (None, None) => -1,
+        }
+    }
+
+    /// `(start, end, total)` when this response answers a byte range.
+    pub(crate) fn content_range(&self) -> Option<(u64, u64, u64)> {
+        let (start, end) = self.range?;
+        Some((start, end, self.total?))
+    }
+
     pub(crate) fn read(&mut self, data_out: *mut u8, bytes_to_read: usize) -> usize {
-        match self {
-            Self::Stream(stream) => stream.read(data_out, 1, bytes_to_read),
-            Self::Buffer { data, offset } => {
+        let bytes_to_read =
+            bytes_to_read.min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
+        if bytes_to_read == 0 {
+            return 0;
+        }
+        let count = Self::read_bytes(&mut self.bytes, data_out, bytes_to_read);
+        self.remaining = self.remaining.saturating_sub(count as u64);
+        count
+    }
+
+    fn read_bytes(
+        bytes: &mut ManageDocsResourceBytes,
+        data_out: *mut u8,
+        bytes_to_read: usize,
+    ) -> usize {
+        match bytes {
+            ManageDocsResourceBytes::Stream(stream) => stream.read(data_out, 1, bytes_to_read),
+            ManageDocsResourceBytes::Buffer { data, offset } => {
                 let available = data.len().saturating_sub(*offset);
                 let count = available.min(bytes_to_read);
                 if count > 0 {
@@ -254,6 +238,7 @@ wrap_resource_handler! {
     pub(crate) struct GhostexManageDocsResourceHandler {
         source: ManageDocsResourceSource,
         relative_path: String,
+        range_header: Option<String>,
         body: Arc<Mutex<Option<ManageDocsResourceBody>>>,
     }
 
@@ -270,7 +255,11 @@ wrap_resource_handler! {
             if let Some(handle_request) = handle_request {
                 *handle_request = 1;
             }
-            let Some(opened) = open_manage_docs_resource(&self.source, &self.relative_path) else {
+            let Some(opened) = open_manage_docs_resource(
+                &self.source,
+                &self.relative_path,
+                self.range_header.as_deref(),
+            ) else {
                 // Outside the Docs roots or unreadable: cancel the request.
                 return 0;
             };
@@ -290,8 +279,18 @@ wrap_resource_handler! {
             let Some(response) = response else {
                 return;
             };
-            response.set_status(200);
-            response.set_status_text(Some(&CefString::from("OK")));
+            let content_range = self
+                .body
+                .lock()
+                .ok()
+                .and_then(|body| body.as_ref().and_then(ManageDocsResourceBody::content_range));
+            if content_range.is_some() {
+                response.set_status(206);
+                response.set_status_text(Some(&CefString::from("Partial Content")));
+            } else {
+                response.set_status(200);
+                response.set_status_text(Some(&CefString::from("OK")));
+            }
             response.set_mime_type(Some(&CefString::from(
                 get_mime_type(&self.relative_path).as_str(),
             )));
@@ -307,6 +306,18 @@ wrap_resource_handler! {
                     Some(&CefString::from("Cache-Control")),
                     Some(&CefString::from("no-store")),
                 );
+                string_multimap_append(
+                    Some(headers),
+                    Some(&CefString::from("Accept-Ranges")),
+                    Some(&CefString::from("bytes")),
+                );
+                if let Some((start, end, total)) = content_range {
+                    string_multimap_append(
+                        Some(headers),
+                        Some(&CefString::from("Content-Range")),
+                        Some(&CefString::from(format!("bytes {start}-{end}/{total}").as_str())),
+                    );
+                }
                 response.set_header_map(Some(headers));
             }
             if let Some(response_length) = response_length {
@@ -389,193 +400,68 @@ wrap_resource_request_handler! {
             _frame: Option<&mut Frame>,
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
-            let request_url = CefString::from(&request?.url()).to_string();
+            let request = request?;
+            let request_url = CefString::from(&request.url()).to_string();
             let relative_path = manage_docs_resource_relative_path(&request_url)?;
+            let range_header = CefString::from(&request.header_by_name(Some(&CefString::from("Range"))))
+                .to_string();
             Some(GhostexManageDocsResourceHandler::new(
                 self.source.clone(),
                 relative_path,
+                (!range_header.trim().is_empty()).then_some(range_header),
                 Arc::new(Mutex::new(None)),
             ))
         }
     }
 }
 
-/*
-CDXC:SessionChat 2026-09-09 DECISION:
-User: a first-party page (sidebar, session chat) must never navigate itself
-away; if anything tries, the URL opens where a clicked link would go, in the
-embedded Browser or the system browser depending on "Open links in embedded
-browser". The chat pane has real browser history, so an un-intercepted link
-in a transcript (a Storybook URL inside a tool-call block, 2026-09-09) used
-to replace chat.html with that page until the user pressed Back. Only
-main-frame navigations to a different document are refused; reloads and
-query changes of the page's own entry, and every sub-frame load, pass.
-*/
-pub(crate) fn sidebar_page_entry_identity(url: &str) -> String {
-    get_url_without_query_or_fragment(url).to_string()
-}
-
-/// CDXC:SessionChat 2026-09-12 WHY:
-/// A renderer may navigate between an activation request and delivery; a first-party browser allocation alone does not make its current document trusted.
-/// Pin credential delivery to its original bundled entry, allowing only query and fragment changes and deferring about:blank until the real entry loads.
-pub(crate) fn trusted_gxserver_frame_matches(frame: &Frame, entry_identity: &str) -> bool {
-    let frame_url = CefString::from(&frame.url()).to_string();
-    frame.is_main() != 0
-        && app_modal_host_bridge_surface_for_frame_url(&frame_url).is_some()
-        && sidebar_page_entry_identity(&frame_url) == entry_identity
-}
-
-pub(crate) fn first_party_loopback_request_matches(
-    entry_identity: &str,
-    frame_url: &str,
-    requesting_origin: &str,
-) -> bool {
-    if app_modal_host_bridge_surface_for_frame_url(frame_url).is_none()
-        || sidebar_page_entry_identity(frame_url) != entry_identity
-    {
-        return false;
-    }
-    // Chromium serializes a hostless file permission origin as file:///.
-    // Pair that exact origin with the pinned main document, since ordinary
-    // HTTP origin normalization deliberately rejects hostless file URLs.
-    (entry_identity.starts_with("file:///") && matches!(requesting_origin, "file://" | "file:///"))
-        || sidebar_page_entry_identity(requesting_origin) == entry_identity
-}
-
 wrap_request_handler! {
-    pub(crate) struct GhostexGpuiSidebarRendererRequestHandler {
-        entry_identity: String,
-        sidebar_bridge_event_handler: SidebarBridgeEventHandler,
+    pub(crate) struct GhostexGpuiBrowserRequestHandler {
+        popup_open_handler: BrowserPopupOpenHandler,
+        page_metadata_handler: Option<BrowserPageMetadataHandler>,
     }
 
     impl RequestHandler {
         fn on_before_browse(
             &self,
-            _browser: Option<&mut cef::Browser>,
+            browser: Option<&mut cef::Browser>,
             frame: Option<&mut Frame>,
             request: Option<&mut Request>,
             _user_gesture: c_int,
             _is_redirect: c_int,
         ) -> c_int {
-            let is_main_frame = frame.map(|frame| frame.is_main() != 0).unwrap_or(true);
-            if !is_main_frame {
-                return 0;
-            }
-            let Some(request_url) = request.map(|request| CefString::from(&request.url()).to_string())
-            else {
-                return 0;
-            };
-            if sidebar_page_entry_identity(&request_url) == self.entry_identity {
-                return 0;
-            }
-            if request_url.starts_with("http://") || request_url.starts_with("https://") {
-                (self.sidebar_bridge_event_handler)(SidebarBridgeEvent::RefusedPageNavigation(
-                    request_url,
-                ));
-            }
-            1
-        }
-
-        fn on_render_view_ready(&self, browser: Option<&mut cef::Browser>) {
-            append_sidebar_renderer_lifecycle(
-                "gpui.sidebar.rendererReady",
+            cancel_external_app_navigation(
                 browser,
-                serde_json::json!({}),
-            );
+                frame,
+                request,
+                self.page_metadata_handler.as_ref(),
+            ) as c_int
         }
 
-        fn on_render_process_unresponsive(
-            &self,
-            browser: Option<&mut cef::Browser>,
-            _callback: Option<&mut UnresponsiveProcessCallback>,
-        ) -> c_int {
-            append_sidebar_renderer_lifecycle(
-                "gpui.sidebar.rendererUnresponsive",
-                browser,
-                serde_json::json!({}),
-            );
-            0
-        }
-
-        fn on_render_process_responsive(&self, browser: Option<&mut cef::Browser>) {
-            append_sidebar_renderer_lifecycle(
-                "gpui.sidebar.rendererResponsive",
-                browser,
-                serde_json::json!({}),
-            );
-        }
-
-        fn on_render_process_terminated(
-            &self,
-            browser: Option<&mut cef::Browser>,
-            status: TerminationStatus,
-            error_code: c_int,
-            error_string: Option<&CefString>,
-        ) {
-            append_sidebar_renderer_lifecycle(
-                "gpui.sidebar.rendererTerminated",
-                browser,
-                serde_json::json!({
-                    "cefCode": error_code,
-                    "cefText": error_string.map(CefString::to_string),
-                    "terminationKind": cef_termination_kind(status),
-                    "terminationRaw": status.get_raw(),
-                }),
-            );
-        }
-    }
-}
-
-pub(crate) fn cef_termination_kind(status: TerminationStatus) -> &'static str {
-    match status {
-        TerminationStatus::ABNORMAL_TERMINATION => "abnormalTermination",
-        TerminationStatus::PROCESS_WAS_KILLED => "processWasKilled",
-        TerminationStatus::PROCESS_CRASHED => "processCrashed",
-        TerminationStatus::PROCESS_OOM => "processOutOfMemory",
-        TerminationStatus::LAUNCH_FAILED => "launchFailed",
-        TerminationStatus::INTEGRITY_FAILURE => "integrityFailure",
-        _ => "unknown",
-    }
-}
-
-pub(crate) fn append_sidebar_renderer_lifecycle(
-    event: &str,
-    browser: Option<&mut cef::Browser>,
-    mut details: serde_json::Value,
-) {
-    if let Some(details) = details.as_object_mut() {
-        details.insert(
-            "browserId".to_string(),
-            browser
-                .map(|browser| serde_json::Value::from(browser.identifier()))
-                .unwrap_or(serde_json::Value::Null),
-        );
-        details.insert(
-            "cefContextInitialized".to_string(),
-            serde_json::Value::Bool(CEF_CONTEXT_INITIALIZED.load(Ordering::Acquire)),
-        );
-        details.insert(
-            "runtimeShutdownStarted".to_string(),
-            serde_json::Value::Bool(CEF_SHUTDOWN_IN_PROGRESS.load(Ordering::Acquire)),
-        );
-    }
-    support_logs::append(GpuiSupportLog::SidebarRenderer, event, details);
-}
-
-wrap_request_handler! {
-    pub(crate) struct GhostexGpuiBrowserRequestHandler {
-        popup_open_handler: BrowserPopupOpenHandler,
-    }
-
-    impl RequestHandler {
-        fn on_open_urlfrom_tab(
+        fn resource_request_handler(
             &self,
             _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _is_navigation: c_int,
+            _is_download: c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            external_app_resource_request_handler(request)
+        }
+
+        fn on_open_urlfrom_tab(
+            &self,
+            browser: Option<&mut cef::Browser>,
             _frame: Option<&mut Frame>,
             target_url: Option<&CefString>,
             target_disposition: WindowOpenDisposition,
             _user_gesture: c_int,
         ) -> c_int {
+            if dispatch_external_app_popup(browser, target_url) {
+                return 1;
+            }
             /*
             CDXC:Browser 2026-08-18:
             Chromium reports middle-click and Cmd/Ctrl-click link opens here,
@@ -602,12 +488,69 @@ wrap_request_handler! {
     }
 }
 
+/*
+CDXC:SessionChat 2026-09-09 DECISION:
+User: a first-party page (sidebar, session chat) must never navigate itself
+away; if anything tries, the URL opens where a clicked link would go, in the
+embedded Browser or the system browser depending on "Open links in embedded
+browser". The chat pane has real browser history, so an un-intercepted link
+in a transcript (a Storybook URL inside a tool-call block, 2026-09-09) used
+to replace chat.html with that page until the user pressed Back. Only
+main-frame navigations to a different document are refused; reloads and
+query changes of the page's own entry, and every sub-frame load, pass.
+The sidebar and chat are native now, so the Files embed page (an HTML file's
+own links run in its sub-frame) is the first-party page this guards; extension
+pages and website views keep their own navigation.
+*/
+pub(crate) fn first_party_page_entry_identity(url: &str) -> String {
+    get_url_without_query_or_fragment(url).to_string()
+}
+
 wrap_request_handler! {
     pub(crate) struct GhostexManageDocsRequestHandler {
         source: ManageDocsResourceSource,
+        entry_identity: String,
+        bridge_event_handler: Option<ProjectWorkareaBridgeEventHandler>,
     }
 
     impl RequestHandler {
+        fn on_before_browse(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: c_int,
+            _is_redirect: c_int,
+        ) -> c_int {
+            let (mut frame, mut request) = (frame, request);
+            // An HTML file's app links run in its sub-frame, so this comes before the frame check.
+            if cancel_external_app_navigation(
+                browser,
+                frame.as_deref_mut(),
+                request.as_deref_mut(),
+                None,
+            ) {
+                return 1;
+            }
+            let is_main_frame = frame.map(|frame| frame.is_main() != 0).unwrap_or(true);
+            if !is_main_frame {
+                return 0;
+            }
+            let Some(request_url) = request.map(|request| CefString::from(&request.url()).to_string())
+            else {
+                return 0;
+            };
+            if first_party_page_entry_identity(&request_url) == self.entry_identity {
+                return 0;
+            }
+            if (request_url.starts_with("http://") || request_url.starts_with("https://"))
+                && let Some(handler) = self.bridge_event_handler.as_ref()
+            {
+                handler(ProjectWorkareaBridgeEvent::RefusedPageNavigation(request_url));
+            }
+            1
+        }
+
         fn resource_request_handler(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -618,12 +561,14 @@ wrap_request_handler! {
             _request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut c_int>,
         ) -> Option<ResourceRequestHandler> {
-            let request_url = request
-                .map(|request| CefString::from(&request.url()).to_string())
-                .unwrap_or_default();
-            request_url.starts_with(MANAGE_DOCS_RESOURCE_BASE_URL).then(|| {
-                GhostexManageDocsResourceRequestHandler::new(self.source.clone())
-            })
+            let Some(request) = request else {
+                return None;
+            };
+            let request_url = CefString::from(&request.url()).to_string();
+            if request_url.starts_with(MANAGE_DOCS_RESOURCE_BASE_URL) {
+                return Some(GhostexManageDocsResourceRequestHandler::new(self.source.clone()));
+            }
+            external_app_resource_request_handler(Some(request))
         }
     }
 }

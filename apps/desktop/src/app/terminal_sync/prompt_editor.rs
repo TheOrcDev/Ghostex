@@ -6,7 +6,6 @@ use std::{fs, path::PathBuf};
 
 use gpui::Window;
 
-use crate::app::consts::*;
 use crate::app::helpers::*;
 use crate::app::model::*;
 use crate::app::window::*;
@@ -162,13 +161,13 @@ impl GhostexGpuiApp {
         .map(|record| (record.pin_viewer(), record.view.entity_id())) else {
             return;
         };
-        let remote_context = match target {
-            GpuiEngineTerminalEventTarget::Agents(shell_session_id) => self
-                .remote_prompt_editor_context_for_shell_session(shell_session_id)
-                .map(|(key, connection_generation)| (shell_session_id, key, connection_generation)),
-            GpuiEngineTerminalEventTarget::Command(_) => None,
+        let delivery_target = RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
+            target,
+            runtime_session_id,
         };
-        if let Some((shell_session_id, key, connection_generation)) = remote_context {
+        if let Some((key, connection_generation)) =
+            self.remote_prompt_editor_context_for_delivery_target(delivery_target)
+        {
             cx.spawn(async move |this, cx| {
                 let _viewer_lease = viewer_lease;
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -176,13 +175,9 @@ impl GhostexGpuiApp {
                         return;
                     }
                     this.queue_remote_prompt_editor_request(
-                        shell_session_id,
                         &key,
                         connection_generation,
-                        RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
-                            target,
-                            runtime_session_id,
-                        },
+                        delivery_target,
                         window,
                         cx,
                     );
@@ -288,9 +283,90 @@ impl GhostexGpuiApp {
         Some((key, connection_generation))
     }
 
+    /// CDXC:PromptEditor 2026-09-23 WHY:
+    /// A remote Command tab owns a persisted host session just like an Agents pane. Resolve the exact delivery target again after Code starts, so a tab switch or replaced viewer cannot send Ctrl+G to another session.
+    pub(crate) fn remote_prompt_editor_context_for_delivery_target(
+        &self,
+        delivery_target: RemotePromptEditorDeliveryTarget,
+    ) -> Option<(GpuiRemoteAttachSessionKey, u64)> {
+        let target = match delivery_target {
+            RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
+                target,
+                runtime_session_id,
+            } => {
+                let record = match target {
+                    GpuiEngineTerminalEventTarget::Agents(id) => {
+                        self.agents_gpui_engine_terminals.get(&id)
+                    }
+                    GpuiEngineTerminalEventTarget::Command(id) => {
+                        self.command_gpui_engine_terminals.get(&id)
+                    }
+                }?;
+                if record.runtime_session_id != runtime_session_id {
+                    return None;
+                }
+                target
+            }
+            #[cfg(target_os = "macos")]
+            RemotePromptEditorDeliveryTarget::NativeTerminal(target) => match target {
+                FocusedTerminalTextMountTarget::Agents(slot)
+                    if self.agents_terminal_ghostty_surface_matches(slot) =>
+                {
+                    GpuiEngineTerminalEventTarget::Agents(slot.session_id)
+                }
+                FocusedTerminalTextMountTarget::Command(slot)
+                    if self.command_terminal_ghostty_surface_matches(slot) =>
+                {
+                    GpuiEngineTerminalEventTarget::Command(slot.session_id)
+                }
+                _ => return None,
+            },
+            #[cfg(target_os = "macos")]
+            RemotePromptEditorDeliveryTarget::NativeView(view) => {
+                let responder = view as *mut std::ffi::c_void;
+                if let Some(id) = self.agents_terminal_session_id_containing_responder(responder) {
+                    GpuiEngineTerminalEventTarget::Agents(id)
+                } else {
+                    GpuiEngineTerminalEventTarget::Command(
+                        self.command_terminal_session_id_containing_responder(responder)?,
+                    )
+                }
+            }
+        };
+        let key = match target {
+            GpuiEngineTerminalEventTarget::Agents(id) => {
+                return self.remote_prompt_editor_context_for_shell_session(id);
+            }
+            GpuiEngineTerminalEventTarget::Command(id) => GpuiRemoteAttachSessionKey::from(
+                &self.command_remote_action_session_for_command_tab(id)?,
+            ),
+        };
+        let generation = self
+            .remote_gxserver_connect_generations
+            .get(&key.remote_machine_id)
+            .copied()?;
+        Some((key, generation))
+    }
+
+    pub(crate) fn has_pending_remote_prompt_editor_for_engine_target(
+        &self,
+        target: GpuiEngineTerminalEventTarget,
+        runtime_session_id: AgentsTerminalRuntimeSessionId,
+    ) -> bool {
+        self.source_code_server_runtime
+            .pending_remote_prompt_editor_request
+            .as_ref()
+            .is_some_and(|request| {
+                request.delivery_target
+                    == RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
+                        target,
+                        runtime_session_id,
+                    }
+            })
+    }
+
     pub(crate) fn queue_remote_prompt_editor_request(
         &mut self,
-        shell_session_id: TerminalSessionId,
         key: &GpuiRemoteAttachSessionKey,
         connection_generation: u64,
         delivery_target: RemotePromptEditorDeliveryTarget,
@@ -298,7 +374,7 @@ impl GhostexGpuiApp {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let context_is_current = self
-            .remote_prompt_editor_context_for_shell_session(shell_session_id)
+            .remote_prompt_editor_context_for_delivery_target(delivery_target)
             .is_some_and(|(current_key, current_generation)| {
                 current_key == *key && current_generation == connection_generation
             });
@@ -357,7 +433,6 @@ impl GhostexGpuiApp {
         let source_runtime_generation = self.source_code_server_runtime.generation;
         self.source_code_server_runtime
             .queue_remote_prompt_editor_request(PendingRemotePromptEditorRequest {
-                shell_session_id,
                 remote_key: key.clone(),
                 connection_generation,
                 source_target,
@@ -395,7 +470,7 @@ impl GhostexGpuiApp {
         }
 
         let authoritative_session_is_current = self
-            .remote_prompt_editor_context_for_shell_session(request.shell_session_id)
+            .remote_prompt_editor_context_for_delivery_target(request.delivery_target)
             .is_some_and(|(current_key, current_generation)| {
                 current_key == request.remote_key
                     && current_generation == request.connection_generation
@@ -405,49 +480,7 @@ impl GhostexGpuiApp {
             .as_ref()
             .and_then(|snapshot| self.source_code_server_runtime_target(snapshot))
             .is_some_and(|target| target == request.source_target);
-        let delivery_target_is_current = match request.delivery_target {
-            #[cfg(target_os = "macos")]
-            RemotePromptEditorDeliveryTarget::NativeTerminal(
-                FocusedTerminalTextMountTarget::Agents(slot_id),
-            ) => slot_id.session_id == request.shell_session_id,
-            #[cfg(target_os = "macos")]
-            RemotePromptEditorDeliveryTarget::NativeTerminal(
-                FocusedTerminalTextMountTarget::ProjectEditorCompanion(slot_id),
-            ) => slot_id.session_id == request.shell_session_id,
-            #[cfg(target_os = "macos")]
-            RemotePromptEditorDeliveryTarget::NativeTerminal(
-                FocusedTerminalTextMountTarget::Command(_),
-            ) => false,
-            RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
-                target: GpuiEngineTerminalEventTarget::Agents(shell_session_id),
-                runtime_session_id,
-            } => {
-                shell_session_id == request.shell_session_id
-                    && self
-                        .agents_gpui_engine_terminals
-                        .get(&shell_session_id)
-                        .is_some_and(|record| record.runtime_session_id == runtime_session_id)
-            }
-            RemotePromptEditorDeliveryTarget::GpuiEngineTerminal {
-                target: GpuiEngineTerminalEventTarget::Command(_),
-                ..
-            } => false,
-            #[cfg(target_os = "macos")]
-            RemotePromptEditorDeliveryTarget::NativeView(native_view) => {
-                self.agents_terminal_session_id_containing_responder(
-                    native_view as *mut std::ffi::c_void,
-                )
-                .or_else(|| {
-                    self.project_editor_companion_terminal_session_id_containing_responder(
-                        native_view as *mut std::ffi::c_void,
-                    )
-                }) == Some(request.shell_session_id)
-            }
-        };
-        if !authoritative_session_is_current
-            || !authoritative_target_is_current
-            || !delivery_target_is_current
-        {
+        if !authoritative_session_is_current || !authoritative_target_is_current {
             self.source_code_server_runtime
                 .pending_remote_prompt_editor_request = None;
             return false;
@@ -565,6 +598,7 @@ impl GhostexGpuiApp {
         &mut self,
         value: &str,
         working_directory: Option<&str>,
+        target: GpuiEngineTerminalEventTarget,
         cx: &mut gpui::Context<Self>,
     ) {
         let trimmed = value.trim();
@@ -573,6 +607,9 @@ impl GhostexGpuiApp {
         }
         let open_value = gpui_terminal_markdown_image_reference_path(trimmed).unwrap_or(trimmed);
         if gpui_terminal_link_is_web_url(open_value) {
+            if self.try_open_remote_loopback_link(open_value, target, cx) {
+                return;
+            }
             if !shared_settings::shared_sidebar_settings_snapshot().web_links_open_in_app() {
                 let _ = gpui_open_terminal_action_url(open_value);
                 return;
@@ -588,21 +625,32 @@ impl GhostexGpuiApp {
                 self.copy_path_for_disabled_project_workarea(open_value, "Browser", cx);
                 return;
             }
-            let Some(sidebar) = self.sidebar.clone() else {
-                return;
-            };
-            let payload = serde_json::json!({
-                "reuse": "similar",
-                "type": GPUI_SIDEBAR_OPEN_BROWSER_URL_MESSAGE_TYPE,
-                "url": open_value,
-                "version": GPUI_SIDEBAR_OPEN_BROWSER_URL_MESSAGE_VERSION,
-            });
-            let script = format!(
-                "(function(){{const post=window.ghostexGpui?.postOpenBrowserUrl;if(typeof post==='function'){{post(JSON.stringify({payload}));}}}})(); undefined;"
-            );
-            sidebar.update(cx, |surface, _| {
-                surface.execute_app_owned_script(&script);
-            });
+            self.gx_store_open_terminal_link_in_browser(open_value, cx);
+            return;
+        }
+        let remote_key = match target {
+            GpuiEngineTerminalEventTarget::Agents(session_id) => {
+                self.agents_chat_remote_key_for_session(session_id)
+            }
+            GpuiEngineTerminalEventTarget::Command(session_id) => self
+                .command_remote_action_session_for_command_tab(session_id)
+                .as_ref()
+                .map(GpuiRemoteAttachSessionKey::from),
+        };
+        if let Some(remote_key) = remote_key
+            && (!gpui_terminal_link_has_scheme(open_value)
+                || open_value.to_ascii_lowercase().starts_with("file://")
+                || gpui_terminal_link_is_windows_drive_path(open_value))
+        {
+            let path = gpui_terminal_file_link_path_without_coordinates(open_value).to_string();
+            cx.spawn(async move |this, cx| {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.open_remote_session_chat_file_for_key(
+                        remote_key, &path, None, None, None, window, cx,
+                    );
+                });
+            })
+            .detach();
             return;
         }
         let Some(file_link_path) = gpui_terminal_file_link_path(open_value) else {

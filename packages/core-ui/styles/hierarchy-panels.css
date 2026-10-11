@@ -24,15 +24,15 @@
 .sidebar-reference-layout[data-reference-sidebar='true'] {
   --sidebar-active-session-border: #ffffff;
   /*
-   * CDXC:Sessions 2026-03-09:
-   * User: selected-session chrome matches the dark chat composer
-   * (session-chat-composer-focus.css / chat.css). Collapsed groups, collapsed
-   * collections, collapsed section rows, and unselected Spaces that still own
-   * that session reuse the same fill, outline, and inner highlight.
+   * CDXC:Sessions 2026-09-16 DECISION:
+   * User: the selected session's dark fill must not be a rigid gray; it should be translucent so it takes on the sidebar's tinted background colors.
+   * Supersedes the 2026-03-09 decision that copied the chat composer's literal #141414 fill, which sat as a neutral gray block on tinted and custom-colored sidebars.
+   * The outline and inner highlight still match the composer, and collapsed groups, collections, section rows, and unselected Spaces that own the session reuse the same three values.
+   * Light mode keeps its opaque white fill in sidebar-light.css.
    */
-  --sidebar-composer-surface: #141414;
-  --sidebar-composer-outline: rgb(255 255 255 / 5%);
-  --sidebar-composer-highlight: rgb(255 255 255 / 3%);
+  --sidebar-composer-surface: color-mix(in srgb, var(--app-foreground) 12%, transparent);
+  --sidebar-composer-outline: rgb(255 255 255 / 8%);
+  --sidebar-composer-highlight: rgb(255 255 255 / 4%);
 }
 
 .reference-sidebar-section-heading {
@@ -191,14 +191,16 @@
 
 /*
  * Project groups are marked by a colored rail instead of nested bordered
- * panels. The rail is an independently positioned visual so its one-pixel
- * separation from the header and its exact vertical endpoints do not affect
- * normal content layout.
+ * panels. The rail is an independently positioned visual so its exact
+ * vertical endpoints do not affect normal content layout.
+ *
+ * CDXC:Projects 2026-09-19 DECISION:
+ * User: keep only the Branched rail look for project groups and default everyone to it; the Quiet and Header rail options are gone.
  */
 section.project-collection {
   --project-collection-expanded-surface: color-mix(in srgb, var(--app-background) 96%, #000000 4%);
-  --project-group-rail-color: var(--project-collection-color);
-  --project-group-rail-width: 3px;
+  --project-group-rail-color: color-mix(in srgb, var(--project-collection-color) 18%, transparent);
+  --project-group-rail-width: 2px;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -214,45 +216,17 @@ section.project-collection::after {
   left: 0;
   pointer-events: none;
   position: absolute;
-  top: 1px;
+  top: 0;
   width: var(--project-group-rail-width);
 }
 
-.sidebar-reference-layout[data-project-group-style='quiet'] section.project-collection {
-  --project-group-rail-color: color-mix(
-    in srgb,
-    var(--project-collection-color) 55%,
-    color-mix(in srgb, var(--app-foreground) 42%, transparent) 45%
-  );
-  --project-group-rail-width: 1px;
-}
-
-.sidebar-reference-layout[data-project-group-style='branched'] section.project-collection {
-  --project-group-rail-color: color-mix(in srgb, var(--project-collection-color) 18%, transparent);
-  --project-group-rail-width: 2px;
-}
-
-.sidebar-reference-layout[data-project-group-style='branched'] section.project-collection::after {
-  top: 0;
-}
-
 section.project-collection > .project-collection-header {
-  background: transparent;
+  background: color-mix(in srgb, var(--project-collection-color) 18%, transparent);
   border: none;
   border-radius: 0;
-  margin-left: -9px;
-  min-height: 30px;
-  padding: 0 8px 0 5px;
-  width: calc(100% + 9px);
-}
-
-.sidebar-reference-layout[data-project-group-style='header'] section.project-collection > .project-collection-header {
-  background: color-mix(in srgb, var(--project-collection-color) 12%, transparent);
-}
-
-.sidebar-reference-layout[data-project-group-style='branched'] section.project-collection > .project-collection-header {
-  background: color-mix(in srgb, var(--project-collection-color) 18%, transparent);
   margin-left: -10px;
+  min-height: 30px;
+  padding: 0 8px;
   width: calc(100% + 10px);
 }
 
@@ -411,6 +385,7 @@ section.project-collection[data-collapsed='true'][data-contains-active-session='
 .sidebar-reference-layout[data-reference-sidebar='true']
   .reference-project-group-list
   > .group[data-project-group='true'] {
+  --session-kind-end-bleed: 8px;
   margin-left: 18px;
   margin-right: 5px;
   width: calc(100% - 23px);
@@ -418,6 +393,14 @@ section.project-collection[data-collapsed='true'][data-contains-active-session='
 
 .sidebar-reference-layout[data-reference-sidebar='true'] .group[data-project-group='true'] .group-sessions {
   padding: 0 3px 3px;
+}
+
+/* CDXC:Sidebar 2026-09-16 DECISION:
+ * User: section headers must toggle when clicking anywhere to their right, through the sidebar's right edge.
+ * Include the session-list padding and the top-level project's right margin in the button; matching inner padding keeps the count aligned with session rows.
+ */
+.sidebar-reference-layout[data-reference-sidebar='true'] .group[data-project-group='true'] {
+  --session-kind-end-bleed: 3px;
 }
 
 .sidebar-reference-layout[data-reference-sidebar='true'] .group[data-project-group='true'][data-collapsed='false'] {
@@ -491,34 +474,23 @@ section.project-collection[data-collapsed='true'][data-contains-active-session='
   margin-left: 10px;
 }
 
-/* Branched mode adds a short visual link from the group rail to each project. */
-.sidebar-reference-layout[data-project-group-style='branched']
-  .project-collection-projects
-  > .group[data-project-group='true']
-  .group-title-wrap::before {
-  background: var(--project-group-rail-color);
-  content: '';
-  height: 2px;
-  left: -43px;
-  pointer-events: none;
+/* CDXC:Projects 2026-09-17 DECISION:
+ * User: expanded projects show the same right-facing chevron rotated down, shifted 2px left.
+ * The disclosure replaces the short branch marker beside the project icon.
+ *
+ * CDXC:Projects 2026-09-19 DECISION:
+ * User: clicking the chevron left of the project header expands/collapses the project; it takes clicks so the header's click handler toggles it.
+ */
+.project-disclosure-chevron {
+  color: #a6adb6;
+  left: -23px;
   position: absolute;
-  top: calc(50% - 1px);
-  width: 39px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
-/* Top-level projects keep the same branch marker without inventing a parent rail. */
-.sidebar-reference-layout[data-project-group-style='branched']
-  .reference-project-group-list
-  > .group[data-project-group='true']
-  .group-title-wrap::before {
-  background: color-mix(in srgb, var(--workspace-project-theme-color, var(--app-foreground)) 18%, transparent);
-  content: '';
-  height: 2px;
-  left: -21px;
-  pointer-events: none;
-  position: absolute;
-  top: calc(50% - 1px);
-  width: 13px;
+.project-disclosure-chevron[data-collapsed='false'] {
+  transform: translateY(-50%) rotate(90deg);
 }
 
 /* Non-reference contexts (Storybook grid stories, legacy layouts). */
@@ -547,7 +519,7 @@ section.project-collection[data-collapsed='true'][data-contains-active-session='
 
 .session-kind-label {
   color: color-mix(in srgb, var(--app-foreground) 88%, transparent);
-  font-size: 8.5px;
+  font-size: 12.5px;
   font-weight: 650;
   letter-spacing: 0.12em;
   opacity: 0.96;
@@ -573,12 +545,7 @@ section.project-collection[data-collapsed='true'][data-contains-active-session='
   --session-surface: color-mix(in srgb, var(--app-background) 90%, #000000 10%);
   --session-light-surface: color-mix(in srgb, var(--session-expanded-group-surface) 70%, var(--app-foreground) 30%);
   --session-hover-surface: color-mix(in srgb, var(--session-expanded-group-surface) 78%, var(--app-foreground) 22%);
-  /*
-   * CDXC:Sessions 2026-03-09:
-   * User: the selected session must use the chat composer surface, not a
-   * derived hierarchy tint. Dark composer fill is #141414
-   * (session-chat-composer-focus.css / chat.css).
-   */
+  /* The selected fill is --sidebar-composer-surface (translucent in dark mode, see the 2026-09-16 decision above). */
   --session-focused-surface: var(--sidebar-composer-surface);
   --session-visible-surface: color-mix(in srgb, var(--session-light-surface) 60%, #000000 40%);
   --session-visible-hover-overlay: color-mix(in srgb, var(--app-foreground) 8%, transparent);

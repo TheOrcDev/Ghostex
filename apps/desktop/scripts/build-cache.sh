@@ -3,7 +3,7 @@
 # build-macos-app.sh. The sourcing script must define REPO_ROOT and
 # BUILD_CACHE_DIR before sourcing this file.
 
-# CDXC:Build 2026-06-07-16:23: Local starts should rebuild expensive bundled resources only when their runtime inputs change. Store content-hash stamps under build/<arch> so repeated `bun run start` calls do not churn source files or rely on generated folders that may be deleted by other build steps.
+# CDXC:Build 2026-06-07-16:23: Local starts should rebuild expensive bundled resources only when their runtime inputs change. Store content-hash stamps under build/<arch> so repeated `cargo xtask start` calls do not churn source files or rely on generated folders that may be deleted by other build steps.
 fingerprint_inputs() {
 	"${GXSERVER_NODE_BIN:-node}" "$REPO_ROOT/tooling/fingerprint-build-inputs.mjs" "$@"
 }

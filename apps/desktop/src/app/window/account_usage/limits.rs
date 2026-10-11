@@ -5,7 +5,7 @@ use serde_json::Value;
 impl AccountUsagePanel {
     /// CDXC:AgentProviders 2026-09-12 DECISION:
     /// User: Claude's Fable limit must stay visible beside the five-hour and weekly limits; additional models start collapsed.
-    /// SEE-ALSO: packages/shared/account-usage-windows.ts and apps/desktop/src/app/titlebar/account_usage.rs select the two tightest headline limits.
+    /// SEE-ALSO: packages/shared/account-usage-windows.ts (deleted 2026-10-01) and apps/desktop/src/app/titlebar/account_usage.rs select the two tightest headline limits.
     pub(super) fn render_limits(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let p = self.palette;
         let windows = array(&self.account, "usage");
@@ -115,76 +115,82 @@ impl AccountUsagePanel {
             }
             card = card.child(models);
         }
-        let extra = windows.iter().find(|w| w["id"] == "spend");
-        let extra_text = if p.codex {
-            self.account["resetCredits"]
-                .as_u64()
-                .map(|n| format!("{n} available"))
-        } else {
-            extra
+        let footer = |top: bool, title: &'static str| {
+            h_flex()
+                .w_full()
+                .mt(px(if top { 13.0 } else { 9.0 }))
+                .when(top, |this| {
+                    this.pt(px(11.0)).border_t_1().border_color(p.line)
+                })
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .text_size(px(11.0))
+                .line_height(px(15.95))
+                .text_color(p.muted)
+                .child(title)
+        };
+        if !p.codex {
+            let extra = windows
+                .iter()
+                .find(|w| w["id"] == "spend")
                 .and_then(|w| w["usedPercent"].as_f64())
                 .map(|n| format!("{}% used", n.round()))
+                .unwrap_or_else(|| "Not reported".into());
+            card = card.child(
+                footer(true, "Extra usage").child(
+                    label(extra, 11.0, chrome_color(0xe4e4e2, 0x292524).into())
+                        .font_weight(FontWeight::MEDIUM),
+                ),
+            );
         }
-        .unwrap_or_else(|| "Not reported".into());
-        let mut footer = h_flex()
-            .w_full()
-            .mt(px(13.0))
-            .pt(px(11.0))
-            .border_t_1()
-            .border_color(p.line)
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .text_size(px(11.0))
-            .line_height(px(15.95))
-            .text_color(p.muted)
-            .child(if p.codex {
-                "Rate limit resets"
-            } else {
-                "Extra usage"
-            });
-        if p.codex {
-            footer = footer.child(
-                h_flex()
-                    .id("account-usage-reset-toggle")
-                    .track_focus(&self.reset_focus)
-                    .focus_visible(move |this| this.shadow(focus_ring(p)))
-                    .h(px(22.0))
-                    .pl(px(9.0))
-                    .pr(px(4.0))
-                    .items_center()
-                    .gap(px(6.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(p.accent_line)
-                    .bg(p.soft)
-                    .text_color(p.accent_ink)
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .hover(move |this| this.bg(p.accent.opacity(0.22)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_resets(cx);
-                    }))
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+        // CDXC:AgentProviders 2026-09-24 DECISION:
+        // User: Claude resets must be shown and usable like Codex resets. Claude keeps its Extra usage row and gains the same Rate limit resets row beneath it once Anthropic reports the reset program for the account.
+        let reports_resets = p.codex
+            || self.account["resetCredits"].is_u64()
+            || !text(&self.account, "resetCreditsError").is_empty();
+        if reports_resets {
+            let resets_text = self.account["resetCredits"]
+                .as_u64()
+                .map(|n| format!("{n} available"))
+                .unwrap_or_else(|| "Not reported".into());
+            card = card.child(
+                footer(p.codex, "Rate limit resets").child(
+                    h_flex()
+                        .id("account-usage-reset-toggle")
+                        .track_focus(&self.reset_focus)
+                        .focus_visible(move |this| this.shadow(focus_ring(p)))
+                        .h(px(22.0))
+                        .pl(px(9.0))
+                        .pr(px(4.0))
+                        .items_center()
+                        .gap(px(6.0))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(p.accent_line)
+                        .bg(p.soft)
+                        .text_color(p.accent_ink)
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .cursor_pointer()
+                        .hover(move |this| this.bg(p.accent.opacity(0.22)))
+                        .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             this.toggle_resets(cx);
-                        }
-                    }))
-                    .child(extra_text)
-                    .child(chevron(true, self.resets_open, p.accent_ink)),
+                        }))
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.toggle_resets(cx);
+                            }
+                        }))
+                        .child(resets_text)
+                        .child(chevron(true, self.resets_open, p.accent_ink)),
+                ),
             );
-        } else {
-            footer = footer.child(
-                label(extra_text, 11.0, chrome_color(0xe4e4e2, 0x292524).into())
-                    .font_weight(FontWeight::MEDIUM),
-            );
-        }
-        card = card.child(footer);
-        if p.codex && self.resets_open {
-            card = card.child(self.render_resets(cx));
+            if self.resets_open {
+                card = card.child(self.render_resets(cx));
+            }
         }
         card.into_any_element()
     }
@@ -273,8 +279,21 @@ impl AccountUsagePanel {
                     .rounded_full()
                     .overflow_hidden()
                     .bg(mix(p.accent, 0.07, chrome_color(0x2c2b2a, 0xe7e5e4).into()))
+                    // A hard black inset on a light track reads as a dent rather than depth.
                     .shadow(vec![
-                        shadow(0.0, 1.0, 1.0, rgb(0).opacity(0.35).into()).inset(),
+                        shadow(
+                            0.0,
+                            1.0,
+                            1.0,
+                            rgb(0)
+                                .opacity(if chrome_uses_light_appearance() {
+                                    0.10
+                                } else {
+                                    0.35
+                                })
+                                .into(),
+                        )
+                        .inset(),
                     ])
                     .child(
                         div()
@@ -306,173 +325,6 @@ impl AccountUsagePanel {
                         .child(warning),
                 )
             })
-            .into_any_element()
-    }
-
-    /// CDXC:AgentProviders 2026-09-12 DECISION:
-    /// User rejected the Redeem button color after reviewing the native panel; this supersedes preserving its previous light-blue fill.
-    fn render_resets(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let p = self.palette;
-        let credits = reset_credits(&self.account);
-        let disabled =
-            self.redeem_pending || credits.is_empty() || self.account["status"] != "ready";
-        let notice = match text(&self.account, "resetCreditsError") {
-            "" if !self.account["resetCreditDetails"].is_array() => {
-                "Reset expiry details are unavailable. Refreshing usage may help."
-            }
-            "" if credits.is_empty() => "No resets available.",
-            error => error,
-        };
-        v_flex()
-            .id("account-usage-resets")
-            .w_full()
-            .mt(px(12.0))
-            .pt(px(12.0))
-            .border_t_1()
-            .border_color(p.line)
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .line_height(px(14.5))
-                    .text_color(p.dim)
-                    .child(tracked("AVAILABLE RESETS", 0.6))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .mb(px(8.0)),
-            )
-            .child(
-                v_flex()
-                    .gap(px(4.0))
-                    .children(credits.into_iter().enumerate().map(|(index, credit)| {
-                        let expires = timestamp(text(credit, "expiresAt"));
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap(px(9.0))
-                            .pl(px(8.0))
-                            .pr(px(9.0))
-                            .py(px(7.0))
-                            .border_1()
-                            .border_color(p.line)
-                            .rounded(px(8.0))
-                            .bg(p.raised)
-                            .child(
-                                h_flex()
-                                    .size(px(20.0))
-                                    .flex_shrink_0()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(p.soft)
-                                    .text_color(p.accent_ink)
-                                    .text_size(px(10.0))
-                                    .font_weight(usage_font_weight(650.0))
-                                    .child((index + 1).to_string()),
-                            )
-                            .child(
-                                v_flex()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .gap(px(1.0))
-                                    .child(
-                                        label(
-                                            expires
-                                                .map(|date| {
-                                                    format!(
-                                                        "Expires in {}",
-                                                        duration(date - self.now)
-                                                    )
-                                                })
-                                                .unwrap_or_else(|| "No expiry reported".into()),
-                                            12.0,
-                                            chrome_color(0xececea, 0x292524).into(),
-                                        )
-                                        .font_weight(usage_font_weight(550.0))
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .text_ellipsis(),
-                                    )
-                                    .child(label(
-                                        if expires.is_some() {
-                                            local_date(text(credit, "expiresAt"), true)
-                                        } else {
-                                            "Expiry unavailable".into()
-                                        },
-                                        10.5,
-                                        p.muted,
-                                    )),
-                            )
-                            .when(index == 0, |this| {
-                                this.child(
-                                    p.tag(true)
-                                        .h(px(18.0))
-                                        .px(px(7.0))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Used first"),
-                                )
-                            })
-                    })),
-            )
-            .when(!notice.is_empty(), |this| {
-                this.child(label(notice.to_string(), 10.5, p.muted).line_height(px(15.75)))
-            })
-            .child(
-                h_flex()
-                    .id("account-usage-redeem")
-                    .w_full()
-                    .h(px(32.0))
-                    .mt(px(10.0))
-                    .px(px(12.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(p.accent_line)
-                    .bg(p.soft)
-                    .text_color(p.accent_ink)
-                    .text_size(px(12.0))
-                    .font_weight(usage_font_weight(650.0))
-                    .when(disabled, |this| this.opacity(0.4).cursor_default())
-                    .when(!disabled, |this| {
-                        this.track_focus(&self.redeem_focus)
-                            .focus_visible(move |this| this.shadow(focus_ring(p)))
-                            .cursor_pointer()
-                            .hover(move |this| {
-                                this.bg(p.accent.opacity(0.20))
-                                    .border_color(p.accent.opacity(0.48))
-                            })
-                            .active(move |this| {
-                                this.bg(p.accent.opacity(0.10)).border_color(p.accent_line)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.redeem(cx);
-                            }))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    cx.stop_propagation();
-                                    this.redeem(cx);
-                                }
-                            }))
-                    })
-                    .child(tracked(
-                        if self.redeem_pending {
-                            "Opening reset chat…"
-                        } else {
-                            "Redeem a reset"
-                        },
-                        -0.05,
-                    )),
-            )
-            .child(
-                label(
-                    "Opens a Codex chat and uses the reset expiring soonest.",
-                    10.0,
-                    p.dim,
-                )
-                .mt(px(7.0))
-                .text_center(),
-            )
             .into_any_element()
     }
 }

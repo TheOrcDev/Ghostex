@@ -7,7 +7,7 @@ field names, omission semantics, and reorder rules must match it verbatim.
 
 Ownership split:
   - THIS file owns storage, the seven endpoints, and the frame/read carriage.
-  - `session_chat_queue_runtime.rs` owns the scheduler that releases one row per
+  - `session_chat_queue_runtime/scheduler.rs` owns the scheduler that releases one row per
     idle window. It reuses `deliver_session_chat_queued_prompt` here so both the
     user's "Send now" and the scheduler travel the same claim → send → settle
     path and cannot double-claim a row.
@@ -94,6 +94,8 @@ pub struct SessionChatQueueSnapshot {
     pub queue: Vec<SessionChatQueuedPrompt>,
     pub draft: Option<SessionChatDraft>,
     pub account_switch: Option<Value>,
+    pub async_questions_since: Option<i64>,
+    pub retired_async_question_ids: Vec<String>,
     pub pending_model_selection: Option<crate::session_chat_model_selection::PendingModelSelection>,
 }
 
@@ -101,6 +103,16 @@ impl SessionChatQueueSnapshot {
     /// Writes `queue` (always) and `draft` (only when stored) onto a frame or
     /// read result.
     pub fn insert_into(&self, target: &mut Map<String, Value>) {
+        // CDXC:SessionChat 2026-09-17 SEE-ALSO:
+        // session_chat_async_questions.rs owns question expiry; carry its resume boundary on every snapshot and state frame, including a first subscription without a read request.
+        target.insert(
+            "retiredAsyncQuestionIds".to_string(),
+            json!(self.retired_async_question_ids),
+        );
+        target.insert(
+            "asyncQuestionsSince".to_string(),
+            json!(self.async_questions_since),
+        );
         target.insert(
             "accountSwitch".to_string(),
             self.account_switch.clone().unwrap_or(Value::Null),
@@ -130,6 +142,9 @@ impl SessionChatQueueSnapshot {
     pub fn revision(&self) -> String {
         let mut revision = serde_json::to_string(&self.pending_model_selection).unwrap_or_default();
         revision.push_str(&serde_json::to_string(&self.account_switch).unwrap_or_default());
+        revision.push_str(&serde_json::to_string(&self.async_questions_since).unwrap_or_default());
+        revision
+            .push_str(&serde_json::to_string(&self.retired_async_question_ids).unwrap_or_default());
         for prompt in &self.queue {
             revision.push_str(&prompt.id);
             revision.push(':');
@@ -194,8 +209,11 @@ the per-session send mutex and cannot interleave with a Delayed Send or a
 message the user typed. The queue module (and the scheduler) therefore never
 learns about AppState, zmx names, or the send watchdog.
 */
-pub type SessionChatQueueSender =
-    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
+pub type SessionChatQueueSender = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), DomainStateError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Builds a sender for one `(projectId, sessionId)`. The scheduler holds the
 /// factory because it delivers for whichever session becomes ready.
@@ -221,8 +239,12 @@ pub struct SessionChatQueueEndpointResult {
 /// Outcome of one delivery attempt, shared by "Send now" and the scheduler.
 pub struct SessionChatQueueDelivery {
     /// True ⇒ the prompt reached the agent and its row is gone. False ⇒ the
-    /// send failed and the row is now `failed` with `error_message`.
+    /// send failed and the row is now `failed` with `error_message`, unless
+    /// `held` put it back to `queued`.
     pub sent: bool,
+    /// The input box was missing and the caller allowed a hold: the row is
+    /// `queued` again, untouched, for the scheduler's next attempt.
+    pub held: bool,
     pub error_message: Option<String>,
     pub snapshot: SessionChatQueueSnapshot,
 }
@@ -261,7 +283,9 @@ pub fn handle_session_chat_queue_endpoint(
             (snapshot_value(&snapshot), false)
         }
         "/api/queueSessionChatPrompt" => {
-            let transaction = db.unchecked_transaction().map_err(sql_error)?;
+            let transaction =
+                rusqlite::Transaction::new_unchecked(&db, rusqlite::TransactionBehavior::Immediate)
+                    .map_err(sql_error)?;
             let text = required_text(params, "text")?;
             let version = crate::session_chat_draft_versions::parse(params)?;
             if let Some(version) = version.as_ref() {
@@ -275,6 +299,35 @@ pub fn handle_session_chat_queue_endpoint(
             }
             let draft_before_queue = read_snapshot(&transaction, &project_id, &session_id)?.draft;
             let startup_send = params.get("startupSend").and_then(Value::as_bool) == Some(true);
+            // The prompt a box session's launch already handed to its agent is answered, not typed again.
+            if startup_send
+                && crate::agentbox::claim_launch_prompt_echo(
+                    &DomainRepository::new(&transaction, server_id),
+                    &project_id,
+                    &session_id,
+                    &text,
+                )?
+            {
+                let prompt = SessionChatQueuedPrompt {
+                    id: create_prompt_id(),
+                    text: text.clone(),
+                    startup_send: true,
+                    state: SESSION_CHAT_QUEUE_STATE_QUEUED.to_string(),
+                    error_message: None,
+                    created_at: now_iso(),
+                    updated_at: now_iso(),
+                };
+                let snapshot = read_snapshot(&transaction, &project_id, &session_id)?;
+                let mut value = snapshot_value(&snapshot);
+                insert_prompt(&mut value, &prompt);
+                transaction.commit().map_err(sql_error)?;
+                return Ok(SessionChatQueueEndpointResult {
+                    value,
+                    broadcast: false,
+                    project_id,
+                    session_id,
+                });
+            }
             let prompt =
                 append_prompt(&transaction, &project_id, &session_id, &text, startup_send)?;
             if let Some(version) = version.as_ref() {
@@ -420,15 +473,38 @@ pub async fn deliver_session_chat_queued_prompt(
     session_id: &str,
     prompt_id: &str,
     send: &SessionChatQueueSender,
+    hold_when_composer_missing: bool,
 ) -> Result<SessionChatQueueDelivery, DomainStateError> {
     let text = {
         let db = open_gxserver_database(paths).map_err(internal_error)?;
         require_session(&db, server_id, project_id, session_id)?;
         claim_prompt(&db, project_id, session_id, prompt_id)?
     };
-    let outcome = send(text).await;
+    let outcome = deliver_once(
+        paths, server_id, project_id, session_id, prompt_id, text, send,
+    )
+    .await;
     let db = open_gxserver_database(paths).map_err(internal_error)?;
+    let mut held = false;
     let error_message = match outcome {
+        // A delivery that restarted the agent made this row a startup send; it waits for the new
+        // input box whichever caller delivered it.
+        Err(error)
+            if (hold_when_composer_missing && error.code == "composerNotReady")
+                || error.code == crate::session_chat_send_wake::SESSION_CHAT_SESSION_STARTING =>
+        {
+            db.execute(
+                r#"
+                UPDATE session_chat_queued_prompts
+                SET state = 'queued', errorMessage = NULL
+                WHERE promptId = ?1 AND projectId = ?2 AND sessionId = ?3 AND state = 'sending'
+                "#,
+                params![prompt_id, project_id, session_id],
+            )
+            .map_err(sql_error)?;
+            held = true;
+            None
+        }
         Ok(()) => {
             db.execute(
                 r#"
@@ -440,17 +516,62 @@ pub async fn deliver_session_chat_queued_prompt(
             .map_err(sql_error)?;
             None
         }
-        Err(message) => {
-            let message = bounded_reason(&message);
+        Err(error) => {
+            let message = bounded_reason(&error.message);
             fail_prompt(&db, project_id, session_id, prompt_id, &message)?;
             Some(message)
         }
     };
     Ok(SessionChatQueueDelivery {
-        sent: error_message.is_none(),
+        sent: error_message.is_none() && !held,
+        held,
         error_message,
         snapshot: read_snapshot(&db, project_id, session_id)?,
     })
+}
+
+/// CDXC:SessionChat 2026-10-05 WHY:
+/// A row a gxserver restart caught mid-delivery comes back `failed` (SESSION_CHAT_QUEUE_RESTART_REASON), and retrying it used to type it again even when the agent already had it. Each row's delivery is a send in the send ledger (session_chat_send_requests.rs) under `queuedPrompt:<promptId>`: a retry of an interrupted delivery first reads the agent's transcript and, when the prompt is there, settles the row as sent without typing. A prompt the transcript does not show is typed again, because the user retried it after being told the delivery was cut off.
+async fn deliver_once(
+    paths: &GxserverPaths,
+    server_id: &str,
+    project_id: &str,
+    session_id: &str,
+    prompt_id: &str,
+    text: String,
+    send: &SessionChatQueueSender,
+) -> Result<(), DomainStateError> {
+    use crate::session_chat_send_requests::{
+        begin, begin_again, interrupted_send_arrived, mark_sent, Begin, SendRequestKey,
+    };
+    const ENDPOINT: &str = "queuedPromptDelivery";
+    let key = SendRequestKey::new(project_id, session_id, &format!("queuedPrompt:{prompt_id}"));
+    let needles = crate::coordinators::delivery_needles(&text);
+    let mut begun = begin(paths, &key, ENDPOINT, &needles)?;
+    if let Begin::Interrupted { since_ms, needles } = &begun {
+        if interrupted_send_arrived(paths, server_id, &key, *since_ms, needles).await {
+            mark_sent(paths, &key, &json!({ "recoveredAfterRestart": true }));
+            return Ok(());
+        }
+        begun = begin_again(paths, &key, ENDPOINT, needles)?;
+    }
+    match begun {
+        Begin::Send(attempt) => {
+            let outcome = send(text).await;
+            attempt.settle(match &outcome {
+                Ok(()) => crate::session_chat_send_requests::Outcome::Sent(json!({})),
+                Err(error) if crate::session_chat_send_requests::submitted_nothing(error.code) => {
+                    crate::session_chat_send_requests::Outcome::Refused
+                }
+                Err(_) => crate::session_chat_send_requests::Outcome::Uncertain,
+            });
+            outcome
+        }
+        Begin::Sent(_) => Ok(()),
+        Begin::InFlight(_) | Begin::Interrupted { .. } => Err(DomainStateError::bad_request(
+            "This prompt is being delivered right now.",
+        )),
+    }
 }
 
 /// Marks the head row `failed` without attempting a send: used when the
@@ -512,6 +633,7 @@ pub fn list_sessions_with_pending_queue(
             FROM session_chat_queued_prompts
             WHERE state <> 'failed'
             UNION SELECT projectId, sessionId FROM session_chat_model_selections
+            WHERE state <> 'failed'
             ORDER BY projectId, sessionId
             "#,
         )
@@ -534,7 +656,9 @@ pub fn session_has_pending_session_chat_queue(
     project_id: &str,
     session_id: &str,
 ) -> bool {
-    if crate::session_chat_model_selection::read_pending(db, project_id, session_id).is_some() {
+    if crate::session_chat_model_selection::read_pending(db, project_id, session_id)
+        .is_some_and(|selection| selection.state != "failed")
+    {
         return true;
     }
     db.query_row(
@@ -609,6 +733,12 @@ fn read_snapshot(
         .map_err(sql_error)?;
     let draft = crate::session_chat_draft_versions::read(db, project_id, session_id)?;
     Ok(SessionChatQueueSnapshot {
+        retired_async_question_ids: crate::session_chat_async_questions::read_retired_question_ids(
+            db, project_id, session_id,
+        ),
+        async_questions_since: crate::session_chat_async_questions::read_async_questions_since(
+            db, project_id, session_id,
+        ),
         account_switch: crate::accounts::switch_progress::read(db, project_id, session_id),
         queue,
         draft,
@@ -677,6 +807,16 @@ fn append_prompt(
     )
     .map_err(sql_error)?;
     Ok(prompt)
+}
+
+/// Appends a plain queued prompt outside the endpoint, for gxserver's own notes.
+pub(crate) fn enqueue_session_chat_prompt(
+    db: &Connection,
+    project_id: &str,
+    session_id: &str,
+    text: &str,
+) -> Result<SessionChatQueuedPrompt, DomainStateError> {
+    append_prompt(db, project_id, session_id, text, false)
 }
 
 fn update_prompt(
@@ -956,7 +1096,9 @@ pub fn clear_session_chat_draft_after_delivery(
     session_id: &str,
     submitted: &SessionChatDraft,
 ) -> Result<(), DomainStateError> {
-    let transaction = db.unchecked_transaction().map_err(sql_error)?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
     if let Some(version) = submitted.version.as_ref() {
         crate::session_chat_draft_versions::consume_in(
             &transaction,
@@ -1043,6 +1185,27 @@ fn claim_prompt(
         ));
     }
     Ok(prompt.text)
+}
+
+/// Turns the row this session is delivering into a startup send, so it waits for the input box of
+/// the agent the failed delivery just restarted (session_chat_queue_runtime/send_heal.rs) instead
+/// of failing. False when no row is being delivered.
+pub(crate) fn hold_sending_prompt_for_restart(
+    paths: &GxserverPaths,
+    project_id: &str,
+    session_id: &str,
+) -> bool {
+    open_gxserver_database(paths).is_ok_and(|db| {
+        db.execute(
+            r#"
+            UPDATE session_chat_queued_prompts
+            SET startupSend = 1
+            WHERE projectId = ?1 AND sessionId = ?2 AND state = 'sending'
+            "#,
+            params![project_id, session_id],
+        )
+        .is_ok_and(|changed| changed > 0)
+    })
 }
 
 fn fail_prompt(

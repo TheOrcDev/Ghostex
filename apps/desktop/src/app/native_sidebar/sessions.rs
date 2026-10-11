@@ -1,0 +1,221 @@
+use super::drag::SidebarDrag;
+use super::drag::SidebarDropTarget;
+use super::drag_source::SidebarDragSource;
+use super::session_list::{SESSION_HEIGHT, SESSION_INSET_X, SESSION_SPACING, session_card_height};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    StatefulInteractiveElement, Styled, div, px, rgb,
+};
+use gpui_component::h_flex;
+use gpui_component::tooltip::ManagedTooltipExt as _;
+use serde_json::{Value, json};
+
+use super::{
+    appearance::SidebarAppearance,
+    model::{NativeSidebarGroup, NativeSidebarSession},
+};
+use crate::GhostexGpuiApp;
+use crate::app::helpers::*;
+
+impl GhostexGpuiApp {
+    pub(crate) fn render_native_sidebar_session(
+        &self,
+        group: &NativeSidebarGroup,
+        session: &std::sync::Arc<NativeSidebarSession>,
+        // The unscaled height of the card above this one in the same list, which a thread's tree
+        // line rises to.
+        above_height: f32,
+        hud: &Value,
+        appearance: &SidebarAppearance,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let view = cx.entity().clone();
+        let completion = self
+            .native_sidebar
+            .completion_flashes
+            .get(&session.session_id)
+            .copied();
+        let reveal_id = session.session_id.clone();
+        let session_id = session.session_id.clone();
+        let group_id = group.group_id.clone();
+        let drag_id = session_id.clone();
+        let drag_group_id = group_id.clone();
+        let dragged = SidebarDrag {
+            kind: "session",
+            preview: super::drag::SidebarDragPreview::Row(super::row_drag::RowDragPreview {
+                identity: super::row_drag::RowDragIdentity::Session {
+                    session: session.clone(),
+                },
+                appearance: appearance.clone(),
+                width: px(0.0),
+                pointer_x: px(0.0),
+            }),
+            id: session_id.clone(),
+            title: session.title().to_owned(),
+            scale: appearance.scale,
+            refused: Default::default(),
+        };
+        // Every local row drags: a drop on an Agents pane splits it (session_pane_placement.rs),
+        // and the reorder drop line still shows only when the sort mode allows a reorder.
+        let can_drag =
+            !session.is_browser() && !group.is_stale && group.remote_machine_context.is_none();
+        let selected = session
+            .details
+            .get("isMultiSelected")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let drop_position = self.native_sidebar_session_drop_line(&session_id);
+        let scale = appearance.scale;
+        let card_height = session_card_height(session);
+        // The row's left padding before its icon: the card inset plus its depth in a coordinator's tree.
+        let indent = 5.0 + super::threads::thread_depth(session) * super::threads::THREAD_INDENT;
+        let hovered = self.native_sidebar.hovered_session.as_deref() == Some(&session_id);
+        // CDXC:Sidebar 2026-09-19 WHY: sidebar clicks and tab selections must show in the same frame (user decision in gx_store/local_focus.rs). The focused and visible fills of a local session row read the Rust store, which a selection changes in the same frame; the snapshot's flags arrive a sidebar projection later. This supersedes the click-only `optimistic_focus` mark and its 1.5 second timeout of earlier the same day.
+        let (focused, visible) = self.gx_store_sidebar_row_focus(
+            &session_id,
+            session.is_browser(),
+            session.is_focused,
+            session.is_visible,
+        );
+        let stale = group.is_stale && !session.is_browser();
+        let sleeping = session.lifecycle_state.as_deref() == Some("sleeping");
+        // CDXC:SessionSleep 2026-09-29 DECISION: User (issue 177): by default a sleeping row dims only its last-active time; Advanced > Dim sleeping sessions fades the whole row, and hovering it brings the row back to full strength so its hover buttons stay readable.
+        let dim_sleeping =
+            sleeping && !hovered && hud["settings"]["dimSleepingSessions"].as_bool() == Some(true);
+        let icon = super::icons::session_icon(session, hud, appearance, hovered);
+        let double_click_rename = hud["settings"]["renameSessionOnDoubleClick"].as_bool()
+            == Some(true)
+            && !session.is_browser();
+        let context_id = session_id.clone();
+        let close_id = session_id.clone();
+        let context_session = session.clone();
+        let tooltip_span = self
+            .native_sidebar
+            .session_card_bounds
+            .get(&session_id)
+            .map(|card| super::tooltips::SidebarTooltipSpan {
+                left: card.left().as_f32(),
+                right: card.right().as_f32(),
+            })
+            .unwrap_or_else(|| {
+                super::tooltips::SidebarTooltipSpan::sidebar(self.sidebar_width, scale)
+            });
+        // CDXC:Tooltips 2026-09-12 DECISION: User: session-card title tooltips must always show on hover, even when the session name is short and the visible title is not truncated.
+        let tooltip = session
+            .details
+            .get("titleTooltip")
+            .and_then(Value::as_str)
+            .unwrap_or(session.title())
+            .to_owned();
+        let question = session
+            .details
+            .get("pendingQuestionCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0;
+        let question_fill = super::status::pending_question_fill(&hud["settings"], question);
+        let timer = session.details.get("timerLabel").and_then(Value::as_str);
+        let show_time = hud
+            .get("settings")
+            .and_then(|settings| settings.get("hideLastActiveTimeOnSessionCards"))
+            .and_then(Value::as_bool)
+            != Some(true);
+        let time = timer
+            .or_else(|| {
+                session
+                    .details
+                    .get("lastInteractionLabel")
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("")
+            .to_owned();
+        // What an assistive client or an e2e run reads after the title: the row's state words, which the pixels convey by colour and glyph.
+        let a11y_description = [
+            session.lifecycle_state.as_deref().unwrap_or(""),
+            session.activity.as_str(),
+            if session.is_pinned { "pinned" } else { "" },
+            if session.is_draft { "draft" } else { "" },
+            if question { "needs an answer" } else { "" },
+            time.as_str(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+        div().on_children_prepainted(move |bounds, window, cx| { if completion.is_some_and(|start| start.elapsed().as_secs_f32() < 3.0) { window.request_animation_frame(); cx.notify(view.entity_id()); } if let Some(bounds) = bounds.first() { view.update(cx, |app, cx| { if app.native_sidebar.session_card_bounds.get(&reveal_id) != Some(bounds) { app.native_sidebar.session_card_bounds.insert(reveal_id.clone(), *bounds); } app.reveal_native_session_bounds(&reveal_id, *bounds, scale, window, cx) }); } }).w_full().pb(px(SESSION_SPACING * scale)).px(px(SESSION_INSET_X * scale))
+            .child(div()
+                .id(format!("native-sidebar-session-{session_id}"))
+                .role(gpui::Role::TreeItem)
+                .aria_label(session.title().to_owned())
+                .aria_description(a11y_description)
+                .aria_selected(focused)
+                .relative().h(px(card_height * scale)).w_full().min_w_0().flex().flex_col().rounded(px(5.0 * scale))
+                .cursor_default()
+                .when(stale, |row| row.opacity(0.55))
+                .when(dim_sleeping && !stale, |row| row.opacity(0.5))
+                .when(self.native_sidebar.is_dragging("session", &session_id), |row| row.opacity(0.2))
+                .when_some(completion, |row, start| row.opacity(super::status::completion_opacity(start)))
+                .when(visible && !focused, |row| row.bg(appearance.visible))
+                .when(focused, |row| row.bg(appearance.session_selected))
+                .when(visible || focused, |row| row.text_color(chrome_color(0xd8d8d8, 0x292929)))
+                .when(selected, |row| row.border_1().border_color(rgb(0x2f8cff)))
+                // CDXC:Sidebar 2026-09-24 DECISION: User: the drop line between session cards is a straight line, not a top or bottom border that bends into the card's rounded corners; it is the same line project and collection rows use, drawn in the gap beside the card.
+                .when_some(drop_position, |row, position| row.child(super::drag::drop_line(position, scale)))
+                .when(!focused, |row| row.hover(|row| row.bg(appearance.session_hover)))
+                .when(focused, |row| row.child(super::decorations::session_outline(appearance)))
+                .when_some(question_fill, |row, fill| row.bg(fill).hover(move |row| row.bg(fill)))
+                .children(super::threads::thread_connector(session, card_height, above_height, appearance))
+                .children(self.render_native_session_decorations(session, appearance, cx))
+                .when_some(self.native_sidebar.reveal_flash.as_ref().filter(|(id, _)| id == &session.session_id).map(|(_, start)| *start), |row, start| row.child(super::scroll::reveal_flash(start, scale)))
+                // Line 1 is the whole card of every row without work links, and the absolute
+                // decorations above keep their tops because it starts at the card's top.
+                .child(h_flex().h(px(SESSION_HEIGHT * scale)).flex_shrink_0().w_full().min_w_0().pl(px(indent * scale)).pr(px(6.0 * scale)).gap(px(6.0 * scale))
+                .child(self.render_native_session_identity(session, icon, hovered, appearance, cx))
+                .child(div().id(format!("native-session-title-{session_id}")).flex_1().min_w_0().h_full().flex().items_center().child(div().min_w_0().truncate().child(session.title().to_owned())).when(self.native_sidebar.pointer_inside && self.native_sidebar.menu.is_none() && !cx.has_active_drag(), |row| row.managed_discrete_tooltip_with_placement(tooltip_span.placement(), appearance.tooltip_delay, move |window, cx| super::tooltips::sidebar_tooltip(tooltip.clone(), tooltip_span, scale, window, cx))))
+                .when(!hovered, |row| row.children(super::threads::coordinator_badge(session, appearance)))
+                .when(!hovered, |row| row.children(super::agentbox::agentbox_badge(session, appearance, tooltip_span, self.native_sidebar.pointer_inside && self.native_sidebar.menu.is_none() && !cx.has_active_drag())))
+                .when(!hovered && !question, |row| row.children(super::status::activity_indicator(&session.activity, session.has_background_work, session.model_selection_failed, scale)))
+                // CDXC:SessionStatus 2026-09-13 DECISION: User: hide Last Active while the question dot is shown so they do not overlap, including when the session is not working.
+                .when(!hovered && !question && !session.model_selection_failed && (timer.is_some() || (show_time && session.activity != "working" && session.activity != "attention" && !session.has_background_work)), |row| row.child(div().text_size(px(13.55 * scale)).text_color(if sleeping { chrome_color(0x686868, 0x959595) } else { chrome_color(0xa6a6a6, 0x424242) }).child(time)))
+                .when(hovered, |row| row.child(self.render_native_session_hover_actions(group, session, appearance, cx)))
+                .when(question, |row| row.child(super::status::question_indicator(session.activity == "working", scale))))
+                .children(self.render_native_session_work_chips(session, indent, tooltip_span, appearance, cx))
+                .when(can_drag && self.native_sidebar.menu.is_none(), |row| row.sidebar_drag_source(dragged, cx))
+.sidebar_drop_target("session", drag_id, Some(drag_group_id), cx)
+                .on_mouse_down(MouseButton::Middle, |_, window, _| {
+                    window.prevent_default();
+                })
+                .on_aux_click(cx.listener(move |app, event: &gpui::ClickEvent, window, cx| {
+                    if !event.is_middle_click() { return; }
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    app.close_native_sidebar_menu(window, cx);
+                    app.dispatch_native_sidebar_command(
+                        json!({"type": "closeSession", "sessionId": close_id}),
+                        cx,
+                    );
+                }))
+                .on_click(cx.listener(move |app, event: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    if event.click_count() == 2 && double_click_rename {
+                        app.dispatch_native_sidebar_ui(json!({"type": "sessionAction", "sessionId": session_id, "action": "rename"}), cx);
+                        return;
+                    }
+                    if stale { return; }
+                    let modifiers = event.modifiers();
+                    let mode = if modifiers.shift { "range" } else if modifiers.platform || modifiers.control { "additive" } else { "focus" };
+                    app.dispatch_native_sidebar_ui(json!({"type": "selectSession", "sessionId": session_id, "mode": mode}), cx);
+                    if mode == "focus" {
+                        let _ = app.react_to_native_sidebar_session_click(&session_id, cx);
+                        app.reveal_floating_sessions(cx);
+                    }
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |app, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    if !selected { app.dispatch_native_sidebar_ui(json!({"type": "selectSession", "mode": "clear", "sessionId": context_id}), cx); }
+                    Self::show_native_sidebar_menu(context_session.details.get("menu").unwrap_or(&Value::Null), event.position, scale, window, cx);
+                })))
+            .into_any_element()
+    }
+}

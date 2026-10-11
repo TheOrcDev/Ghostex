@@ -21,8 +21,7 @@ native-Wayland shell (plan Phase 4).
 x11rb is the deliberate X library choice: gpui's own X11 backend already
 pulls it into the Linux dependency tree (same 0.13 major), it speaks the X
 protocol directly over its own connection (no libX11/libxcb link-time
-dependency), and the four requests this adapter needs (ConfigureWindow,
-MapWindow, UnmapWindow, SetInputFocus) are core protocol.
+dependency), and its window placement and focus requests are core protocol.
 
 Written without Linux hardware (P3 best-effort bring-up): the pump-state
 machine mirrors apps/desktop/native/macos/GpuiCefAppKitHooks.m semantics 1:1 except
@@ -51,6 +50,9 @@ use x11rb::protocol::xproto::{
     Window as X11Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
+
+#[path = "linux_x11_pointer_focus.rs"]
+mod pointer_focus;
 
 /// Matches GhostexGpuiCEFMessagePumpPlaceholderDelayMs in the macOS shim.
 const PUMP_PLACEHOLDER_DELAY_MS: i64 = i32::MAX as i64;
@@ -103,6 +105,8 @@ pub(super) fn prepare_application() {
     // at the CEF layer.
 }
 
+pub(super) fn activate_running_app() {}
+
 pub(super) fn install_application_hooks() {
     // The macOS CefAppProtocol/sendEvent swizzle and Edit-menu install have
     // no Linux counterpart: Chromium integrates with X11 directly (it opens
@@ -126,6 +130,7 @@ pub(super) fn install_message_pump(cx: &gpui::App) {
     reinstall after invalidate just re-arms the flags.
     */
     if PUMP_SENDER.get().is_none() {
+        pointer_focus::install(cx);
         let (sender, receiver) = mpsc::unbounded();
         let _ = PUMP_SENDER.set(sender);
         let background_executor = cx.background_executor().clone();
@@ -378,6 +383,17 @@ pub(super) fn append_platform_command_line_switches(command_line: &mut cef::Comm
         Some(&cef::CefString::from("ozone-platform")),
         Some(&cef::CefString::from("x11")),
     );
+    // Web pages draw at the scale the native UI picked under XWayland, so a page and the chat
+    // beside it show text at the same size (CDXC:PlatformSupport 2026-09-30 in linux_x11_scale.rs).
+    if let Some(scale) = crate::linux_x11_scale::pinned_scale_factor() {
+        command_line.append_switch_with_value(
+            Some(&cef::CefString::from("force-device-scale-factor")),
+            Some(&cef::CefString::from(scale.to_string().as_str())),
+        );
+    }
+    // Thin overlay scrollbars instead of tracked ones with a white track on dark pages
+    // (CDXC:CefRuntime 2026-10-07 in cef/windows.rs).
+    super::shell::append_chromium_feature(command_line, "enable-features", "OverlayScrollbar");
 }
 
 /*
@@ -402,11 +418,41 @@ to the CEF window itself.
 
 The host id is recorded against the CEF window right after synchronous
 browser creation (prepare_native_view_for_focus, which runs on the single
-creating thread) and destroyed in release_native_view when the owning
-CefBrowser drops.
+creating thread) and destroyed after CEF finishes closing the browser.
 */
 static PENDING_EMBED_HOST: Mutex<Option<X11Window>> = Mutex::new(None);
 static EMBED_HOST_BY_CEF_WINDOW: Mutex<Option<HashMap<X11Window, X11Window>>> = Mutex::new(None);
+
+/// CDXC:FocusRouting 2026-09-18 WHY:
+/// GPUI owns and reads this keyboard-only child because X11 key events stop propagating at the focus window; an adapter-owned child drops input instead of forwarding it to GPUI.
+/// SEE-ALSO: .dependencies/zed/crates/gpui_linux/src/linux/x11/window.rs publishes the child, and client.rs dispatches its events to the owning window.
+fn gpui_keyboard_focus_window(parent: X11Window) -> X11Window {
+    let (connection, _) = x11_connection();
+    static PROPERTY: OnceLock<u32> = OnceLock::new();
+    let property = *PROPERTY.get_or_init(|| {
+        connection
+            .intern_atom(false, b"_GPUI_KEYBOARD_FOCUS_WINDOW")
+            .expect("failed to request the GPUI keyboard-focus atom")
+            .reply()
+            .expect("failed to resolve the GPUI keyboard-focus atom")
+            .atom
+    });
+    connection
+        .get_property(
+            false,
+            parent,
+            property,
+            x11rb::protocol::xproto::AtomEnum::WINDOW,
+            0,
+            1,
+        )
+        .expect("failed to request the GPUI keyboard-focus window")
+        .reply()
+        .expect("failed to read the GPUI keyboard-focus window")
+        .value32()
+        .and_then(|mut values| values.next())
+        .expect("GPUI must publish its keyboard-focus window before embedding CEF")
+}
 
 fn embed_host_colormap(
     connection: &RustConnection,
@@ -515,15 +561,6 @@ pub(super) fn native_view_ptr(handle: cef::sys::cef_window_handle_t) -> *mut c_v
     handle as usize as *mut c_void
 }
 
-pub(super) fn set_native_view_mouse_focus_passive(_native_view: *mut c_void, _passive: bool) {
-    // Mouse-focus passivity is an AppKit first-responder policy; X11 focus
-    // routing for the sidebar is not implemented here yet.
-}
-
-pub(super) fn set_native_view_passive_focus_grant(_native_view: *mut c_void, _granted: bool) {}
-
-pub(super) fn return_focus_to_gpui_root(_native_view: *mut c_void) {}
-
 pub(super) fn prepare_native_view_for_focus(native_view: *mut c_void) {
     // The macOS focus subclass exists to route AppKit first-responder and
     // command-key dispatch into the exact CEF NSView. On X11 keyboard focus
@@ -544,12 +581,73 @@ pub(super) fn prepare_native_view_for_focus(native_view: *mut c_void) {
         .expect("CEF embed-host registry mutex should not be poisoned")
         .get_or_insert_with(HashMap::new)
         .insert(cef_window, host);
+    pointer_focus::observe(cef_window);
 }
 
+/// CDXC:CefRuntime 2026-09-27 WHY:
+/// Destroying the embed host before CloseBrowser races Chromium's GPU surface creation: the Linux crash dump shows ANGLE's WindowSurfaceGLX dereferencing a null visual after XGetWindowAttributes fails, and three GPU crashes disable WebGL for every tab.
+/// Detach the unmapped host from the GPUI window so that closing its owner cannot destroy Chromium's children while CEF completes its native close; on_before_close releases the container.
 pub(super) fn release_native_view(native_view: *mut c_void) {
     let Some(cef_window) = x11_window(native_view) else {
         return;
     };
+    pointer_focus::forget(cef_window);
+    let Some(host) = embed_host_for_cef_window(cef_window) else {
+        return;
+    };
+    let (connection, screen_index) = x11_connection();
+    let root = connection.setup().roots[*screen_index].root;
+    let _ = connection.unmap_window(host);
+    let _ = connection.reparent_window(host, root, 0, 0);
+    // The GPUI owner may be destroyed on another connection immediately after
+    // Drop returns, so finish the reparent before allowing that destruction.
+    if let Ok(cookie) = connection.get_input_focus() {
+        let _ = cookie.reply();
+    }
+}
+
+/// Detaches every embed host still inside the GPUI window `parent`, the same way
+/// `release_native_view` detaches one, before GPUI destroys that window.
+pub(super) fn detach_native_views_from_parent(parent: *mut c_void) {
+    let Some(parent) = x11_window(parent) else {
+        return;
+    };
+    let hosts: Vec<X11Window> = EMBED_HOST_BY_CEF_WINDOW
+        .lock()
+        .expect("CEF embed-host registry mutex should not be poisoned")
+        .as_ref()
+        .map(|hosts| hosts.values().copied().collect())
+        .unwrap_or_default();
+    if hosts.is_empty() {
+        return;
+    }
+    let (connection, screen_index) = x11_connection();
+    let root = connection.setup().roots[*screen_index].root;
+    let mut detached = false;
+    for host in hosts {
+        let host_parent = connection
+            .query_tree(host)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|tree| tree.parent);
+        if host_parent != Some(parent) {
+            continue;
+        }
+        let _ = connection.unmap_window(host);
+        let _ = connection.reparent_window(host, root, 0, 0);
+        detached = true;
+    }
+    // GPUI destroys the parent on its own connection as soon as the observers return.
+    if detached && let Ok(cookie) = connection.get_input_focus() {
+        let _ = cookie.reply();
+    }
+}
+
+pub(super) fn browser_native_close_finished(native_view: *mut c_void) {
+    let Some(cef_window) = x11_window(native_view) else {
+        return;
+    };
+    pointer_focus::forget(cef_window);
     let host = EMBED_HOST_BY_CEF_WINDOW
         .lock()
         .expect("CEF embed-host registry mutex should not be poisoned")
@@ -651,6 +749,15 @@ pub(super) fn log_resize_diagnostic(
 ) {
 }
 
+/// A panel slide only needs the page out of sight for its few frames; it comes back without a fade.
+pub(super) fn set_native_view_motion_hidden(
+    native_view: *mut c_void,
+    hidden: bool,
+    _fade_in_seconds: f64,
+) {
+    set_native_view_visible(native_view, !hidden);
+}
+
 pub(super) fn set_native_view_visible(native_view: *mut c_void, visible: bool) {
     let Some(window) = x11_window(native_view) else {
         return;
@@ -688,22 +795,63 @@ pub(super) fn focus_native_view(native_view: *mut c_void) {
     let Some(window) = x11_window(native_view) else {
         return;
     };
-    // Mirrors makeFirstResponder on macOS: give the CEF child window X input
-    // focus so key events route to Chromium; the shared shell follows up
-    // with host.set_focus(1) so Chromium moves focus to its inner widget.
-    // RevertTo=Parent returns focus to the GPUI window if the child unmaps.
+    super::shell::mark_native_view_focused(native_view);
+    // CDXC:FocusRouting 2026-09-18 WHY:
+    // Moving X input focus from Chromium's focused widget to its browser parent emits a window blur, dismissing every sidebar menu after the first open. Preserve descendant focus during repeated grants.
+    if native_view_owns_first_responder(native_view) {
+        return;
+    }
     let (connection, _) = x11_connection();
     let _ = connection.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME);
     let _ = connection.flush();
 }
 
 pub(super) fn focus_gpui_root_view(native_view: *mut c_void) {
-    focus_native_view(native_view);
+    let Some(window) = x11_window(native_view) else {
+        return;
+    };
+    super::shell::clear_active_native_view();
+    let window = gpui_keyboard_focus_window(window);
+    let (connection, _) = x11_connection();
+    let _ = connection.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME);
+    let _ = connection.flush();
 }
 
-pub(super) fn native_view_owns_first_responder(_native_view: *mut c_void) -> bool {
-    // First-responder arbitration is an AppKit concern; X11 input focus is
-    // already granted explicitly through focus_native_view, so renderer
-    // focus requests keep their pre-existing allow behavior here.
-    true
+pub(super) fn native_view_owns_first_responder(native_view: *mut c_void) -> bool {
+    let Some(window) = x11_window(native_view) else {
+        return false;
+    };
+    let (connection, _) = x11_connection();
+    let Some(mut focused) = focused_x11_window() else {
+        return false;
+    };
+    while focused > u32::from(InputFocus::POINTER_ROOT) {
+        if focused == window {
+            return true;
+        }
+        let Some(tree) = connection
+            .query_tree(focused)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            return false;
+        };
+        focused = tree.parent;
+    }
+    false
+}
+
+pub(super) fn native_view_has_direct_focus(native_view: *mut c_void) -> bool {
+    x11_window(native_view)
+        .is_some_and(|window| focused_x11_window() == Some(gpui_keyboard_focus_window(window)))
+}
+
+fn focused_x11_window() -> Option<X11Window> {
+    x11_connection()
+        .0
+        .get_input_focus()
+        .ok()?
+        .reply()
+        .ok()
+        .map(|reply| reply.focus)
 }

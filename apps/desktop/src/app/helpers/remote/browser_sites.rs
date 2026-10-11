@@ -6,7 +6,7 @@ use scraper::{Html, Selector};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::Read,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
@@ -53,7 +53,7 @@ impl RemoteBrowserSite {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn discover_remote_browser_sites(
     config: &GpuiRemoteMachineConfig,
     target: &GpuiRemoteExecutionTarget,
@@ -103,7 +103,7 @@ pub(crate) fn discover_remote_browser_sites(
     Ok(sites)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn discover_remote_browser_sites(
     _: &GpuiRemoteMachineConfig,
     _: &GpuiRemoteExecutionTarget,
@@ -122,7 +122,7 @@ struct PageResponse {
 }
 
 fn fetch_browser_page(url: &str, proxy_port: Option<u16>) -> Result<PageResponse, &'static str> {
-    let mut command = Command::new("curl");
+    let mut command = gpui_background_command("curl");
     command.args([
         "--disable",
         "--silent",
@@ -326,6 +326,27 @@ fn remote_browser_loopback_url(url: &Url) -> bool {
         && url
             .host_str()
             .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "[::1]"))
+}
+
+pub(crate) fn gpui_remote_link_is_loopback(url: &str) -> bool {
+    let Some(normalized) = normalize_address(url) else {
+        return false;
+    };
+    let Ok(parsed) = Url::parse(&normalized) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host.to_ascii_lowercase().ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
 }
 
 pub(crate) fn fetch_remote_browser_favicon(

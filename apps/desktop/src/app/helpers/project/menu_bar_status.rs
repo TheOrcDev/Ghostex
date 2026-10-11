@@ -197,12 +197,18 @@ pub(crate) fn queue_gpui_menu_bar_status_session_click(project_id: String, sessi
     foreground
         .spawn(async move {
             let _ = app.update_in(&mut async_app, |this, window, cx| {
-                window.activate_window();
-                this.dispatch_gpui_menu_bar_session_activation(
+                // The window already showing the session takes the click (app/workspace_windows/).
+                let row_id = crate::app::gx_store::menu_bar_session_focus_id(
                     project_id.as_str(),
                     session_id.as_str(),
-                    cx,
                 );
+                this.activate_session_in_its_window(&row_id, window, cx, move |app, cx| {
+                    app.dispatch_gpui_menu_bar_session_activation(
+                        project_id.as_str(),
+                        session_id.as_str(),
+                        cx,
+                    );
+                });
             });
         })
         .detach();
@@ -220,6 +226,10 @@ pub(crate) fn queue_gpui_workspace_did_wake() {
         .spawn(async move {
             let _ = app.update_in(&mut async_app, |this, _window, cx| {
                 this.validate_gpui_remote_gxserver_connections(true, cx);
+                // Every window holds its own remote tunnels (app/workspace_windows/).
+                this.update_other_workspace_windows(cx, |app, cx| {
+                    app.validate_gpui_remote_gxserver_connections(true, cx);
+                });
             });
         })
         .detach();

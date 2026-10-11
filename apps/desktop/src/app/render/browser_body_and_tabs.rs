@@ -46,7 +46,9 @@ impl GhostexGpuiApp {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(chrome_color(0x000000, 0xffffff))
+            // Under window glass an empty or loading page shows the pane's glass; a loaded page
+            // covers it with its own solid view.
+            .bg(glass_clear(chrome_color(0x000000, 0xffffff).into()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
@@ -68,7 +70,11 @@ impl GhostexGpuiApp {
             )
             .when_some(active_browser_surface, |this, browser| this.child(browser))
             .when(render_empty_body, |this| {
-                if let Some(machine_id) = self
+                if let Some(signature) =
+                    self.web_runtime_placeholder_signature(TitlebarMode::Browser)
+                {
+                    this.child(self.render_project_editor_placeholder(signature, cx))
+                } else if let Some(machine_id) = self
                     .browser_tabs
                     .active_tab_for_pane(pane_id)
                     .and_then(|tab| tab.remote_machine_id.as_deref())
@@ -122,7 +128,7 @@ impl GhostexGpuiApp {
                 pane_id.0
             ))
             .size_full()
-            .bg(chrome_color(0x000000, 0xffffff))
+            .bg(glass_clear(chrome_color(0x000000, 0xffffff).into()))
             .into_any_element()
     }
 
@@ -144,8 +150,8 @@ impl GhostexGpuiApp {
             .items_center()
             .justify_center()
             .border_1()
-            .border_color(chrome_color(0x1f1f1f, 0xffffff))
-            .bg(chrome_color(0x000000, 0xffffff))
+            .border_color(glass_divider(chrome_color(0x1f1f1f, 0xffffff).into()))
+            .bg(glass_clear(chrome_color(0x000000, 0xffffff).into()))
             .px(px(32.0))
             .child(
                 v_flex()
@@ -177,7 +183,7 @@ impl GhostexGpuiApp {
             .into_any_element()
     }
 
-    #[allow(dead_code)] // no caller: the browser tab strip is drawn by the CEF browser chrome; this native gpui strip (and everything it calls) is the superseded implementation
+    #[allow(dead_code)] // no caller: browser tabs are drawn in the view panel's tab strip (render/view_tab_strip_browser_tabs.rs); this per-pane strip, and everything only it calls, is the superseded implementation
     pub(crate) fn render_browser_tab_strip(
         &self,
         leaf: &BrowserLeaf,
@@ -291,8 +297,7 @@ impl GhostexGpuiApp {
             });
         let tab_hover_key = BrowserHoverTab { pane_id, tab_id };
         let is_tab_hovered = self.hovered_browser_tab == Some(tab_hover_key);
-        let can_close = state != BrowserTabState::AddressOnly || tab_group.tabs.len() > 1;
-        let show_close_button = can_close && is_tab_hovered;
+        let show_close_button = is_tab_hovered;
         let tab_tooltip = display_title.clone();
 
         div()
@@ -350,9 +355,7 @@ impl GhostexGpuiApp {
                 cx.listener(move |this, _event: &MouseUpEvent, window, cx| {
                     window.prevent_default();
                     cx.stop_propagation();
-                    if can_close {
-                        this.close_browser_tab(tab_id, window, cx);
-                    }
+                    this.close_browser_tab(tab_id, window, cx);
                 }),
             )
             .on_drag(dragged_tab, move |dragged, _offset, _window, cx| {
@@ -387,7 +390,6 @@ impl GhostexGpuiApp {
             .child(self.render_browser_tab_icon(
                 profile_id,
                 chrome_status,
-                runtime_favicon_url,
                 runtime_favicon_image.as_ref(),
                 runtime_favicon_fetch.as_ref(),
             ))
@@ -496,14 +498,12 @@ impl GhostexGpuiApp {
         &self,
         profile_id: BrowserProfileId,
         chrome_status: BrowserTabChromeStatus,
-        runtime_favicon_url: Option<&str>,
         runtime_favicon_image: Option<&BrowserFaviconImage>,
         runtime_favicon_fetch: Option<&BrowserFaviconFetchSource>,
     ) -> AnyElement {
         browser_tab_icon_element(
             profile_id,
             chrome_status,
-            runtime_favicon_url,
             runtime_favicon_image,
             runtime_favicon_fetch,
         )

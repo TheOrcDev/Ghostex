@@ -65,8 +65,12 @@ jobs:
         run: |
           {
             printf 'zig=%s\n' "$(git rev-parse HEAD:.dependencies/zmx)"
-            printf 'cargo=%s\n' "$(git rev-parse HEAD:server)"
           } >> "$GITHUB_OUTPUT"
+      # CDXC:Release 2026-09-16 WHY: this key used to carry the tree hash of
+      # server/, which changes on nearly every push, so every push wrote two
+      # new 45 MB registry entries that only superseded the previous ones. The
+      # lockfile hash changes only when the dependency set does, like the
+      # desktop registry keys.
       - name: Restore Cargo registry cache
         uses: actions/cache@v6
         id: cargo_cache
@@ -74,7 +78,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-reg-gxserver-${{ runner.os }}-${{ inputs.arch }}-${{ steps.cache_keys.outputs.cargo }}
+          key: cargo-reg-gxserver-${{ runner.os }}-${{ inputs.arch }}-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: cargo-reg-gxserver-${{ runner.os }}-${{ inputs.arch }}-
       - name: Restore Zig package cache
         uses: actions/cache@v6
@@ -113,8 +117,17 @@ jobs:
           printf 'ZIG=%s\nGHOSTEX_ZIG=%s\n' \
             "$HOME/.local/share/mise/installs/zig/0.16.0/bin/zig" \
             "$HOME/.local/share/mise/installs/zig/0.16.0/bin/zig" >> "$GITHUB_ENV"
+      # CDXC:Release 2026-09-24 WHY:
+      # cargo runs inside server/, whose rust-toolchain.toml pins its own
+      # channel. Adding the musl targets to the runner's default toolchain left
+      # the pinned one without them, so the static build could not find `core`.
       - name: Install Rust musl targets
-        run: tooling/release-gpui/retry.sh 3 5 -- rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+        working-directory: server
+        run: |
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          tooling_retry="$GITHUB_WORKSPACE/tooling/release-gpui/retry.sh"
+          "$tooling_retry" 3 5 -- rustup toolchain install "$toolchain" --profile minimal
+          "$tooling_retry" 3 5 -- rustup target add --toolchain "$toolchain" x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       - name: Install JavaScript dependencies
         run: tooling/release-gpui/retry.sh 3 5 -- bun install --frozen-lockfile
       - name: Prepare source dependencies

@@ -1,7 +1,3 @@
-use std::{path::Path, time::Duration};
-
-use anyhow::Result;
-
 use crate::app::helpers::*;
 
 #[derive(Clone, Copy, Debug)]
@@ -10,15 +6,28 @@ pub(crate) enum GpuiGhostexCliSettingsAction {
     InstallBrowserControl,
     InstallBrowserUseSkill,
     InstallComputerUseSkill,
+    InstallSpaceoSkill,
     InstallCliSkill,
-    InstallFable56OrchestrationSkill,
+    InstallAgentsOrchestrationSkill,
     InstallManageBeadsSkill,
     InstallGenerateTitleSkill,
     InstallMoveCodexSessionSkill,
     InstallHelpSkill,
+    InstallVisualsSkill,
+    InstallCuaDriverSkill,
     FinishDesktopControlSetup {
         driver_installed: bool,
         was_update: bool,
+    },
+    FinishTrycuaUninstall {
+        succeeded: bool,
+    },
+    FinishSpaceoSetup {
+        installed: bool,
+        was_update: bool,
+    },
+    FinishSpaceoUninstall {
+        succeeded: bool,
     },
     UninstallBundledAgentSkill(&'static str),
     UninstallBundledAgentSkills,
@@ -31,13 +40,19 @@ impl GpuiGhostexCliSettingsAction {
             Self::InstallBrowserControl => "installBrowserControl",
             Self::InstallBrowserUseSkill => "installBrowserUseSkill",
             Self::InstallComputerUseSkill => "installComputerUseSkill",
+            Self::InstallSpaceoSkill => "installSpaceoSkill",
             Self::InstallCliSkill => "installCliSkill",
-            Self::InstallFable56OrchestrationSkill => "installFable56OrchestrationSkill",
+            Self::InstallAgentsOrchestrationSkill => "installAgentsOrchestrationSkill",
             Self::InstallManageBeadsSkill => "installManageBeadsSkill",
             Self::InstallGenerateTitleSkill => "installGenerateTitleSkill",
             Self::InstallMoveCodexSessionSkill => "installMoveCodexSessionSkill",
             Self::InstallHelpSkill => "installHelpSkill",
+            Self::InstallVisualsSkill => "installVisualsSkill",
+            Self::InstallCuaDriverSkill => "installCuaDriverSkill",
             Self::FinishDesktopControlSetup { .. } => "installCuaDriver",
+            Self::FinishTrycuaUninstall { .. } => "uninstallCuaDriver",
+            Self::FinishSpaceoSetup { .. } => "installSpaceo",
+            Self::FinishSpaceoUninstall { .. } => "uninstallSpaceo",
             Self::UninstallBundledAgentSkill(_) => "uninstallBundledAgentSkill",
             Self::UninstallBundledAgentSkills => "uninstallBundledAgentSkills",
         }
@@ -49,16 +64,25 @@ impl GpuiGhostexCliSettingsAction {
             Self::InstallBrowserControl => "Ghostex Embedded Browser Use installed",
             Self::InstallBrowserUseSkill => "Ghostex Browser Use installed",
             Self::InstallComputerUseSkill => "Ghostex Computer Use installed",
+            Self::InstallSpaceoSkill => "Ghostex SpaceO installed",
             Self::InstallCliSkill => "Ghostex CLI skill installed",
-            Self::InstallFable56OrchestrationSkill => "Ghostex Fable 5.6 Orchestration installed",
+            Self::InstallAgentsOrchestrationSkill => "Ghostex Agents installed",
             Self::InstallManageBeadsSkill => "Ghostex Manage Beads installed",
             Self::InstallGenerateTitleSkill => "Ghostex Auto Rename Session installed",
             Self::InstallMoveCodexSessionSkill => "Ghostex Move Codex Session installed",
             Self::InstallHelpSkill => "Ghostex Help installed",
+            Self::InstallVisualsSkill => "Ghostex Visuals installed",
+            Self::InstallCuaDriverSkill => "Cua Driver skill installed",
             Self::FinishDesktopControlSetup {
                 was_update: true, ..
-            } => "Trycua updated",
+            } => "Fast Computer & Browser Use updated",
             Self::FinishDesktopControlSetup { .. } => "Desktop Control installed",
+            Self::FinishTrycuaUninstall { .. } => "Fast Computer & Browser Use uninstalled",
+            Self::FinishSpaceoSetup {
+                was_update: true, ..
+            } => "SpaceO updated",
+            Self::FinishSpaceoSetup { .. } => "SpaceO installed",
+            Self::FinishSpaceoUninstall { .. } => "SpaceO uninstalled",
             Self::UninstallBundledAgentSkill(_) => "Agent skill uninstalled",
             Self::UninstallBundledAgentSkills => "Bundled agent skills uninstalled",
         }
@@ -70,18 +94,25 @@ impl GpuiGhostexCliSettingsAction {
             Self::InstallBrowserControl => "Ghostex Embedded Browser Use install failed",
             Self::InstallBrowserUseSkill => "Ghostex Browser Use install failed",
             Self::InstallComputerUseSkill => "Ghostex Computer Use install failed",
+            Self::InstallSpaceoSkill => "Ghostex SpaceO install failed",
             Self::InstallCliSkill => "Ghostex CLI skill install failed",
-            Self::InstallFable56OrchestrationSkill => {
-                "Ghostex Fable 5.6 Orchestration install failed"
-            }
+            Self::InstallAgentsOrchestrationSkill => "Ghostex Agents install failed",
             Self::InstallManageBeadsSkill => "Ghostex Manage Beads install failed",
             Self::InstallGenerateTitleSkill => "Ghostex Auto Rename Session install failed",
             Self::InstallMoveCodexSessionSkill => "Ghostex Move Codex Session install failed",
             Self::InstallHelpSkill => "Ghostex Help install failed",
+            Self::InstallVisualsSkill => "Ghostex Visuals install failed",
+            Self::InstallCuaDriverSkill => "Cua Driver skill install failed",
             Self::FinishDesktopControlSetup {
                 was_update: true, ..
-            } => "Trycua update failed",
+            } => "Fast Computer & Browser Use update failed",
             Self::FinishDesktopControlSetup { .. } => "Desktop Control setup incomplete",
+            Self::FinishTrycuaUninstall { .. } => "Fast Computer & Browser Use uninstall failed",
+            Self::FinishSpaceoSetup {
+                was_update: true, ..
+            } => "SpaceO update failed",
+            Self::FinishSpaceoSetup { .. } => "SpaceO setup incomplete",
+            Self::FinishSpaceoUninstall { .. } => "SpaceO uninstall failed",
             Self::UninstallBundledAgentSkill(_) => "Bundled agent skill uninstall failed",
             Self::UninstallBundledAgentSkills => "Bundled agent skill uninstall failed",
         }
@@ -137,17 +168,24 @@ pub(crate) fn gpui_run_ghostex_cli_settings_action(
             )
         }
         GpuiGhostexCliSettingsAction::InstallBrowserUseSkill => {
-            gpui_install_bundled_ghostex_skill_action(
+            gpui_install_cua_driver_wrapper_skill_action(
                 action,
                 &["browser-use", "install-skill"],
                 "Ghostex Browser Use",
             )
         }
         GpuiGhostexCliSettingsAction::InstallComputerUseSkill => {
-            gpui_install_bundled_ghostex_skill_action(
+            gpui_install_cua_driver_wrapper_skill_action(
                 action,
                 &["computer-use", "install-skill"],
                 "Ghostex Computer Use",
+            )
+        }
+        GpuiGhostexCliSettingsAction::InstallSpaceoSkill => {
+            gpui_install_bundled_ghostex_skill_action(
+                action,
+                &["spaceo", "install-skill"],
+                "Ghostex SpaceO",
             )
         }
         GpuiGhostexCliSettingsAction::InstallCliSkill => {
@@ -157,11 +195,11 @@ pub(crate) fn gpui_run_ghostex_cli_settings_action(
                 "Ghostex CLI skill",
             )
         }
-        GpuiGhostexCliSettingsAction::InstallFable56OrchestrationSkill => {
+        GpuiGhostexCliSettingsAction::InstallAgentsOrchestrationSkill => {
             gpui_install_bundled_ghostex_skill_action(
                 action,
-                &["fable-5.6-orchestration", "install-skill"],
-                "Ghostex Fable 5.6 Orchestration",
+                &["agents-orchestration", "install-skill"],
+                "Ghostex Agents",
             )
         }
         GpuiGhostexCliSettingsAction::InstallManageBeadsSkill => {
@@ -192,6 +230,19 @@ pub(crate) fn gpui_run_ghostex_cli_settings_action(
                 "Ghostex Help",
             )
         }
+        GpuiGhostexCliSettingsAction::InstallVisualsSkill => {
+            gpui_install_bundled_ghostex_skill_action(
+                action,
+                &["visual", "install-skill"],
+                "Ghostex Visuals",
+            )
+        }
+        GpuiGhostexCliSettingsAction::InstallCuaDriverSkill => {
+            match gpui_install_cua_driver_skill() {
+                Ok(message) => GpuiGhostexCliActionResult::success(action, message),
+                Err(message) => GpuiGhostexCliActionResult::failure(action, message),
+            }
+        }
         GpuiGhostexCliSettingsAction::FinishDesktopControlSetup {
             driver_installed,
             was_update,
@@ -200,6 +251,45 @@ pub(crate) fn gpui_run_ghostex_cli_settings_action(
                 Ok(message) => GpuiGhostexCliActionResult::success(action, message),
                 Err(message) => GpuiGhostexCliActionResult::failure(action, message),
             }
+        }
+        GpuiGhostexCliSettingsAction::FinishTrycuaUninstall { succeeded: true } => {
+            GpuiGhostexCliActionResult::success(
+                action,
+                if cfg!(target_os = "macos") {
+                    "Fast Computer & Browser Use was removed. Its Accessibility and Screen Recording permissions were kept for a later reinstall."
+                } else {
+                    "Fast Computer & Browser Use was removed. You can reinstall it from Settings."
+                }
+                .to_string(),
+            )
+        }
+        GpuiGhostexCliSettingsAction::FinishTrycuaUninstall { succeeded: false } => {
+            GpuiGhostexCliActionResult::failure(
+                action,
+                "The Fast Computer & Browser Use uninstaller did not finish successfully. Settings shows its last output; plugin status was refreshed."
+                    .to_string(),
+            )
+        }
+        GpuiGhostexCliSettingsAction::FinishSpaceoSetup {
+            installed,
+            was_update,
+        } => match gpui_finish_spaceo_setup(installed, was_update) {
+            Ok(message) => GpuiGhostexCliActionResult::success(action, message),
+            Err(message) => GpuiGhostexCliActionResult::failure(action, message),
+        },
+        GpuiGhostexCliSettingsAction::FinishSpaceoUninstall { succeeded: true } => {
+            GpuiGhostexCliActionResult::success(
+                action,
+                "SpaceO was removed. Its Accessibility and Screen Recording permissions were kept for a later reinstall."
+                    .to_string(),
+            )
+        }
+        GpuiGhostexCliSettingsAction::FinishSpaceoUninstall { succeeded: false } => {
+            GpuiGhostexCliActionResult::failure(
+                action,
+                "The SpaceO uninstaller did not finish successfully. Settings shows its last output; plugin status was refreshed."
+                    .to_string(),
+            )
         }
         GpuiGhostexCliSettingsAction::UninstallBundledAgentSkill(skill_name) => {
             match gpui_uninstall_bundled_agent_skill(skill_name) {
@@ -225,117 +315,94 @@ pub(crate) fn gpui_run_ghostex_cli_settings_action(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GpuiGteInstallActionResult {
-    pub(crate) available: bool,
-    pub(crate) message: &'static str,
-    pub(crate) toast_level: &'static str,
-    pub(crate) toast_title: &'static str,
-}
-
-pub(crate) fn gpui_gte_homebrew_install_command() -> (&'static str, [&'static str; 2], Duration) {
-    (
-        "/bin/zsh",
-        ["-lc", GPUI_GTE_HOMEBREW_INSTALL_SCRIPT],
-        Duration::from_secs(5 * 60),
-    )
-}
-
-pub(crate) fn gpui_install_gte_from_homebrew() -> GpuiGteInstallActionResult {
-    /*
-    CDXC:PromptEditor 2026-06-24-13:28:
-    GPUI Settings must use the same fixed Homebrew resolution order and `maddada/tap/gte` install operation as the macOS Settings button, bounded to five minutes with stdout/stderr suppressed. Installing the binary is separate from selecting the promptEditorBackend, and failures must report generic copy instead of raw Homebrew output, paths, command output, URLs, tokens, or environment.
-    */
-    let (command, args, timeout) = gpui_gte_homebrew_install_command();
-    let result = gpui_run_command_with_timeout(Path::new(command), &args, timeout);
-    gpui_gte_install_result_from_command_result(result)
-}
-
-pub(crate) fn gpui_gte_install_result_from_command_result(
-    result: Result<bool, String>,
-) -> GpuiGteInstallActionResult {
-    match result {
-        Ok(true) => GpuiGteInstallActionResult {
-            available: true,
-            message: GPUI_GTE_INSTALL_SUCCESS_MESSAGE,
-            toast_level: "success",
-            toast_title: GPUI_GTE_INSTALL_SUCCESS_MESSAGE,
-        },
-        Ok(false) | Err(_) => GpuiGteInstallActionResult {
-            available: false,
-            message: GPUI_GTE_INSTALL_FAILURE_MESSAGE,
-            toast_level: "warning",
-            toast_title: "gte install failed",
-        },
-    }
-}
-
-pub(crate) const GPUI_CUA_DRIVER_INSTALL_COMMAND_ID: &str = "ghostex.gpui.installCuaDriver";
-pub(crate) const GPUI_CUA_DRIVER_UPDATE_COMMAND_ID: &str = "ghostex.gpui.updateCuaDriver";
-pub(crate) const GPUI_CUA_DRIVER_INSTALL_TAB_TITLE: &str = "Install Trycua";
+pub(crate) const GPUI_CUA_DRIVER_INSTALL_RUNNING_MESSAGE: &str = "The official Fast Computer & Browser Use installer is running in the background. Settings shows its progress.";
+pub(crate) const GPUI_CUA_DRIVER_REINSTALL_RUNNING_MESSAGE: &str = "The official Fast Computer & Browser Use installer is reinstalling the latest release in the background. Settings shows its progress.";
+pub(crate) const GPUI_CUA_DRIVER_UNINSTALL_RUNNING_MESSAGE: &str = "The official Fast Computer & Browser Use uninstaller is running in the background. Settings shows its progress.";
 #[cfg(target_os = "macos")]
-pub(crate) const GPUI_CUA_DRIVER_UPDATE_TAB_TITLE: &str = "Update Trycua";
-pub(crate) const GPUI_CUA_DRIVER_INSTALL_RUNNING_MESSAGE: &str = "The official Trycua installer is running in a command terminal tab. Plugin status updates when it finishes.";
-#[cfg(target_os = "macos")]
-pub(crate) const GPUI_CUA_DRIVER_UPDATE_RUNNING_MESSAGE: &str = "Trycua is checking for and applying the latest official update in a command terminal tab. Plugin status updates when it finishes.";
+pub(crate) const GPUI_CUA_DRIVER_UPDATE_RUNNING_MESSAGE: &str = "Fast Computer & Browser Use is checking for and applying the latest official update in the background. Settings shows its progress.";
 
 /*
 CDXC:Extensions 2026-08-09:
 macOS owns the in-app Trycua lifecycle. A missing driver runs trycua's
 official installer; an existing driver performs a fresh update check and then
 uses its canonical self-updater.
-
-CDXC:Extensions 2026-08-24:
-Every desktop platform now runs the official Trycua installer in a command-pane
-tab instead of sending Windows and Linux to a downloads page, so Settings can
-show one exact command and one button that runs it. Windows Ghostex terminals
-are WSL shells, so the Windows command must cross the interop boundary through
-`powershell.exe`; Trycua installs on the Windows side and is not reachable as a
-Linux binary inside the distribution.
 */
+/// CDXC:ManagedTools 2026-09-29 DECISION:
+/// User: "1 click installs it for them as much as possible", with a tooltip explaining how Ghostex installs it; the agreed plan moves Trycua "out of its terminal tab into the same job runner". The official installer, updater and uninstaller now run as a background job of the desktop app with their output shown in Settings, instead of in a command-pane terminal tab. Supersedes CDXC:Extensions 2026-08-24, which ran them in a command-pane tab (and on Windows crossed from the WSL shell through `powershell.exe`): the desktop app itself is a native Windows process, so it runs Windows PowerShell directly. It stays in the desktop app rather than gxserver because Trycua controls the desktop it runs on, while gxserver may run inside WSL.
 #[cfg(not(target_os = "windows"))]
 pub(crate) const GPUI_TRYCUA_INSTALL_COMMAND: &str =
     "/bin/bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"";
 #[cfg(target_os = "windows")]
-pub(crate) const GPUI_TRYCUA_INSTALL_COMMAND: &str =
-    "powershell.exe -NoProfile -Command \"irm https://cua.ai/driver/install.ps1 | iex\"";
+pub(crate) const GPUI_TRYCUA_INSTALL_COMMAND: &str = "irm https://cua.ai/driver/install.ps1 | iex";
+/*
+CDXC:Extensions 2026-09-26 DECISION:
+Settings' Uninstall Trycua button runs the official uninstaller with `--keep-tcc`: the user chose to keep the Accessibility and Screen Recording grants (the uninstaller revokes them by default) so a later reinstall needs no new permission prompts. Windows has no such grants to keep.
+*/
+#[cfg(not(target_os = "windows"))]
+pub(crate) const GPUI_TRYCUA_UNINSTALL_COMMAND: &str =
+    "/bin/bash -c \"$(curl -fsSL https://cua.ai/driver/uninstall.sh)\" -- --keep-tcc";
+#[cfg(target_os = "windows")]
+pub(crate) const GPUI_TRYCUA_UNINSTALL_COMMAND: &str =
+    "irm https://cua.ai/driver/uninstall.ps1 | iex";
 #[cfg(target_os = "macos")]
 pub(crate) const GPUI_CUA_DRIVER_START_COMMAND: &str =
     "/usr/bin/open -n -g -a CuaDriver --args serve";
 
-pub(crate) struct GpuiCuaDriverCommandAction {
-    pub(crate) command: String,
-    pub(crate) command_id: &'static str,
-    pub(crate) running_message: &'static str,
-    pub(crate) tab_title: &'static str,
-    pub(crate) toast_title: &'static str,
-}
-
-pub(crate) fn gpui_cua_driver_command_action() -> GpuiCuaDriverCommandAction {
+pub(crate) fn gpui_cua_driver_command_action() -> GpuiInstallJobAction {
     #[cfg(target_os = "macos")]
     if let Some(cua_driver_path) = gpui_cua_driver_executable_path() {
         let executable = gpui_shell_single_quote_path(&cua_driver_path);
-        return GpuiCuaDriverCommandAction {
-            command: format!(
+        return GpuiInstallJobAction {
+            script: format!(
                 "{executable} check-update --no-cache && {executable} update --apply && {GPUI_CUA_DRIVER_START_COMMAND}"
             ),
-            command_id: GPUI_CUA_DRIVER_UPDATE_COMMAND_ID,
+            operation: "update",
             running_message: GPUI_CUA_DRIVER_UPDATE_RUNNING_MESSAGE,
-            tab_title: GPUI_CUA_DRIVER_UPDATE_TAB_TITLE,
-            toast_title: "Updating Trycua",
+            toast_title: "Updating Fast Computer & Browser Use",
         };
     }
 
-    #[cfg(target_os = "macos")]
-    let command = format!("{GPUI_TRYCUA_INSTALL_COMMAND} && {GPUI_CUA_DRIVER_START_COMMAND}");
-    #[cfg(not(target_os = "macos"))]
-    let command = GPUI_TRYCUA_INSTALL_COMMAND.to_string();
+    gpui_cua_driver_installer_command_action()
+}
 
-    GpuiCuaDriverCommandAction {
-        command,
-        command_id: GPUI_CUA_DRIVER_INSTALL_COMMAND_ID,
+/// Reinstall runs the official installer even when Trycua is present, so its
+/// exit finishes Desktop Control setup exactly like a first install.
+pub(crate) fn gpui_cua_driver_reinstall_command_action() -> GpuiInstallJobAction {
+    GpuiInstallJobAction {
+        operation: "reinstall",
+        running_message: GPUI_CUA_DRIVER_REINSTALL_RUNNING_MESSAGE,
+        toast_title: "Reinstalling Fast Computer & Browser Use",
+        ..gpui_cua_driver_installer_command_action()
+    }
+}
+
+pub(crate) fn gpui_cua_driver_uninstall_command_action() -> GpuiInstallJobAction {
+    GpuiInstallJobAction {
+        script: GPUI_TRYCUA_UNINSTALL_COMMAND.to_string(),
+        operation: "uninstall",
+        running_message: GPUI_CUA_DRIVER_UNINSTALL_RUNNING_MESSAGE,
+        toast_title: "Uninstalling Fast Computer & Browser Use",
+    }
+}
+
+/// CDXC:ManagedTools 2026-10-06 WHY:
+/// The official Windows installer stops at `Read-Host "Trigger UAC prompt to kill the stale daemon now? [Y/n]"` when a cua-driver daemon is alive but its pipe is dead, and Read-Host throws in the job's headless PowerShell, so the install failed. Its `Repair-CuaDriverStaleDaemon -AutoConfirm` switch is upstream's answer for automated runs (UAC still asks for consent), and the installer exposes no other way to pass it, so the job sets it as a default parameter value before running the installer.
+#[cfg(target_os = "windows")]
+const GPUI_TRYCUA_JOB_PRELUDE: &str =
+    "$PSDefaultParameterValues['Repair-CuaDriverStaleDaemon:AutoConfirm'] = $true; ";
+
+fn gpui_cua_driver_installer_command_action() -> GpuiInstallJobAction {
+    #[cfg(target_os = "macos")]
+    let script = format!("{GPUI_TRYCUA_INSTALL_COMMAND} && {GPUI_CUA_DRIVER_START_COMMAND}");
+    #[cfg(target_os = "windows")]
+    let script = format!("{GPUI_TRYCUA_JOB_PRELUDE}{GPUI_TRYCUA_INSTALL_COMMAND}");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let script = GPUI_TRYCUA_INSTALL_COMMAND.to_string();
+
+    GpuiInstallJobAction {
+        script,
+        operation: "install",
         running_message: GPUI_CUA_DRIVER_INSTALL_RUNNING_MESSAGE,
-        tab_title: GPUI_CUA_DRIVER_INSTALL_TAB_TITLE,
-        toast_title: "Installing Trycua",
+        toast_title: "Installing Fast Computer & Browser Use",
     }
 }

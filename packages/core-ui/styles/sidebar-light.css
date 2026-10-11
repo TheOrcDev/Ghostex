@@ -50,13 +50,15 @@ body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
   color: #959595;
 }
 
-/* CDXC:Sessions 2026-09-14 DECISION:
- * User: make the active sidebar session clearer in light mode with only a slightly darker background; keep the rest of its styling unchanged.
+/* CDXC:Sessions 2026-09-16 DECISION:
+ * User: make the active session's light-mode background and border slightly more apparent.
+ * This supersedes the background-only adjustment from 2026-09-14.
  */
-body[data-sidebar-theme='plain-light']
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
   .sidebar-reference-layout[data-reference-sidebar='true']
   .session[data-focused='true']::after {
-  background: #f0f0f0;
+  background: #e7e7e7;
+  border-color: rgb(0 0 0 / 22%);
 }
 
 body[data-sidebar-theme='plain-light']
@@ -66,6 +68,18 @@ body[data-sidebar-theme='plain-light']
 
 body[data-sidebar-theme='plain-light'] .session-pinned-floating-button {
   color: #525252;
+}
+
+/* CDXC:Sessions 2026-09-16 DECISION:
+ * User: the inner buttons revealed when hovering over a session should have a #f4f4f5 background in light mode.
+ */
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']) .session-card-hover-action {
+  background: #f4f4f5;
+}
+
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .session-card-hover-action:is(:hover, :focus-visible) {
+  background: #e4e4e7;
 }
 
 /* CDXC:Sessions 2026-09-14 DECISION:
@@ -123,14 +137,23 @@ body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
   filter: brightness(0);
 }
 
-body[data-sidebar-theme='plain-light'] .group-project-diff-stat-additions {
-  color: #1a7f37;
+/*
+ * CDXC:Theming 2026-09-22 DECISION:
+ * User: also please make it more noticable in the light theme in the sidebar.
+ * The 70% text opacity is the later same-day Theming decision on `.group-project-diff-stats`.
+ * SEE-ALSO: apps/desktop/src/app/native_sidebar/project_status.rs.
+ */
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .group-project-diff-stat-additions {
+  color: #2a7a3a;
 }
-body[data-sidebar-theme='plain-light'] .group-project-diff-stat-deletions {
-  color: #cf222e;
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .group-project-diff-stat-deletions {
+  color: #c43a42;
 }
-body[data-sidebar-theme='plain-light'] .group-project-diff-files {
-  color: #0969da;
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .group-project-diff-files {
+  color: #3b7cc4;
 }
 
 body[data-sidebar-theme='plain-light'] .sidebar-reference-layout[data-reference-sidebar='true'] .group-title {

@@ -254,13 +254,15 @@ fn cli_session_key_requires_both_parts() {
 
 #[test]
 fn unavailable_message_appends_error_detail() {
-    assert_eq!(
-        ghostex_editor_unavailable_message(None),
+    let expected = if cfg!(target_os = "macos") {
         "Ghostex standalone editor unavailable; using the machine/default editor. Set GHOSTEX_EDITOR_APP or install /Applications/GhostexEditor.app."
-    );
+    } else {
+        "Ghostex standalone editor unavailable; using the machine/default editor. Set GHOSTEX_EDITOR_APP or reinstall Ghostex with its bundled editor."
+    };
+    assert_eq!(ghostex_editor_unavailable_message(None), expected);
     assert_eq!(
         ghostex_editor_unavailable_message(Some("boom")),
-        "Ghostex standalone editor unavailable; using the machine/default editor. Set GHOSTEX_EDITOR_APP or install /Applications/GhostexEditor.app. boom"
+        format!("{expected} boom")
     );
 }
 

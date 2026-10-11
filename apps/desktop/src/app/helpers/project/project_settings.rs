@@ -382,6 +382,27 @@ pub(crate) fn gpui_project_settings_project_from_domain_project(
         project_board_config
             .and_then(|config| gpui_trimmed_json_string_field(config, "docsDirectory")),
     );
+    // Settings → Projects → Work mode (settings_modal/tabs/projects/work_mode.rs): the switch and
+    // the workspace whose Linear key the project falls back to (server/src/work_mode/project.rs,
+    // server/src/workspaces/projects.rs).
+    let launch_settings = project
+        .get("launchSettings")
+        .and_then(serde_json::Value::as_object);
+    item.insert(
+        "workMode".to_string(),
+        serde_json::Value::Bool(
+            launch_settings
+                .and_then(|settings| settings.get("workMode"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true),
+        ),
+    );
+    gpui_insert_optional_nonempty_string(
+        &mut item,
+        "workspaceId",
+        launch_settings
+            .and_then(|settings| gpui_trimmed_json_string_field(settings, "workspaceId")),
+    );
     Some(serde_json::Value::Object(item))
 }
 
@@ -412,6 +433,12 @@ pub(crate) fn gpui_project_settings_project_from_presentation_project(
             .get("worktree")
             .and_then(serde_json::Value::as_object)
             .and_then(|worktree| gpui_trimmed_json_string_field(worktree, "parentProjectId")),
+    );
+    item.insert(
+        "workMode".to_string(),
+        serde_json::Value::Bool(
+            project.get("workMode").and_then(serde_json::Value::as_bool) == Some(true),
+        ),
     );
     Some(serde_json::Value::Object(item))
 }
@@ -547,89 +574,4 @@ pub(crate) fn gpui_project_snapshot_is_quick_automations_overview(
     snapshot: Option<&GpuiProjectSnapshot>,
 ) -> bool {
     gpui_active_project_id_from_snapshot(snapshot) == Some(GPUI_QUICK_AUTOMATIONS_PROJECT_ID)
-}
-
-pub(crate) fn automate_workarea_runtime_url_from_project_snapshot(
-    snapshot: &GpuiProjectSnapshot,
-    runtime_settings: &cef::SidebarRuntimeSettingsSnapshot,
-) -> Option<ProjectWorkareaRealRuntimeUrl> {
-    /*
-    CDXC:Automations 2026-07-04-23:18:
-    Automate mirrors macOS `createProjectAutomateEditorUrl`: use the bundled Kanban/tasks CEF page, the explicit project identity params, the automate-mode project editor id, and `surface=automations`. Projectless contexts, missing project path, or missing automateBoardId must stay on the placeholder instead of synthesizing an Automate URL.
-
-    CDXC:Automations 2026-07-26:
-    Project-scoped Automate is no longer an experimental GPUI feature. Mark that first-party workarea explicitly so the shared page does not apply the Show Beta Features content gate or experimental label. Quick Automations Overview keeps its existing experimental startup seed.
-    */
-    if !snapshot.feature_availability.automate {
-        return None;
-    }
-    let active_project_id = snapshot.active_project_id.as_ref()?.0.clone();
-    if active_project_id == GPUI_QUICK_AUTOMATIONS_PROJECT_ID {
-        /*
-        CDXC:Automations 2026-07-08:
-        Mirror macOS `createQuickAutomationsProjectEditorUrl` in `native/sidebar/native-sidebar.tsx`: the quick-automations project is a real Automate overview surface with empty `projectPath`, all-project scope, and the same Show Beta Features seed. Its identity is the project id, so it must not require an in-memory project path or be rejected by the projectless guard.
-        */
-        let surface_id = snapshot.surface_ids.automate_board_id.as_ref()?.clone();
-        let base_url = gpui_cef_html_entry_url("GHOSTEX_GPUI_KANBAN_URL", "kanban.html").ok()?;
-        return ProjectWorkareaRealRuntimeUrl::from_authorized_runtime_url(
-            append_url_query_params_with_percent_encoded_spaces(
-                base_url,
-                &[
-                    (
-                        "projectName",
-                        GPUI_QUICK_AUTOMATIONS_DISPLAY_TITLE.to_string(),
-                    ),
-                    ("projectPath", String::new()),
-                    ("projectId", GPUI_QUICK_AUTOMATIONS_PROJECT_ID.to_string()),
-                    ("projectEditorId", surface_id),
-                    ("surface", "automations".to_string()),
-                    ("scope", "all".to_string()),
-                    (
-                        "beadsDisplayKey",
-                        GPUI_QUICK_AUTOMATIONS_DISPLAY_TITLE.to_string(),
-                    ),
-                    (
-                        "showBetaFeatures",
-                        if runtime_settings.show_beta_features {
-                            "true"
-                        } else {
-                            "false"
-                        }
-                        .to_string(),
-                    ),
-                ],
-            ),
-        );
-    }
-    if snapshot.is_quick_projectless {
-        return None;
-    }
-    let project_path = snapshot
-        .in_memory_project_path
-        .as_ref()?
-        .to_string_lossy()
-        .to_string();
-    let surface_id = snapshot.surface_ids.automate_board_id.as_ref()?.clone();
-    let base_url = gpui_cef_html_entry_url("GHOSTEX_GPUI_KANBAN_URL", "kanban.html").ok()?;
-    ProjectWorkareaRealRuntimeUrl::from_authorized_runtime_url(append_url_query_params(
-        base_url,
-        &[
-            ("projectName", snapshot.display_name.clone()),
-            ("projectPath", project_path),
-            ("projectId", active_project_id),
-            ("projectEditorId", surface_id),
-            ("beadsDisplayKey", snapshot.display_name.clone()),
-            ("surface", "automations".to_string()),
-            ("automationExperimental", "false".to_string()),
-            (
-                "showBetaFeatures",
-                if runtime_settings.show_beta_features {
-                    "true"
-                } else {
-                    "false"
-                }
-                .to_string(),
-            ),
-        ],
-    ))
 }

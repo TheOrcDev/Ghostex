@@ -1,12 +1,12 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::Instant,
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::Value;
 
 /*
@@ -468,31 +468,49 @@ pub fn discover_project_icon(root: &Path) -> Option<ProjectIcon> {
     // project path that no longer exists costs one failed syscall, not thirty.
     let canonical_root = std::fs::canonicalize(root).ok()?;
 
+    if let Some(icon) = discover_icon_in_directory(&canonical_root, "") {
+        return Some(icon);
+    }
+    nested::discover_nested_icon(&canonical_root)
+}
+
+mod nested;
+
+fn discover_icon_in_directory(canonical_root: &Path, directory: &str) -> Option<ProjectIcon> {
+    let prefix = if directory.is_empty() {
+        String::new()
+    } else {
+        format!("{directory}/")
+    };
     for candidate in FAVICON_CANDIDATES {
-        if let Some(icon) = load_project_icon_candidate(&canonical_root, candidate) {
+        if let Some(icon) =
+            load_project_icon_candidate(canonical_root, &format!("{prefix}{candidate}"))
+        {
             return Some(icon);
         }
     }
 
     for source_file in ICON_SOURCE_FILES {
-        let Some(source) = read_capped_text(&canonical_root, source_file, MAX_ICON_SOURCE_BYTES)
-        else {
+        let Some(source) = read_capped_text(
+            canonical_root,
+            &format!("{prefix}{source_file}"),
+            MAX_ICON_SOURCE_BYTES,
+        ) else {
             continue;
         };
         let Some(href) = extract_icon_href(&source) else {
             continue;
         };
-        // Resolve a declared href against `public/` first and then against the
-        // root, because the href is a served URL ("/favicon.png")
-        // and `public/` is what most frameworks serve from.
-        let clean = href.trim_start_matches('/').to_string();
-        for candidate in [format!("public/{clean}"), clean.clone()] {
-            if let Some(icon) = load_project_icon_candidate(&canonical_root, &candidate) {
+        let clean = href.trim_start_matches('/');
+        for candidate in [
+            format!("{prefix}public/{clean}"),
+            format!("{prefix}{clean}"),
+        ] {
+            if let Some(icon) = load_project_icon_candidate(canonical_root, &candidate) {
                 return Some(icon);
             }
         }
     }
-
     None
 }
 

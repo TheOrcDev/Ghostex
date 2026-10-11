@@ -1,24 +1,26 @@
 /*
-CDXC:Notifications 2026-09-11 DECISION:
-User: Ghostex gets a notification feed with a bell in the titlebar immediately to
-the right of the Next button, a count badge on the bell, a dropdown panel that
-lists what each agent said or is waiting for, and hotkeys to open the panel and
-jump through unread items.
+CDXC:Notifications 2026-09-20 DECISION:
+User: Ghostex gets a notification feed with a bell in the sidebar's top row, a
+count badge on the bell, a dropdown panel that lists what each agent said or is
+waiting for, and hotkeys to open the panel and jump through unread items. This
+supersedes the 2026-09-11 wording that put the bell in the titlebar immediately
+to the right of the Next button.
 
-Ownership mirrors the Back/Forward trail on purpose:
+Ownership:
 - gxserver owns the feed rows, their read state, and the jump order
   (`server/src/notification_feed`), so the desktop app, the web app, and mobile
   read one list.
-- The CEF sidebar runtime talks to gxserver and activates the session a row
-  points at, because it already owns session activation and attention
-  acknowledgement.
+- The Rust store reads the feed and performs each command
+  (`app/gx_store/notifications/`, the rules in gx-core `notification_feed.rs`);
+  until 2026-09-25 the QuickJS sidebar runtime did.
 - This module owns pixels and hotkey routing only. It renders from the cached
-  state the sidebar pushes over the native-host bridge and sends one command
-  back per click or keypress. Nothing here calls gxserver or blocks the frame.
+  state and sends one command per click or keypress. Nothing here calls
+  gxserver or blocks the frame.
 SEE-ALSO: packages/shared/notification-feed/notification-feed-contract.ts,
-apps/desktop/sidebar/gxserver-runtime (the `notificationFeedState` bridge post
-and the `ghostex-gpui-sidebar-notification-feed-command` listener).
+apps/desktop/src/app/gx_store/notifications/.
 */
+
+pub(crate) mod reset_banners;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -34,21 +36,23 @@ use gpui_component::tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement};
 
 use crate::{
     GhostexGpuiApp, GpuiTitlebarPopupKind, NOTIFICATIONS_TITLEBAR_BUTTON_HIDDEN_SETTINGS_KEY,
-    TITLEBAR_LEADING_BUTTON_WIDTH, TITLEBAR_LEADING_TALL_BUTTON_HEIGHT, shared_settings,
-    titlebar_background, titlebar_button_hover_color, titlebar_icon_color,
-    titlebar_icon_hover_color, titlebar_svg_icon, titlebar_tooltip,
+    shared_settings, titlebar_active_text_color, titlebar_background, titlebar_svg_icon,
+    titlebar_tooltip, titlebar_tooltip_label,
 };
-
-/// Page-side event the sidebar runtime listens for. Must stay identical to
-/// GPUI_SIDEBAR_NOTIFICATION_FEED_COMMAND_EVENT_NAME in the sidebar runtime.
-const NOTIFICATION_FEED_COMMAND_EVENT_NAME: &str = "ghostex-gpui-sidebar-notification-feed-command";
-/// Bridge message the sidebar runtime posts whenever the feed changes.
-pub(crate) const NOTIFICATION_FEED_STATE_MESSAGE_TYPE: &str = "notificationFeedState";
 
 const NOTIFICATION_BELL_ICON: &str = "titlebar/bell.svg";
 const NOTIFICATION_BELL_ICON_SIZE: f32 = 15.0;
 /// The app-wide attention blue (`--attention-dot` in the shared theme).
 pub(crate) const NOTIFICATION_ATTENTION_BLUE: u32 = 0x95d7f6;
+/// CDXC:Notifications 2026-09-16 DECISION:
+/// User: make the "Project · Finished" meta line more visible in light mode.
+/// The fill/border accent stays #95d7f6; this darker same-hue ink is only for unread meta text on pale unread cards.
+pub(crate) const NOTIFICATION_ATTENTION_BLUE_TEXT_LIGHT: u32 = 0x0d7eab;
+/// CDXC:Notifications 2026-10-05 DECISION:
+/// User: banked reset expiry warnings are notified "using red color". Urgent rows swap the attention blue for this red on the card, and the bell's badge turns red while one is unread.
+pub(crate) const NOTIFICATION_URGENT_RED: u32 = 0xf87171;
+/// The same red, darkened for unread meta text on pale light-mode cards.
+pub(crate) const NOTIFICATION_URGENT_RED_TEXT_LIGHT: u32 = 0xc42b2b;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuiNotificationFeedKind {
@@ -56,6 +60,10 @@ pub(crate) enum GpuiNotificationFeedKind {
     NeedsInput,
     Bell,
     Custom,
+    /// A saved account's banked usage reset expires soon (an account row, drawn red).
+    ResetExpiring,
+    /// Ghostex used an expiring banked reset on its own (an account row).
+    ResetRedeemed,
 }
 
 impl GpuiNotificationFeedKind {
@@ -65,6 +73,8 @@ impl GpuiNotificationFeedKind {
             "needsInput" => Some(Self::NeedsInput),
             "bell" => Some(Self::Bell),
             "custom" => Some(Self::Custom),
+            "resetExpiring" => Some(Self::ResetExpiring),
+            "resetRedeemed" => Some(Self::ResetRedeemed),
             _ => None,
         }
     }
@@ -75,6 +85,30 @@ impl GpuiNotificationFeedKind {
             Self::NeedsInput => "Needs input",
             Self::Bell => "Bell",
             Self::Custom => "Notification",
+            Self::ResetExpiring => "Reset expiring",
+            Self::ResetRedeemed => "Reset used",
+        }
+    }
+
+    pub(crate) fn urgent(self) -> bool {
+        self == Self::ResetExpiring
+    }
+
+    /// The card's accent: red for urgent rows, the attention blue otherwise.
+    pub(crate) fn accent(self) -> u32 {
+        if self.urgent() {
+            NOTIFICATION_URGENT_RED
+        } else {
+            NOTIFICATION_ATTENTION_BLUE
+        }
+    }
+
+    /// The accent as unread meta text on a pale light-mode card.
+    pub(crate) fn accent_text_light(self) -> u32 {
+        if self.urgent() {
+            NOTIFICATION_URGENT_RED_TEXT_LIGHT
+        } else {
+            NOTIFICATION_ATTENTION_BLUE_TEXT_LIGHT
         }
     }
 
@@ -84,7 +118,7 @@ impl GpuiNotificationFeedKind {
             Self::Finished => "titlebar/message-circle.svg",
             Self::NeedsInput => "titlebar/help-circle.svg",
             Self::Bell => "titlebar/bell.svg",
-            Self::Custom => "titlebar/info-circle.svg",
+            Self::Custom | Self::ResetExpiring | Self::ResetRedeemed => "titlebar/info-circle.svg",
         }
     }
 }
@@ -99,6 +133,8 @@ pub(crate) struct GpuiNotificationFeedItem {
     pub(crate) subtitle: String,
     pub(crate) body: String,
     pub(crate) agent_name: Option<String>,
+    /// Set on account rows: the saved account the row is about.
+    pub(crate) account_id: Option<String>,
     pub(crate) created_at: String,
     pub(crate) created_at_epoch_secs: Option<i64>,
     pub(crate) read: bool,
@@ -122,6 +158,7 @@ impl GpuiNotificationFeedItem {
             subtitle: text("subtitle").unwrap_or_default(),
             body: text("body").unwrap_or_default(),
             agent_name: text("agentName"),
+            account_id: text("accountId"),
             read: value.get("read")?.as_bool()?,
             id,
         })
@@ -137,9 +174,10 @@ pub(crate) struct GpuiNotificationFeedState {
 }
 
 impl GpuiNotificationFeedState {
-    /// Strictly parse the sidebar's bridge payload. A malformed message (or a
-    /// malformed row) leaves the previous state alone rather than blanking the
-    /// bell: this is the only source of truth the titlebar has.
+    /// Strictly parse the state message (gx-core `notification_feed_state_message`).
+    /// A malformed message (or a malformed row) leaves the previous state alone
+    /// rather than blanking the bell: this is the only source of truth the
+    /// titlebar has.
     pub(crate) fn from_bridge_message(message: &serde_json::Value) -> Option<Self> {
         let unread_count = message.get("unreadCount")?.as_u64()? as usize;
         let items = message
@@ -160,9 +198,8 @@ impl GpuiNotificationFeedState {
     }
 }
 
-/// Map the shared hotkey action ids (`packages/shared/ghostex-hotkeys.ts`) onto
-/// the command the sidebar runtime executes, so a keypress and a panel click
-/// enter the exact same route.
+/// Map the shared hotkey action ids (`packages/shared/ghostex-hotkeys.ts` (deleted 2026-10-01)) onto
+/// the feed command, so a keypress and a panel click enter the exact same route.
 pub(crate) fn notification_feed_hotkey_command(action_id: &str) -> Option<&'static str> {
     match action_id {
         "openNotifications" => Some("open"),
@@ -172,8 +209,8 @@ pub(crate) fn notification_feed_hotkey_command(action_id: &str) -> Option<&'stat
     }
 }
 
-/// Ids ride inside a JS string literal in the command script, so only the
-/// characters a uuid can contain are ever interpolated.
+/// Only the characters a uuid can contain: a row whose id has anything else is
+/// refused with its whole message.
 pub(crate) fn notification_feed_id_is_safe(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -290,9 +327,9 @@ pub(crate) fn notification_feed_badge_label(unread_count: usize) -> String {
 }
 
 impl GhostexGpuiApp {
-    /// `{ "type": "notificationFeedState", … }` from the sidebar's native-host
-    /// bridge. Repaints the bell only when the feed actually changed, and pushes
-    /// the new rows into the dropdown when it is open so the list stays live.
+    /// `{ "type": "notificationFeedState", … }` from the Rust store's feed reads.
+    /// Repaints the bell only when the feed actually changed, and pushes the new
+    /// rows into the dropdown when it is open so the list stays live.
     pub(crate) fn receive_notification_feed_state_message(
         &mut self,
         message: &serde_json::Value,
@@ -305,6 +342,7 @@ impl GhostexGpuiApp {
             return;
         }
         self.notification_feed_state = state.clone();
+        self.deliver_reset_expiry_banners(&state, cx);
         if self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::Notifications)
             && let Some(handle) = self.titlebar_popup_window.clone()
         {
@@ -316,39 +354,32 @@ impl GhostexGpuiApp {
         cx.notify();
     }
 
-    /// Ask the sidebar runtime to act on the feed. Rust deliberately does not
-    /// call gxserver itself: the runtime owns both the daemon conversation and
-    /// the session activation that follows an `open`.
+    /// Acts on the feed: the Rust store performs the command against gxserver
+    /// (`app/gx_store/notifications/commands.rs`).
     pub(crate) fn request_notification_feed_command(
         &mut self,
         action: &'static str,
         notification_id: Option<&str>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(sidebar) = self.sidebar.clone() else {
+        let Some(command) = ghostex_gx_core::NotificationFeedCommand::from_action(action) else {
             return;
         };
-        let detail = match notification_id {
-            Some(id) if notification_feed_id_is_safe(id) => {
-                format!("{{ action: '{action}', notificationId: '{id}' }}")
-            }
-            Some(_) => return,
-            None => format!("{{ action: '{action}' }}"),
-        };
-        let script = format!(
-            "window.dispatchEvent(new CustomEvent('{NOTIFICATION_FEED_COMMAND_EVENT_NAME}', {{ detail: {detail} }})); undefined;"
-        );
-        sidebar.update(cx, |surface, _| {
-            surface.execute_app_owned_script(&script);
-        });
+        if notification_id.is_some_and(|id| !notification_feed_id_is_safe(id)) {
+            return;
+        }
+        self.gx_store_notification_feed_command(command, notification_id, cx);
     }
 
     pub(crate) fn titlebar_notification_bell_visible(&self) -> bool {
+        // CDXC:Extensions 2026-09-18 SEE-ALSO:
+        // The bell is scoped like every other titlebar button; apps/desktop/src/app/view_scopes.rs owns the rule.
         !shared_settings::shared_sidebar_settings_snapshot()
             .object()
             .get(NOTIFICATIONS_TITLEBAR_BUTTON_HIDDEN_SETTINGS_KEY)
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
+            && self.official_view_scope_allows("notifications")
     }
 
     /// Toggles the Notifications dropdown anchored to the last painted bell
@@ -372,39 +403,52 @@ impl GhostexGpuiApp {
         );
     }
 
-    /// The bell, drawn in the same tall square strip as the Back/Forward arrows
-    /// it follows, with the unread count overlaid at the top right.
-    pub(crate) fn render_titlebar_notification_bell(
+    /// CDXC:Notifications 2026-09-20 DECISION:
+    /// User: the notification bell belongs in the sidebar's top row beside the sidebar's own controls, not in the titlebar after the Next button; this supersedes the 2026-09-11 placement. It keeps its unread badge, its Settings switch, and its per-view scope gate.
+    /// It is drawn as a sidebar row button so it matches the menu button beside it.
+    pub(crate) fn render_sidebar_notification_bell(
         &self,
+        appearance: &crate::app::native_sidebar::appearance::SidebarAppearance,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let scale = appearance.scale;
         let open = self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::Notifications);
         let unread_count = self.notification_feed_state.unread_count;
-        let icon_color = if open {
-            titlebar_icon_hover_color()
+        let badge_color = if self
+            .notification_feed_state
+            .items
+            .iter()
+            .any(|item| !item.read && item.kind.urgent())
+        {
+            NOTIFICATION_URGENT_RED
         } else {
-            titlebar_icon_color()
+            NOTIFICATION_ATTENTION_BLUE
+        };
+        let icon_color = if open {
+            titlebar_active_text_color()
+        } else {
+            appearance.muted
         };
         let button_bounds: Rc<Cell<Option<Bounds<Pixels>>>> =
             self.titlebar_notification_bell_bounds.clone();
-        let shortcut = crate::gpui_configured_hotkey_label("openNotifications");
-        let tooltip = match shortcut {
-            Some(shortcut) if !shortcut.is_empty() => format!("Notifications ({shortcut})"),
-            _ => "Notifications".to_string(),
-        };
+        let tooltip = titlebar_tooltip_label("Notifications", "openNotifications");
+        let hover = appearance.hover;
 
         div()
-            .id("ghostex-gpui-titlebar-notifications-bell")
+            .id("ghostex-gpui-sidebar-notifications-bell")
+            // Windows: the sidebar's top row is a Drag region (native_sidebar/navigation.rs).
+            .when(cfg!(target_os = "windows"), |this| this.occlude())
             .relative()
             .flex()
-            .h(px(TITLEBAR_LEADING_TALL_BUTTON_HEIGHT))
-            .w(px(TITLEBAR_LEADING_BUTTON_WIDTH))
+            .h_full()
+            .w(px(34.0 * scale))
+            .rounded(px(5.0 * scale))
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .cursor_default()
-            .when(open, |this| this.bg(titlebar_button_hover_color()))
-            .hover(|this| this.bg(titlebar_button_hover_color()))
+            .when(open, |this| this.bg(hover))
+            .hover(move |this| this.bg(hover))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -432,27 +476,27 @@ impl GhostexGpuiApp {
             })
             .child(titlebar_svg_icon(
                 NOTIFICATION_BELL_ICON,
-                NOTIFICATION_BELL_ICON_SIZE,
+                NOTIFICATION_BELL_ICON_SIZE * scale,
                 icon_color,
             ))
             .when(unread_count > 0, |this| {
                 this.child(
                     div()
                         .absolute()
-                        .top(px(1.0))
-                        .right(px(1.0))
+                        .top(px(1.0 * scale))
+                        .right(px(1.0 * scale))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .min_w(px(14.0))
-                        .h(px(14.0))
-                        .px(px(3.0))
+                        .min_w(px(14.0 * scale))
+                        .h(px(14.0 * scale))
+                        .px(px(3.0 * scale))
                         .rounded_full()
                         .border_1()
                         .border_color(titlebar_background())
-                        .bg(rgb(NOTIFICATION_ATTENTION_BLUE))
-                        .text_size(px(9.0))
-                        .line_height(px(12.0))
+                        .bg(rgb(badge_color))
+                        .text_size(px(9.0 * scale))
+                        .line_height(px(12.0 * scale))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(titlebar_background())
                         .child(notification_feed_badge_label(unread_count)),

@@ -5,10 +5,11 @@
 // bootstrap, auth token reads, and HTTP response parsing helpers.
 // See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
+use crate::app::helpers::web_bridge_types::SidebarGxserverBootstrap;
 use std::{
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::TcpStream,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::app::helpers::*;
@@ -39,6 +40,16 @@ pub(crate) fn gxserver_post_typed_operation(
     params: &serde_json::Value,
     timeout: Duration,
 ) -> Result<(u16, String), String> {
+    gxserver_post_typed_operation_across_restart(path, params, timeout, Duration::ZERO)
+}
+
+/// CDXC:ServerDaemon 2026-09-29 WHY: `cargo xtask start-server` and gxserver updates replace the daemon in place, leaving the port closed for about two seconds while the app stays open. A background caller that meets that gap waits up to `restart_wait` for the port to open again instead of failing, because a single refused connect put "gxserver is not reachable" on the chat's error line although gxserver was back a moment later. Only a refused connect is waited out: the request never reached gxserver, so sending it once the port opens cannot run it twice. UI-thread callers keep `Duration::ZERO`.
+pub(crate) fn gxserver_post_typed_operation_across_restart(
+    path: &str,
+    params: &serde_json::Value,
+    timeout: Duration,
+    restart_wait: Duration,
+) -> Result<(u16, String), String> {
     /*
     CDXC:ProjectBoard 2026-06-24-11:03:
     GPUI Kanban CEF parity must use the existing gxserver typed-operation boundary for Beads work. Send the same protocol-version envelope and bearer token as the native bridge to localhost only, with no bd subprocess execution, remote fallback, raw request logging, response logging, URL/title inspection, or persisted board payloads.
@@ -55,11 +66,10 @@ pub(crate) fn gxserver_post_typed_operation(
     if !path.starts_with("/api/") {
         return Err("Invalid gxserver API path.".to_string());
     }
-    let token = read_gpui_gxserver_auth_token()?;
     let port = gpui_local_gxserver_api_port();
     let address = format!("{GPUI_GXSERVER_LOCAL_API_HOST}:{port}");
-    let mut stream = TcpStream::connect(&address)
-        .map_err(|_| format!("gxserver is not reachable on {address}."))?;
+    let mut stream = connect_local_gxserver(&address, restart_wait)?;
+    let token = read_gpui_gxserver_auth_token()?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|_| "Could not configure gxserver read timeout.".to_string())?;
@@ -94,6 +104,21 @@ pub(crate) fn gxserver_post_typed_operation(
         .and_then(|status| status.parse::<u16>().ok())
         .ok_or_else(|| "gxserver returned an invalid HTTP status.".to_string())?;
     Ok((status_code, gxserver_http_response_body(headers, body)?))
+}
+
+fn connect_local_gxserver(address: &str, restart_wait: Duration) -> Result<TcpStream, String> {
+    let deadline = Instant::now() + restart_wait;
+    loop {
+        match TcpStream::connect(address) {
+            Ok(stream) => return Ok(stream),
+            Err(error)
+                if error.kind() == ErrorKind::ConnectionRefused && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return Err(format!("gxserver is not reachable on {address}.")),
+        }
+    }
 }
 
 pub(crate) fn gxserver_get_typed_operation(
@@ -310,7 +335,7 @@ pub(crate) fn gpui_sidebar_gxserver_bootstrap(
     latest_snapshot: Option<&GpuiProjectSnapshot>,
     focus_state: &GpuiGxserverPresentationFocusState,
     local_focus_key: Option<&GpuiLocalWorkspaceSessionKey>,
-) -> Option<cef::SidebarGxserverBootstrap> {
+) -> Option<SidebarGxserverBootstrap> {
     /*
     CDXC:ServerDaemon 2026-06-24-11:17:
     Build the GPUI sidebar bootstrap only from real local gxserver facts: the selected loopback API port, the existing auth-token helper, protocol version 1, a stable GPUI sidebar client id, and the explicit active project id already stored from the live sidebar snapshot. Do not infer optional session ids from project paths, titles, shell terminal ids, Browser tabs, fixtures, or fallback state.
@@ -330,7 +355,7 @@ pub(crate) fn gpui_sidebar_gxserver_bootstrap(
         .or_else(|| gpui_active_project_id_from_snapshot(latest_snapshot))
         .or(focus_state.active_project_id.as_deref())
         .map(str::to_string);
-    Some(cef::SidebarGxserverBootstrap {
+    Some(SidebarGxserverBootstrap {
         base_url: format!(
             "http://{GPUI_GXSERVER_LOCAL_API_HOST}:{}",
             gpui_local_gxserver_api_port()

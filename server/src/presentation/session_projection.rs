@@ -90,6 +90,39 @@ pub(crate) fn project_presentation_project(project: &Value) -> Value {
     output.insert("title".to_string(), value_field(project, "name"));
     output.insert("updatedAt".to_string(), value_field(project, "updatedAt"));
     insert_optional_value(&mut output, "worktree", project.get("worktree").cloned());
+    // CDXC:Bots 2026-09-26 WHY:
+    // The snapshot's project row is what every client holds from its first frame; the domain row with `launchSettings` only reaches a client in a later add or update delta, so a bot flag read from there vanished on every reload.
+    if let Some(profile) = crate::bot_projects::bot_profile(project) {
+        output.insert("botProfile".to_string(), Value::String(profile.to_string()));
+        output.insert(
+            "botGatewayRunning".to_string(),
+            Value::Bool(crate::bot_projects::published_bot_gateway_running(profile)),
+        );
+        output.insert(
+            "botRunsToday".to_string(),
+            Value::from(crate::bot_feed::published_bot_runs_today(profile)),
+        );
+    }
+    if crate::work_mode::project_work_mode(project) {
+        output.insert("workMode".to_string(), Value::Bool(true));
+        if crate::work_mode::project_has_linear_key(project) {
+            output.insert("workLinear".to_string(), Value::Bool(true));
+        }
+        if let Some(project_id) = project.get("projectId").and_then(Value::as_str) {
+            output.insert(
+                "workTracker".to_string(),
+                json!(crate::work_mode::cached_project_work_tracker(project_id).as_wire()),
+            );
+        }
+    }
+    if crate::workspaces::workspaces_feature_enabled() {
+        if let Some(workspace_id) = crate::workspaces::stored_project_workspace_id(project) {
+            output.insert("workspaceId".to_string(), json!(workspace_id));
+        }
+        if crate::workspaces::project_in_every_workspace(project) {
+            output.insert("everyWorkspace".to_string(), Value::Bool(true));
+        }
+    }
     Value::Object(output)
 }
 
@@ -192,6 +225,10 @@ pub(crate) fn project_presentation_session(
     {
         output.insert("switchableAgents".to_string(), switchable_agents);
     }
+    // CDXC:AgentBox 2026-10-01 SEE-ALSO: `PresentationSession.agentbox` in packages/gx-protocol/src/presentation.rs and `GxserverPresentationSession.agentbox` in packages/shared/gxserver-protocol-presentation.ts; absent for a session that runs on this computer.
+    if let Some(agentbox) = crate::agentbox::presentation_agentbox_value(session) {
+        output.insert("agentbox".to_string(), agentbox);
+    }
     if activity == "attention" {
         output.insert(
             "attention".to_string(),
@@ -226,6 +263,12 @@ pub(crate) fn project_presentation_session(
         "gitStatus",
         crate::session_git_status::effective_session_git_cwd(session, Some(project))
             .and_then(|cwd| crate::session_git_status::published_session_git_status(&cwd)),
+    );
+    // CDXC:WorkMode 2026-10-09 SEE-ALSO: `PresentationSession.work` in packages/gx-protocol/src/presentation.rs; absent outside work mode, and built from caches only (server/src/work_mode/).
+    insert_optional_value(
+        &mut output,
+        "work",
+        crate::work_mode::presentation_session_work(project, session),
     );
     output.insert("groupId".to_string(), Value::String(group_id.to_string()));
     /*
@@ -273,6 +316,14 @@ pub(crate) fn project_presentation_session(
     output.insert("isPinned".to_string(), value_field(session, "isPinned"));
     output.insert("isParked".to_string(), value_field(session, "isParked"));
     merge_object(&mut output, title);
+    // In work mode a session the person never renamed is titled by its branch.
+    if let Some(branch_title) = crate::work_mode::work_display_title(
+        project,
+        session,
+        output.get("titleSource").and_then(Value::as_str),
+    ) {
+        output.insert("displayTitle".to_string(), Value::String(branch_title));
+    }
     output.insert("kind".to_string(), value_field(session, "kind"));
     output.insert(
         "lastActiveAt".to_string(),
@@ -367,6 +418,16 @@ pub(crate) fn project_presentation_session(
         "workingStartedAt",
         session_effective_working_started_at(session, generated_at),
     );
+    insert_optional_string(
+        &mut output,
+        "backgroundWorkDetectedAt",
+        session_background_work_detected_at(session),
+    );
+    insert_optional_string(
+        &mut output,
+        "modelSelectionFailure",
+        crate::session_chat_model_selection_alert::session_model_selection_failure(session),
+    );
     output.insert("zmxName".to_string(), value_field(session, "zmxName"));
     Value::Object(output)
 }
@@ -389,12 +450,17 @@ pub(crate) fn session_effective_working_started_at(
                     .or_else(|| {
                         crate::session_chat_compacting::session_chat_fleet_detected_at(session)
                     })
-                    .or_else(|| {
-                        crate::session_chat_compacting::session_chat_monitor_detected_at(session)
-                    })
             })
             .flatten()
     })
+}
+
+/// CDXC:SessionStatus 2026-09-22 DECISION:
+/// User: a Claude session whose footer still lists a background shell (or monitor) after its turn shows a grey dot in the sidebar instead of working or idle. The value is the screen detection's stable `detectedAt`, present only while the session runs and the footer still shows the line.
+pub(crate) fn session_background_work_detected_at(session: &Value) -> Option<String> {
+    (effective_lifecycle_state(session) == "running")
+        .then(|| crate::session_chat_compacting::session_chat_monitor_detected_at(session))
+        .flatten()
 }
 
 pub(crate) fn session_agent_activity(session: &Value) -> Option<&Value> {

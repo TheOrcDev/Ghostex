@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -89,14 +88,14 @@ pub(crate) fn normalize_project_root_path(
     Ok(normalized)
 }
 
+/// CDXC:AddProject 2026-09-22 WHY:
+/// Windows commonly provides USERPROFILE without HOME; registration must resolve home shortcuts using the same home directory as the folder browser.
 fn expand_user_path(path: &str) -> String {
     if path == "~" {
-        return env::var("HOME").unwrap_or_else(|_| path.to_string());
+        return path_to_string(&ghostex_paths::GhostexPaths::resolve().home_dir);
     }
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
-            return Path::new(&home).join(rest).to_string_lossy().to_string();
-        }
+        return path_to_string(&ghostex_paths::GhostexPaths::resolve().home_dir.join(rest));
     }
     path.to_string()
 }

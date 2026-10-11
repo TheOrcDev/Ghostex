@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,7 @@ use serde_json::{json, Map, Value};
 
 use crate::agents::{
     apply_created_session_identity, create_agent_session_params_for_project, read_agent_settings,
+    requested_agent_model_option,
 };
 use crate::domain::{DomainRepository, DomainStateError};
 use crate::presentation::list_previous_sessions;
@@ -47,6 +48,8 @@ pub fn start_board_work(
     params: &Map<String, Value>,
     bd_executable_path: &str,
 ) -> Result<StartBoardWorkOutcome, DomainStateError> {
+    let model = requested_agent_model_option(params, "agentModel")?;
+    let effort = requested_agent_model_option(params, "agentEffort")?;
     let bead_id = read_trimmed(params, "beadId")
         .ok_or_else(|| DomainStateError::bad_request("startBoardWork requires a bead id."))?;
     let projects = repository.list_projects()?;
@@ -133,6 +136,11 @@ pub fn start_board_work(
         Value::String("workspace".to_string()),
     );
     create_params.insert("requireLaunchCommand".to_string(), Value::Bool(true));
+    for (key, value) in [("agentModel", model), ("agentEffort", effort)] {
+        if let Some(value) = value {
+            create_params.insert(key.to_string(), Value::String(value));
+        }
+    }
     let mut launch_settings = Map::new();
     if let Some(command) = agent_button.and_then(|button| button.get("command")) {
         launch_settings.insert("agentCommand".to_string(), command.clone());
@@ -285,8 +293,8 @@ pub fn associate_board_session(
 }
 
 /*
-Board-project resolution mirrors the shared-mount link-store contract in
-packages/shared/bead-conversation-links.ts: rows that mount the same Beads directory
+Board-project resolution mirrors the shared-mount link-store contract of
+packages/gx-core/src/session_create/board_links.rs: rows that mount the same Beads directory
 (projectBoardConfig.beadsDirectory, else the global default, else the project path)
 are one board. An explicit projectId or projectPath wins - that is how a dispatcher
 puts the worker in the repo the card is about. Otherwise every distinct store is
@@ -421,7 +429,7 @@ fn run_bd_show(
 ) -> Result<Option<Value>, DomainStateError> {
     const BD_SHOW_TIMEOUT: Duration = Duration::from_secs(10);
 
-    let mut command = Command::new(bd_executable_path);
+    let mut command = crate::platform::process::background_command(bd_executable_path);
     command
         .args(["show", bead_id, "--json"])
         .current_dir(cwd)
@@ -551,12 +559,11 @@ fn board_prompt_agent_options(projects: &[Value]) -> Vec<Value> {
 }
 
 /*
-CDXC:ProjectBoard 2026-08-07:
-Rust port of `buildAgentWorkPrompt` in apps/desktop/views/project-board-shared.ts —
-the canonical bead work prompt. The endpoint owns this copy for the CLI path;
-`apps/desktop/views/board-start-work-prompt-parity.test.ts` asserts both templates
-stay line-identical so the Rust and TypeScript prompts cannot drift apart
-silently.
+CDXC:ProjectBoard 2026-09-30 SEE-ALSO:
+The canonical bead work prompt. The native Kanban's Start work sends the same text
+(`agent_work_prompt` in apps/desktop/src/app/native_kanban/text.rs), so the two
+templates must stay line-identical. Supersedes the 2026-08-07 parity with the React
+board's `buildAgentWorkPrompt`, deleted with that page.
 */
 /// Render the canonical Project Board worker prompt.
 pub(crate) fn build_board_bead_work_prompt(
@@ -652,7 +659,7 @@ fn select_link_store_projects(
     store_projects
 }
 
-/// Trailing-suffix bead match key from packages/shared/bead-conversation-links.ts:
+/// Trailing-suffix bead match key, as in packages/gx-core/src/session_create/board_links.rs:
 /// Beads prefix renames rewrite `zmux-95421485` to `ghostex-95421485`, so
 /// links match on the suffix after the last `-`.
 fn bead_link_match_key(bead_id: &str) -> String {
@@ -717,7 +724,7 @@ fn read_active_bead_links(store_projects: &[Value], bead_id: &str) -> Vec<Linked
     references
 }
 
-/// Session-owner resolution order from packages/shared/bead-conversation-links.ts:
+/// Session-owner resolution order, as in packages/gx-core/src/session_create/board_links.rs:
 /// a `combined-session:` scoped id, then the explicit `sessionProjectId`
 /// written since PR #87, then the legacy zmx persistence name, then the
 /// storing row as the last resort.

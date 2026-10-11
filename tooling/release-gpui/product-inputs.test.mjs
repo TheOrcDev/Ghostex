@@ -221,7 +221,7 @@ describe('release product input map', () => {
     });
     expect(componentPlatformRequirements('windows-arm64')).toEqual({
       cef: ['windows-arm64'],
-      'code-server': ['linux-arm64', 'windows-arm64'],
+      'code-server': ['linux-arm64', 'windows-arm64', 'windows-native-arm64'],
     });
     expect(componentPlatformRequirements('linux-deb-x64')).toEqual({
       cef: ['linux-x64'],
@@ -280,7 +280,7 @@ describe('pinned toolchain values track the workflows', () => {
    * job instead of a test.
    */
   test('the tailcat bridge Go and gomobile pins match the workflows and its go.mod', () => {
-    for (const name of ['release-gpui-android.yml', 'release-build-android.yml']) {
+    for (const name of ['release-gpui-android.yml']) {
       const android = workflow(name);
       expect(android).toContain(`go-version: '${TOOLCHAIN.tailcatBridgeGo}'`);
       expect(android).toContain(`GOMOBILE_PIN: ${TOOLCHAIN.tailcatBridgeGomobile}`);

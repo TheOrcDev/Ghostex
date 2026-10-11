@@ -27,8 +27,8 @@ static void GhostexGpuiForwardNavigationEvent(id self, SEL selector,
 }
 
 /**
- * CDXC:Navigation 2026-09-08 DECISION:
- * User: mouse 4/5 and macOS back/forward gestures in browser tabs, sessions, and panes should act like the titlebar's previous/next buttons.
+ * CDXC:Navigation 2026-10-01 DECISION:
+ * User: mouse 4/5 and macOS back/forward gestures in sessions and panes act like the titlebar's previous/next buttons, but a focused Browser pane walks its own page history (navigate_focused_browser_history in navigation_history/mod.rs). Supersedes the 2026-09-08 rule that browser tabs walked the titlebar trail too.
  * Handle the events on the existing native views so CEF cannot separately navigate its page history for the same press.
  */
 static void GhostexGpuiNavigationOtherMouseDown(id self, SEL selector,

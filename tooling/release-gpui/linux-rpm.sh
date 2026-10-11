@@ -37,6 +37,7 @@ URL: https://ghostex.app
 Source0: ghostex-$VERSION.tar.gz
 BuildArch: x86_64
 Requires: alsa-lib, atk, cairo, cups-libs, dbus-libs, expat, fontconfig, gtk3, libX11, libXcomposite, libXdamage, libXext, libXfixes, libXrandr, libdrm, libxcb, mesa-libgbm, nspr, nss, pango
+Requires: /usr/bin/ffmpeg, /usr/bin/ffprobe
 Recommends: wmctrl
 
 %description

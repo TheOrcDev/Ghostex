@@ -1,0 +1,346 @@
+//! SpaceO (github.com/ParthJadhav/SpaceO) for Settings > Integrations: whether this Mac can run
+//! it, where `spaceo` is, its installed and latest versions, and the Accessibility and Screen
+//! Recording grants its daemon reports. Every probe is read-only.
+
+use std::{
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+use crate::app::helpers::*;
+
+const SPACEO_LATEST_RELEASE_URL: &str = "https://github.com/ParthJadhav/SpaceO/releases/latest";
+/// How long a successful latest-release answer is reused, like cua-driver's own update cache.
+const LATEST_VERSION_TTL: Duration = Duration::from_secs(20 * 60 * 60);
+
+static LATEST_VERSION: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+/// SpaceO ships only for Apple Silicon Macs on macOS 14 or later; Settings shows it nowhere else.
+pub(crate) fn gpui_spaceo_supported() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        {
+            // `hw.optional.arm64` stays 1 under Rosetta, where the build's own arch would say x86_64.
+            let apple_silicon = gpui_sysctl_int("hw.optional.arm64") == Some(1);
+            let major = gpui_sysctl_text("kern.osproductversion")
+                .and_then(|version| version.split('.').next()?.parse::<u32>().ok());
+            apple_silicon && major.is_some_and(|major| major >= 14)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn gpui_sysctl_text(name: &str) -> Option<String> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let mut size: libc::size_t = 0;
+    // SAFETY: a null buffer asks sysctl for the value's size only.
+    if unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    let mut buffer = vec![0u8; size];
+    // SAFETY: `buffer` holds `size` writable bytes, and sysctl writes at most that many.
+    if unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    buffer.truncate(size);
+    let text = String::from_utf8_lossy(&buffer);
+    Some(text.trim_end_matches('\0').trim().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn gpui_sysctl_int(name: &str) -> Option<i32> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let mut value: i32 = 0;
+    let mut size = std::mem::size_of::<i32>() as libc::size_t;
+    // SAFETY: `value` is a writable i32 and `size` is its exact size.
+    let status = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            (&mut value as *mut i32).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (status == 0).then_some(value)
+}
+
+/// `spaceo` on PATH, else where SpaceO's installer puts it (the app's PATH may not list it).
+pub(crate) fn gpui_spaceo_executable_path() -> Option<PathBuf> {
+    if !gpui_spaceo_supported() {
+        return None;
+    }
+    if let Some(path) = gpui_which_command("spaceo") {
+        return Some(path);
+    }
+    let installed = gpui_home_dir().join(".local/bin/spaceo");
+    gpui_is_executable_file(&installed).then_some(installed)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GpuiSpaceoStatus {
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) version: Option<String>,
+    pub(crate) latest_version: Option<String>,
+    pub(crate) update_available: Option<bool>,
+    pub(crate) daemon_running: bool,
+    /// The app macOS attributes the daemon's grants to, as the daemon reports it.
+    pub(crate) permission_app: Option<String>,
+    pub(crate) accessibility_granted: Option<bool>,
+    pub(crate) screen_recording_granted: Option<bool>,
+    pub(crate) permission_detail: String,
+}
+
+/// `fresh` skips the cached latest-release answer; Settings' "check again" button asks for it.
+pub(crate) fn gpui_spaceo_status(fresh: bool) -> GpuiSpaceoStatus {
+    let Some(path) = gpui_spaceo_executable_path() else {
+        return GpuiSpaceoStatus {
+            permission_detail: "SpaceO is not installed.".to_string(),
+            ..GpuiSpaceoStatus::default()
+        };
+    };
+    let version = gpui_spaceo_version(&path);
+    let latest_version = gpui_spaceo_latest_version(fresh);
+    let update_available = match (version.as_deref(), latest_version.as_deref()) {
+        (Some(current), Some(latest)) => {
+            Some(gpui_compare_release_versions(latest, current) == std::cmp::Ordering::Greater)
+        }
+        _ => None,
+    };
+    let daemon = gpui_spaceo_daemon_runtime(&path);
+    let field = |key: &str| daemon.as_ref().and_then(|daemon| daemon.get(key));
+    let accessibility_granted = field("accessibilityGranted").and_then(serde_json::Value::as_bool);
+    let screen_recording_granted =
+        field("screenRecordingGranted").and_then(serde_json::Value::as_bool);
+    let permission_app = field("responsibleProcess")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|app| !app.is_empty())
+        .map(str::to_string);
+    GpuiSpaceoStatus {
+        permission_detail: gpui_spaceo_permission_detail(
+            daemon.is_some(),
+            accessibility_granted,
+            screen_recording_granted,
+        ),
+        path: Some(path),
+        version,
+        latest_version,
+        update_available,
+        daemon_running: daemon.is_some(),
+        permission_app,
+        accessibility_granted,
+        screen_recording_granted,
+    }
+}
+
+fn gpui_spaceo_version(path: &Path) -> Option<String> {
+    let output = gpui_run_command_with_captured_output_timeout(
+        path,
+        &["version", "--json"],
+        Duration::from_secs(3),
+        8 * 1024,
+    )
+    .ok()
+    .filter(|output| output.success)?;
+    gpui_spaceo_json_object(&output.stdout)
+        .and_then(|payload| {
+            payload
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| gpui_cua_driver_version_from_text(&output.stdout))
+}
+
+/// The tag GitHub's latest-release page redirects to, the way SpaceO's own installer finds it.
+fn gpui_spaceo_latest_version(fresh: bool) -> Option<String> {
+    if !fresh {
+        if let Some((checked_at, version)) = LATEST_VERSION.lock().ok()?.clone() {
+            if checked_at.elapsed() < LATEST_VERSION_TTL {
+                return Some(version);
+            }
+        }
+    }
+    let output = gpui_run_command_with_captured_output_timeout(
+        Path::new("/usr/bin/curl"),
+        &[
+            "-fsSL",
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "15",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{url_effective}",
+            SPACEO_LATEST_RELEASE_URL,
+        ],
+        Duration::from_secs(20),
+        4 * 1024,
+    )
+    .ok()
+    .filter(|output| output.success)?;
+    let tag = output.stdout.trim().rsplit('/').next()?.strip_prefix('v')?;
+    let valid = tag.split('.').count() == 3
+        && tag
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    if !valid {
+        return None;
+    }
+    if let Ok(mut latest) = LATEST_VERSION.lock() {
+        *latest = Some((Instant::now(), tag.to_string()));
+    }
+    Some(tag.to_string())
+}
+
+/// Numeric `MAJOR.MINOR.PATCH` comparison; a part that is not a number counts as 0.
+fn gpui_compare_release_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let parts = |version: &str| -> Vec<u64> {
+        version
+            .split(['.', '-', '+'])
+            .take(3)
+            .map(|part| part.parse().unwrap_or(0))
+            .collect()
+    };
+    parts(left).cmp(&parts(right))
+}
+
+/// The running daemon's runtime report (`daemon` in `spaceo daemon wait --json`): a socket ping
+/// that changes nothing and never prompts. `None` when no daemon answers.
+fn gpui_spaceo_daemon_runtime(path: &Path) -> Option<serde_json::Value> {
+    let output = gpui_run_command_with_captured_output_timeout(
+        path,
+        &["daemon", "wait", "--timeout", "1", "--json"],
+        Duration::from_secs(4),
+        64 * 1024,
+    )
+    .ok()
+    .filter(|output| output.success)?;
+    let payload = gpui_spaceo_json_object(&output.stdout)?;
+    if payload.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return None;
+    }
+    payload
+        .get("daemon")
+        .filter(|daemon| daemon.is_object())
+        .cloned()
+}
+
+fn gpui_spaceo_json_object(stdout: &str) -> Option<serde_json::Value> {
+    let start = stdout.find('{')?;
+    let end = stdout.rfind('}')?;
+    (start <= end)
+        .then(|| serde_json::from_str::<serde_json::Value>(&stdout[start..=end]).ok())
+        .flatten()
+}
+
+fn gpui_spaceo_permission_detail(
+    daemon_running: bool,
+    accessibility_granted: Option<bool>,
+    screen_recording_granted: Option<bool>,
+) -> String {
+    if !daemon_running {
+        return "SpaceO's background service is not running, so its permissions can't be checked. Reinstall SpaceO to start it.".to_string();
+    }
+    match (accessibility_granted, screen_recording_granted) {
+        (Some(true), Some(true)) => {
+            "SpaceO reports Accessibility and Screen Recording permissions are granted.".to_string()
+        }
+        (Some(false), Some(false)) => "SpaceO permissions need attention.".to_string(),
+        (Some(false), _) => "SpaceO Accessibility permission needs attention.".to_string(),
+        (_, Some(false)) => "SpaceO Screen Recording permission needs attention.".to_string(),
+        _ => "SpaceO's background service did not report its permissions.".to_string(),
+    }
+}
+
+/// The SpaceO fields of the `ghostexCliStatus` payload (`SidebarGhostexCliStatusMessage`).
+pub(crate) fn gpui_spaceo_status_fields(
+    status: &GpuiSpaceoStatus,
+    skill_path: Option<&str>,
+) -> serde_json::Value {
+    if !gpui_spaceo_supported() {
+        return serde_json::json!({ "spaceoSupported": false });
+    }
+    serde_json::json!({
+        "spaceoSupported": true,
+        "spaceoInstalled": status.path.is_some(),
+        "spaceoPath": status.path.as_ref().map(|path| gpui_path_string(path)),
+        "spaceoVersion": status.version,
+        "spaceoLatestVersion": status.latest_version,
+        "spaceoUpdateAvailable": status.update_available,
+        "spaceoInstallCommand": GPUI_SPACEO_INSTALL_COMMAND,
+        "spaceoDaemonRunning": status.daemon_running,
+        "spaceoPermissionApp": status.permission_app,
+        "spaceoAccessibilityPermissionGranted": status.accessibility_granted,
+        "spaceoScreenRecordingPermissionGranted": status.screen_recording_granted,
+        "spaceoPermissionDetail": status.permission_detail,
+        "spaceoSkillInstalled": skill_path.is_some(),
+        "spaceoSkillPath": skill_path,
+    })
+}
+
+/// Toast for Settings' explicit "check for SpaceO updates" click, read from the refreshed status.
+pub(crate) fn gpui_spaceo_update_check_toast(
+    status: &serde_json::Value,
+) -> (&'static str, &'static str, String) {
+    let text = |key: &str| status.get(key).and_then(serde_json::Value::as_str);
+    let installed = text("spaceoVersion");
+    let latest = text("spaceoLatestVersion");
+    match status
+        .get("spaceoUpdateAvailable")
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => (
+            "info",
+            "SpaceO update available",
+            match (installed, latest) {
+                (Some(installed), Some(latest)) => {
+                    format!("Version {latest} is available; {installed} is installed.")
+                }
+                _ => "A newer SpaceO release is available.".to_string(),
+            },
+        ),
+        Some(false) => (
+            "success",
+            "SpaceO is up to date",
+            match installed.or(latest) {
+                Some(version) => format!("Version {version} is the latest release."),
+                None => "You have the latest SpaceO release.".to_string(),
+            },
+        ),
+        None => (
+            "warning",
+            "Couldn't check for SpaceO updates",
+            "The update check did not answer. Check your connection and try again.".to_string(),
+        ),
+    }
+}

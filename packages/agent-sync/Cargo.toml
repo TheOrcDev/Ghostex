@@ -1,0 +1,23 @@
+# CDXC:AgentSync 2026-09-16 WHY:
+# The desktop Agents Hub tab and the `ghostex agent-sync` CLI must produce the
+# same scan, the same plan, and the same filesystem operations, so the logic
+# lives in one crate that both apps/desktop and server link, following the
+# packages/find pattern. It has no app dependencies so either binary can embed it.
+[package]
+name = "ghostex-agent-sync"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ghostex_agent_sync"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[[bin]]
+name = "ghostex-agent-sync"
+path = "src/bin/ghostex-agent-sync.rs"

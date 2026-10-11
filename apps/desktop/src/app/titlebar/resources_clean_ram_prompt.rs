@@ -1,13 +1,10 @@
 //! The prompt the Resources panel's Clean RAM button copies to the clipboard.
 //!
-//! CDXC:Resources 2026-09-04 DECISION:
-//! User: Clean RAM copies "a prompt to diagnose the ram use for the user",
-//! the same investigation an agent ran by hand on 2026-09-04: break the
-//! panel's total down by process, separate agents from the MCP helpers they
-//! spawn, say which idle sessions Sleep Inactive would free, and rank the
-//! fixes. The prompt carries the panel's own rows so the agent starts from
-//! what the user saw, and points at `ghostex resources --json` for fresh
-//! per-pid data.
+//! CDXC:Resources 2026-09-16 DECISION:
+//! User: keep Clean RAM, and on click "show a toast telling the user that they need to paste this into an agent session to reduce ram use".
+//! The copied prompt is still the 2026-09-04 diagnosis text: break the panel's total down by process, separate agents from the MCP helpers they spawn, say which idle sessions Sleep Inactive would free, and rank the fixes.
+//! The prompt carries the panel's own rows so the agent starts from what the user saw, and points at `ghostex resources --json` for fresh per-pid data.
+//! SEE-ALSO: apps/desktop/src/app/window/titlebar_panels/resources.rs.
 
 use crate::app::model::*;
 use crate::app::window::titlebar_panels::{

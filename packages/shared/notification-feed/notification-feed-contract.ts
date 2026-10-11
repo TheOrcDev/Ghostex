@@ -12,11 +12,11 @@ export const NOTIFICATION_FEED_CREATE_ENDPOINT = '/api/createNotification';
 /** Announced over the events socket after every feed change; clients refetch the feed. */
 export const NOTIFICATION_FEED_CHANGED_EVENT_TYPE = 'notificationFeedChanged';
 
-/** Newest rows the read endpoint returns; older rows stay stored until retention prunes them. */
-export const NOTIFICATION_FEED_READ_LIMIT = 200;
+/** Newest rows the read endpoint returns. */
+export const NOTIFICATION_FEED_READ_LIMIT = 40;
 
-/** Rows kept per daemon before the oldest read rows are pruned. */
-export const NOTIFICATION_FEED_RETENTION_LIMIT = 500;
+/** Rows kept per daemon; older rows are deleted, read or unread. */
+export const NOTIFICATION_FEED_RETENTION_LIMIT = 40;
 
 /** Longest body stored and shown, in characters. */
 export const NOTIFICATION_FEED_BODY_MAX_CHARS = 280;

@@ -81,7 +81,18 @@ impl Palette {
                     chrome_color(0xffffff, 0x181818).opacity(0.035).into(),
                 )
                 .inset(),
-                shadow(0.0, 10.0, 28.0, rgb(0).opacity(0.28).into()),
+                shadow(
+                    0.0,
+                    10.0,
+                    28.0,
+                    rgb(0)
+                        .opacity(if chrome_uses_light_appearance() {
+                            0.12
+                        } else {
+                            0.28
+                        })
+                        .into(),
+                ),
             ])
     }
 

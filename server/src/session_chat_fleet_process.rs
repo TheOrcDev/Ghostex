@@ -35,7 +35,12 @@ pub(crate) fn current_process_with_files(
         .get(name)
         .filter(|identity| identity.agent_id.as_deref() == Some(agent))
         .ok_or_else(|| anyhow::anyhow!("Agent process owner is unavailable"))?;
-    if let Some(id) = identity.agent_session_id.as_deref() {
+    // CDXC:SessionIdentity 2026-09-21 WHY: Claude's process id comes from launch argv, which `/clear`, `/resume` and a self-fork leave stale while hooks report the live conversation; comparing it hid the Subagents card for every such session. Codex's id is read from its open rollout, so it stays a valid ownership check.
+    if let Some(id) = identity
+        .agent_session_id
+        .as_deref()
+        .filter(|_| agent != "claude")
+    {
         anyhow::ensure!(
             session
                 .pointer("/runtimeSettings/agentSessionId")
@@ -64,20 +69,7 @@ pub(crate) fn current_process_with_files(
             open_file_paths: identity.open_file_paths.clone(),
         });
     }
-    let result = crate::zmx::run_zmx_probe_script(
-        format!("LC_ALL=C TZ=UTC ps -p {pid} -o lstart="),
-        crate::zmx::ZmxCommandOptions {
-            timeout_ms: Some(2_000),
-            stdout_limit_bytes: Some(1024),
-            ..Default::default()
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("Cannot read agent process start: {e}"))?;
-    anyhow::ensure!(result.exit_code == 0, "Agent process start is unavailable");
-    let start =
-        chrono::NaiveDateTime::parse_from_str(result.stdout.trim(), "%a %b %e %H:%M:%S %Y")?
-            .and_utc()
-            .timestamp_millis();
+    let start = process_started_at(pid)?;
     if let Ok(mut cache) = starts.lock() {
         if cache.len() >= 256 {
             cache.clear();
@@ -89,4 +81,34 @@ pub(crate) fn current_process_with_files(
         started_at: start,
         open_file_paths: identity.open_file_paths.clone(),
     })
+}
+
+/// CDXC:SessionStatus 2026-09-28 WHY:
+/// Windows reads the agent's start time from the process itself. The `ps -o lstart=` probe went through PowerShell there and never succeeded, so the Subagents card and the Codex question run boundary were always unavailable and every check started another PowerShell.
+#[cfg(windows)]
+fn process_started_at(pid: i64) -> anyhow::Result<i64> {
+    let created = crate::platform::process::process_creation_filetime(pid)
+        .ok_or_else(|| anyhow::anyhow!("Agent process start is unavailable"))?;
+    Ok(i64::try_from(
+        crate::session_chat::windows_filetime_to_unix_ms(created),
+    )?)
+}
+
+#[cfg(not(windows))]
+fn process_started_at(pid: i64) -> anyhow::Result<i64> {
+    let result = crate::zmx::run_zmx_probe_script(
+        format!("LC_ALL=C TZ=UTC ps -p {pid} -o lstart="),
+        crate::zmx::ZmxCommandOptions {
+            timeout_ms: Some(2_000),
+            stdout_limit_bytes: Some(1024),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| anyhow::anyhow!("Cannot read agent process start: {e}"))?;
+    anyhow::ensure!(result.exit_code == 0, "Agent process start is unavailable");
+    Ok(
+        chrono::NaiveDateTime::parse_from_str(result.stdout.trim(), "%a %b %e %H:%M:%S %Y")?
+            .and_utc()
+            .timestamp_millis(),
+    )
 }

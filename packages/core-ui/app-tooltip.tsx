@@ -1,5 +1,6 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 import { useEffect, useState, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { useConfiguredSidebarTooltipDelayMs } from './tooltip-delay';
 
 export const SIDEBAR_TOOLTIP_DISMISS_EVENT = 'ghostex-sidebar-tooltip-dismiss';
 export const SIDEBAR_TOOLTIP_SUPPRESSION_CHANGED_EVENT = 'ghostex-sidebar-tooltip-suppression-changed';
@@ -9,7 +10,7 @@ export const SIDEBAR_TOOLTIP_SUPPRESSION_CHANGED_EVENT = 'ghostex-sidebar-toolti
  * User: no tooltip may show while a sidebar context menu is open; one used to open on top of the menu.
  * Suppression is keyed by reason so a drag and an open menu each hold it independently and it lifts only when the last reason clears.
  * It stays a temporary block for these two flows only; native pointer-leave keeps dismissing through the event so the next hover can open a tooltip.
- * SEE-ALSO: packages/core-ui/sidebar-context-menu-portal.tsx, packages/core-ui/sidebar-app/drag-handlers.ts, packages/core-ui/styles/group-panels.css.
+ * SEE-ALSO: packages/core-ui/sidebar-context-menu-portal.tsx (deleted 2026-10-01), packages/core-ui/styles/group-panels.css.
  */
 export type SidebarTooltipSuppressionReason = 'drag' | 'contextMenu';
 
@@ -127,6 +128,7 @@ export function AppTooltip({
   sideOffset = 8,
   ...tooltipProps
 }: AppTooltipProps) {
+  const sidebarDelayMs = useConfiguredSidebarTooltipDelayMs();
   const { defaultOpen, onOpenChange, open: controlledOpen, ...tooltipRootProps } = tooltipProps;
   const isControlled = controlledOpen !== undefined;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(defaultOpen));
@@ -180,9 +182,9 @@ export function AppTooltip({
    * titlebar wrapper can adjust placement through Base UI's positioner instead
    * of CSS transforms.
    */
-  return (
+  const tooltip = (
     <Tooltip {...tooltipRootProps} onOpenChange={setOpen} open={open}>
-      <TooltipTrigger delay={delay} render={children} />
+      <TooltipTrigger delay={sidebarDelayMs ?? delay} render={children} />
       <TooltipContent
         align={align}
         alignOffset={alignOffset}
@@ -196,6 +198,13 @@ export function AppTooltip({
         {content}
       </TooltipContent>
     </Tooltip>
+  );
+  return sidebarDelayMs === undefined ? (
+    tooltip
+  ) : (
+    <TooltipProvider delay={sidebarDelayMs} timeout={0}>
+      {tooltip}
+    </TooltipProvider>
   );
 }
 

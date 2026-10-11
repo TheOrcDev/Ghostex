@@ -25,7 +25,7 @@ if (!shouldRun) {
       'This verifier mutates the Ghostex app state by adding temporary projects and a verifier agent.',
       'Start Ghostex first, then rerun with GHOSTEX_VERIFY_AUTOMATIONS=1 or --yes.',
       'Example:',
-      '  bun run start',
+      '  cargo xtask start',
       '  GHOSTEX_VERIFY_AUTOMATIONS=1 node tooling/verify-automations-runtime.mjs',
     ].join('\n')
   );
@@ -96,7 +96,7 @@ async function assertDevBridgeReady() {
     await cli(['state', '--timeout', '3000']);
   } catch (error) {
     throw new Error(
-      `Ghostex bridge is not reachable. Start it with "bun run start" before running this verifier.\n${error.message}`
+      `Ghostex bridge is not reachable. Start it with "cargo xtask start" before running this verifier.\n${error.message}`
     );
   }
 }

@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{Map, Value};
 
 use crate::session_chat::*;
@@ -48,11 +49,70 @@ fn claude_content_is_reasoning_only(content: Option<&Value>) -> bool {
     };
     !items.is_empty()
         && items.iter().all(|item| {
-            item.as_object()
-                .and_then(|record| record.get("type"))
-                .and_then(Value::as_str)
-                == Some("thinking")
+            item.as_object().is_some_and(|record| {
+                record.get("type").and_then(Value::as_str) == Some("thinking")
+                    && !claude_thinking_is_narration(record)
+            })
         })
+}
+
+/// CDXC:SessionChat 2026-09-26 WHY:
+/// Claude Code (2.1.281 with Opus 5.5) saves the prose it writes between tool calls as a `thinking` block whose signature the API tags `narration`, and its terminal paints that block as an ordinary reply. Decoded as reasoning, the row never retired the reply chat had already streamed off the terminal (`terminal_stream_retired` in gx-chat-core matches assistant and system rows only), so the same paragraph showed twice: a collapsed thinking row and a reply. The tag is read the way Claude Code's own classifier reads it (signature envelope field 2, then 1, then 8), and a narration block without text stays ordinary thinking, as Claude Code documents.
+fn claude_thinking_is_narration(record: &Map<String, Value>) -> bool {
+    if extract_string(record.get("thinking")).is_none() {
+        return false;
+    }
+    let Some(signature) = record.get("signature").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(envelope) = BASE64_STANDARD.decode(signature) else {
+        return false;
+    };
+    protobuf_bytes_field(&envelope, 2)
+        .and_then(|inner| protobuf_bytes_field(inner, 1))
+        .and_then(|inner| protobuf_bytes_field(inner, 8))
+        == Some(b"narration".as_slice())
+}
+
+/// The last length-delimited value of `field` in a protobuf message; `None` when the field is
+/// absent or the message does not parse.
+fn protobuf_bytes_field(message: &[u8], field: u64) -> Option<&[u8]> {
+    let mut found = None;
+    let mut rest = message;
+    while !rest.is_empty() {
+        let key;
+        (key, rest) = protobuf_varint(rest)?;
+        match key & 7 {
+            0 => (_, rest) = protobuf_varint(rest)?,
+            1 => rest = rest.get(8..)?,
+            2 => {
+                let length;
+                (length, rest) = protobuf_varint(rest)?;
+                let length = usize::try_from(length)
+                    .ok()
+                    .filter(|length| *length <= rest.len())?;
+                let (value, tail) = rest.split_at(length);
+                if key >> 3 == field {
+                    found = Some(value);
+                }
+                rest = tail;
+            }
+            5 => rest = rest.get(4..)?,
+            _ => return None,
+        }
+    }
+    found
+}
+
+fn protobuf_varint(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    let mut value = 0u64;
+    for (index, byte) in bytes.iter().enumerate().take(10) {
+        value |= u64::from(byte & 0x7f) << (7 * index);
+        if byte & 0x80 == 0 {
+            return Some((value, &bytes[index + 1..]));
+        }
+    }
+    None
 }
 
 /*
@@ -77,6 +137,7 @@ pub(crate) fn claude_content_block(record: &Map<String, Value>) -> Option<Sessio
         Some("tool_use") => Some(SessionChatBlock::ToolCall {
             name: extract_string(record.get("name")).unwrap_or_else(|| "tool".to_string()),
             input: record.get("input").cloned().unwrap_or(Value::Null),
+            call_id: extract_string(record.get("id")),
         }),
         Some("tool_result") => Some(SessionChatBlock::ToolResult {
             output: tool_result_output(record.get("content")),
@@ -85,6 +146,7 @@ pub(crate) fn claude_content_block(record: &Map<String, Value>) -> Option<Sessio
             } else {
                 None
             },
+            call_id: extract_string(record.get("tool_use_id")),
         }),
         Some("image" | "input_image") => image_ref_block(record),
         _ => None,
@@ -173,6 +235,7 @@ pub(crate) fn claude_transcript_lineage_record(
             return None;
         }
         let leaf_marker = match extract_string(record.get("leafUuid")) {
+            Some(leaf) if leaf == CLAUDE_REWIND_SETTLED_LEAF_SENTINEL => return None,
             Some(leaf) => TranscriptLeafMarker::Row(leaf),
             None => TranscriptLeafMarker::Empty,
         };
@@ -211,7 +274,25 @@ finally submitted). Whitespace folding is the narrowest normalization that
 makes them agree.
 */
 fn queued_prompt_key(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let text = strip_claude_pasted_content_envelopes(text);
+    cross_session_queue_key(&text)
+        .unwrap_or(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// CDXC:SessionChat 2026-09-25 WHY:
+/// Claude writes a peer message's `hop-chain` attribute on its enqueue row only; the removal row and the delivered row drop it. Keyed by its opening tag, the queued copy never matched its release and stayed on screen next to the delivered message, so a `<cross-session-message>` envelope is keyed by its body.
+fn cross_session_queue_key(text: &str) -> Option<String> {
+    CLAUDE_AGENT_ENVELOPES.iter().find_map(|(open, close)| {
+        let rest = text.trim().strip_prefix(open)?;
+        if !rest.starts_with([' ', '>']) {
+            return None;
+        }
+        let body = rest.split_once('>')?.1.strip_suffix(close)?;
+        Some(format!("{open}>{body}"))
+    })
 }
 
 /// CDXC:SessionChat 2026-09-08 DECISION:
@@ -221,6 +302,9 @@ fn queued_prompt_key(text: &str) -> String {
 /// The delivered `user` row names the actual content; `queued_command` attachments already have a keyed `remove` and must not release a second identical entry.
 /// Match each delivery, not task ids globally, because a resumed agent can finish more than once.
 fn claude_delivered_queue_keys(record: &Map<String, Value>) -> Vec<String> {
+    if let Some(command) = claude_bash_input_command(record) {
+        return vec![queued_prompt_key(&command)];
+    }
     if record.get("type").and_then(Value::as_str) != Some("user")
         || (record.get("promptSource").and_then(Value::as_str) != Some("queued")
             && record.get("queueSkipAttachments") != Some(&Value::Bool(true)))
@@ -228,7 +312,14 @@ fn claude_delivered_queue_keys(record: &Map<String, Value>) -> Vec<String> {
         return Vec::new();
     }
     let content = as_record(record.get("message")).and_then(|message| message.get("content"));
-    claude_content_blocks(content)
+    let blocks = claude_content_blocks(content);
+    // A peer message was queued as its bare envelope; the delivered row wraps it in Claude's preamble.
+    if record.get("isMeta") == Some(&Value::Bool(true)) {
+        if let Some(envelope) = claude_cross_session_envelope(&blocks) {
+            return vec![queued_prompt_key(&envelope)];
+        }
+    }
+    blocks
         .into_iter()
         .filter_map(|block| match block {
             SessionChatBlock::Text { text } => {
@@ -238,6 +329,32 @@ fn claude_delivered_queue_keys(record: &Map<String, Value>) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// CDXC:SessionChat 2026-10-07 WHY:
+/// A `!` line sent while Claude is busy waits in its queue as `enqueue` with the command without its `!`, and is released by a content-free `dequeue` and delivered as a plain `<bash-input>cmd</bash-input>` row with no `promptSource`, so the queued row matched no release and stayed on screen as a "queued" bubble after the command had run. The `<bash-input>` row names the command, which is the queue entry's key.
+fn claude_bash_input_command(record: &Map<String, Value>) -> Option<String> {
+    if record.get("type").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let content = as_record(record.get("message")).and_then(|message| message.get("content"));
+    let text = claude_content_blocks(content)
+        .into_iter()
+        .filter_map(|block| match block {
+            SessionChatBlock::Text { text } => Some(text),
+            _ => None,
+        })
+        .collect::<String>();
+    let command = text
+        .trim()
+        .strip_prefix("<bash-input>")?
+        .strip_suffix("</bash-input>")?;
+    let command = command
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let command = command.trim();
+    (!command.is_empty()).then(|| command.to_string())
 }
 
 fn claude_queue_operation(record: &Map<String, Value>) -> Option<TranscriptQueueOp> {
@@ -263,6 +380,8 @@ fn claude_interrupted_message_id(record: &Map<String, Value>) -> Option<String> 
 
 const CLAUDE_QUEUE_RECORD_TYPE: &str = "queue-operation";
 const CLAUDE_LEAF_MARKER_RECORD_TYPE: &str = "last-prompt";
+/// CDXC:SessionChat 2026-10-09 WHY: After Escape rewinds an unanswered prompt, Claude Code writes an explicit `last-prompt` naming the nil UUID right AFTER the next turn's first rows (its `rowsQueued` bookkeeping): it names no row and rewinds nothing, and the turn carries on from those rows. Read as a leaf marker it was a rewind to a row that never exists: the live follower answered it with a fresh snapshot while it was still the newest line, the cutoff dropped every older row, and the chat showed only the new turn from then on (twice on 2026-10-09). So it is bookkeeping, like a non-explicit row.
+const CLAUDE_REWIND_SETTLED_LEAF_SENTINEL: &str = "00000000-0000-0000-0000-000000000000";
 const CLAUDE_ATTACHMENT_RECORD_TYPE: &str = "attachment";
 const CLAUDE_QUEUED_COMMAND_ATTACHMENT: &str = "queued_command";
 
@@ -292,7 +411,7 @@ fn decode_claude_queued_command(
     if attachment.get("type").and_then(Value::as_str) != Some(CLAUDE_QUEUED_COMMAND_ATTACHMENT) {
         return None;
     }
-    let prompt = extract_string(attachment.get("prompt"))?;
+    let prompt = strip_claude_pasted_content_envelopes(&extract_string(attachment.get("prompt"))?);
     if prompt.trim().is_empty() {
         return None;
     }
@@ -320,7 +439,7 @@ fn decode_claude_queued_prompt(
     if record.get("operation").and_then(Value::as_str) != Some("enqueue") {
         return None;
     }
-    let content = extract_string(record.get("content"))?;
+    let content = strip_claude_pasted_content_envelopes(&extract_string(record.get("content"))?);
     if content.trim().is_empty() {
         return None;
     }
@@ -335,6 +454,36 @@ fn decode_claude_queued_prompt(
         async_questions: None,
         queued: true,
     })
+}
+
+/// The envelopes Claude delivers another agent's message in: a peer session's, and one of the session's own background agents'.
+const CLAUDE_AGENT_ENVELOPES: [(&str, &str); 2] = [
+    ("<cross-session-message", "</cross-session-message>"),
+    ("<agent-message", "</agent-message>"),
+];
+
+/// CDXC:SessionChat 2026-09-25 WHY:
+/// A message another Claude session sent renders as chat's message-from-another-agent card. When it reaches an idle session Claude writes a meta user row: a one-line preamble ("Another Claude session sent a message:"), the `<cross-session-message>` envelope, then trust instructions meant for the model. The meta filter dropped the whole row, so chat never showed the message. Only the envelope is kept, the same text a mid-turn delivery's `queued_command` carries, so both deliveries render alike. Anything longer than one line before the envelope (a compaction summary quoting one) is not a delivery.
+/// A background agent's `<agent-message>` arrives the same way and is kept the same way (2026-09-30).
+/// SEE-ALSO: packages/gx-chat-core/src/transcript/agent_message.rs parses the envelope into the card.
+fn claude_cross_session_envelope(blocks: &[SessionChatBlock]) -> Option<String> {
+    let text = blocks
+        .iter()
+        .filter_map(|block| match block {
+            SessionChatBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let (start, open, close) = CLAUDE_AGENT_ENVELOPES
+        .iter()
+        .filter_map(|(open, close)| Some((text.find(open)?, *open, *close)))
+        .min_by_key(|(start, _, _)| *start)?;
+    if text[..start].trim().contains('\n') || !text[start + open.len()..].starts_with([' ', '>']) {
+        return None;
+    }
+    let end = text.rfind(close)? + close.len();
+    (end > start).then(|| text[start..end].to_string())
 }
 
 pub fn decode_claude_transcript_line(line: &str, fallback_id: &str) -> Option<SessionChatMessage> {
@@ -399,7 +548,13 @@ pub fn decode_claude_transcript_line(line: &str, fallback_id: &str) -> Option<Se
 
     let message = record.get("message").and_then(Value::as_object);
     let content = message.and_then(|inner| inner.get("content"));
-    let decoded_blocks = claude_content_blocks(content);
+    let mut decoded_blocks = claude_content_blocks(content);
+    if role == "user" {
+        decoded_blocks = decoded_blocks
+            .into_iter()
+            .map(unwrap_claude_pasted_content_block)
+            .collect();
+    }
     if decoded_blocks.is_empty() {
         return None;
     }
@@ -409,7 +564,13 @@ pub fn decode_claude_transcript_line(line: &str, fallback_id: &str) -> Option<Se
         && (record.get("isMeta") == Some(&Value::Bool(true))
             || record.get("isSynthetic") == Some(&Value::Bool(true))
             || record.get("isCompactSummary") == Some(&Value::Bool(true)));
-    let blocks: Vec<SessionChatBlock> = if is_injected_user_turn {
+    let cross_session_envelope = (role == "user"
+        && record.get("isMeta") == Some(&Value::Bool(true)))
+    .then(|| claude_cross_session_envelope(&decoded_blocks))
+    .flatten();
+    let blocks: Vec<SessionChatBlock> = if let Some(envelope) = cross_session_envelope {
+        vec![text_block(envelope)]
+    } else if is_injected_user_turn {
         decoded_blocks
             .into_iter()
             .filter(is_tool_result_block)
@@ -527,7 +688,7 @@ fn leading_tag_name(normalized: &str) -> Option<&str> {
     }
 }
 
-fn is_known_harness_injected_user_turn_text(text: &str) -> bool {
+pub(crate) fn is_known_harness_injected_user_turn_text(text: &str) -> bool {
     let normalized = text.trim().to_lowercase();
     if normalized.is_empty() {
         return false;
@@ -606,6 +767,24 @@ pub fn decode_claude_turn_lifecycle(
     let message = record.get("message").and_then(Value::as_object);
     let timestamp = parse_timestamp(record.get("timestamp"));
 
+    // CDXC:SessionChat 2026-09-16 WHY:
+    // Claude records a plain /compact user turn but no assistant end_turn afterward, leaving queued prompts held forever despite an idle terminal.
+    // The screen marker holds the queue during compaction, and only a manual boundary settles the prior turn; automatic compaction continues the active response.
+    if record.get("type").and_then(Value::as_str) == Some("system")
+        && record.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+        && record
+            .get("compactMetadata")
+            .and_then(|metadata| metadata.get("trigger"))
+            .and_then(Value::as_str)
+            == Some("manual")
+    {
+        return Some(SessionChatTurnLifecycle {
+            state: SessionChatTurnLifecycleState::Completed,
+            turn_id: extract_string(record.get("uuid")).unwrap_or_else(|| fallback_id.to_string()),
+            timestamp,
+        });
+    }
+
     // 1. Interrupt beats everything.
     if let Some(interrupted_message_id) = claude_interrupted_message_id(&record) {
         return Some(SessionChatTurnLifecycle {
@@ -651,11 +830,99 @@ pub fn decode_claude_turn_lifecycle(
     if is_noise_message(&decoded) {
         return None; // harness noise is not a new generation
     }
+    if crate::session_chat_terminal_activity::transcript_message_starts_session_chat_activity(
+        Some("claude"),
+        &decoded,
+    ) {
+        // /compact starts screen-owned work, not an assistant generation, including when Claude declines it because there are not enough messages.
+        return None;
+    }
     Some(SessionChatTurnLifecycle {
         state: SessionChatTurnLifecycleState::Working,
         turn_id: decoded.id,
         timestamp,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code's pasted-content envelope
+// ---------------------------------------------------------------------------
+
+const CLAUDE_PASTED_CONTENT_OPEN: &str = "<pasted_content id=\"";
+const CLAUDE_PASTED_CONTENT_CLOSE: &str = "</pasted_content";
+
+/*
+CDXC:SessionChat 2026-09-20 WHY:
+Chat delivers every multi-line send as a bracketed paste (`build_session_chat_paste_bytes`), and Claude Code records the submitted prompt with each pasted span wrapped in `<pasted_content id="ab12">` … `</pasted_content id="ab12">`, escaping a literal tag spelling inside the body by slipping a backslash in behind the `<`.
+Those tags exist only to tell the model where the clipboard text began: Claude Code's own TUI shows the collapsed `[Pasted text #1 …]` placeholder and never prints them, so a transcript that renders the row verbatim put markup the user never typed into their own chat bubble and left the optimistic echo unmatched against the row it belongs to.
+Unwrap the envelope for user rows only; assistant text is never wrapped.
+*/
+pub(crate) fn strip_claude_pasted_content_envelopes(text: &str) -> String {
+    if !text.contains(CLAUDE_PASTED_CONTENT_OPEN) {
+        return text.to_string();
+    }
+    let mut unwrapped = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut envelopes = 0usize;
+    while let Some(open_at) = rest.find(CLAUDE_PASTED_CONTENT_OPEN) {
+        let after_open = &rest[open_at + CLAUDE_PASTED_CONTENT_OPEN.len()..];
+        let Some(id_end) = after_open.find("\">") else {
+            break;
+        };
+        let id = &after_open[..id_end];
+        let body = &after_open[id_end + "\">".len()..];
+        let Some((pasted, after_close)) = split_claude_pasted_content_body(body, id) else {
+            break;
+        };
+        unwrapped.push_str(&rest[..open_at]);
+        unwrapped.push_str(&unescape_claude_pasted_content(pasted));
+        rest = after_close;
+        envelopes += 1;
+    }
+    if envelopes == 0 {
+        return text.to_string();
+    }
+    unwrapped.push_str(rest);
+    // The envelope carries its own padding newlines around the prompt.
+    unwrapped.trim().to_string()
+}
+
+/// Splits `body` at the close tag that matches `id`, returning the pasted text
+/// and everything after the tag. A body carrying the tag spelling has it
+/// escaped, so the first well-formed close is the real one.
+fn split_claude_pasted_content_body<'a>(body: &'a str, id: &str) -> Option<(&'a str, &'a str)> {
+    let close_with_id = format!(" id=\"{id}\">");
+    let mut searched = 0usize;
+    while let Some(relative) = body[searched..].find(CLAUDE_PASTED_CONTENT_CLOSE) {
+        let close_at = searched + relative;
+        let tail = &body[close_at + CLAUDE_PASTED_CONTENT_CLOSE.len()..];
+        if let Some(after_close) = tail
+            .strip_prefix('>')
+            .or_else(|| tail.strip_prefix(close_with_id.as_str()))
+        {
+            let pasted = &body[..close_at];
+            let pasted = pasted.strip_prefix('\n').unwrap_or(pasted);
+            let pasted = pasted.strip_suffix('\n').unwrap_or(pasted);
+            return Some((pasted, after_close));
+        }
+        searched = close_at + CLAUDE_PASTED_CONTENT_CLOSE.len();
+    }
+    None
+}
+
+/// Claude Code escapes a literal tag spelling inside a pasted body by slipping
+/// a backslash in behind the `<`, so `<\pasted_content` is text the user typed.
+fn unescape_claude_pasted_content(pasted: &str) -> String {
+    pasted
+        .replace("<\\/pasted_content", "</pasted_content")
+        .replace("<\\pasted_content", "<pasted_content")
+}
+
+fn unwrap_claude_pasted_content_block(block: SessionChatBlock) -> SessionChatBlock {
+    match block {
+        SessionChatBlock::Text { text } => text_block(strip_claude_pasted_content_envelopes(&text)),
+        other => other,
+    }
 }
 
 // ---------------------------------------------------------------------------

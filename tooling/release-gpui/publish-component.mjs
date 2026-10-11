@@ -4,6 +4,13 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authenticateComponentChecksumSidecar, validateOnDemandManifestV2 } from './on-demand-manifest.mjs';
+import {
+  APP_RELEASE_GITHUB_REPO,
+  componentReleaseRepos,
+  componentsGithubEnv,
+  componentsGithubRepo,
+  requireComponentsGithubToken,
+} from './components-repo.mjs';
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -138,7 +145,7 @@ export function planComponentRelease({ assets, release }) {
 }
 
 function runGh(args, { allowFailure = false } = {}) {
-  const result = spawnSync('gh', args, { encoding: 'utf8' });
+  const result = spawnSync('gh', args, { encoding: 'utf8', env: componentsGithubEnv() });
   if (result.status !== 0 && !allowFailure) {
     throw new Error(`gh ${args.join(' ')} failed: ${(result.stderr || result.stdout || 'unknown error').trim()}`);
   }
@@ -177,8 +184,12 @@ function reusePublishedAsset({ assetDir, component, componentVersion, platform, 
   return true;
 }
 
+/**
+ * CDXC:Release 2026-09-25 WHY:
+ * Local Windows packaging reads public component metadata; gh release view adds an authenticated GraphQL lookup that can fail even when the release REST endpoint is accessible.
+ */
 export function inspectRelease({ repo, tag }) {
-  const result = runGh(['release', 'view', tag, '--repo', repo, '--json', 'assets'], { allowFailure: true });
+  const result = runGh(['api', `repos/${repo}/releases/tags/${encodeURIComponent(tag)}`], { allowFailure: true });
   if (result.status !== 0) {
     const diagnostic = `${result.stderr ?? ''}\n${result.stdout ?? ''}`.toLowerCase();
     if (diagnostic.includes('release not found') || diagnostic.includes('not found') || diagnostic.includes('404')) {
@@ -188,6 +199,23 @@ export function inspectRelease({ repo, tag }) {
   }
   const payload = JSON.parse(result.stdout);
   return { exists: true, assets: payload.assets ?? [] };
+}
+
+/*
+ * Finds a sealed component's release in the first repository that has it: the
+ * repository the manifest names, then the components repository, then the app
+ * repository where components lived before 2026-09-16. Only verification of
+ * already-published apps needs the legacy fallback; reuse probes for new
+ * builds look in the components repository alone.
+ */
+export function locateComponentRelease({ component, repos = componentReleaseRepos({ component }) }) {
+  let last = { exists: false, assets: [] };
+  for (const repo of repos) {
+    const release = inspectRelease({ repo, tag: component.downloadTag });
+    if (release.exists) return { repo, release };
+    last = release;
+  }
+  return { repo: repos[0], release: last };
 }
 
 function createReleaseIfMissing({ component, componentVersion, repo, tag }) {
@@ -202,6 +230,8 @@ function createReleaseIfMissing({ component, componentVersion, repo, tag }) {
       `${component} ${componentVersion}`,
       '--notes',
       `Ghostex component ${component} ${componentVersion}.`,
+      /* Component tags must never become the repository's "latest" release. */
+      '--latest=false',
     ],
     { allowFailure: true }
   );
@@ -256,12 +286,20 @@ function parseArguments(argv) {
   return options;
 }
 
-export function componentManifestRecord({ assets, checksumSidecars = [], component, componentVersion, downloadTag }) {
+export function componentManifestRecord({
+  assets,
+  checksumSidecars = [],
+  component,
+  componentVersion,
+  downloadTag,
+  githubRepo = componentsGithubRepo(),
+}) {
   const sidecarByPlatform = new Map(checksumSidecars.map((sidecar) => [sidecar.platform, sidecar]));
   return {
     name: component,
     componentVersion,
     downloadTag,
+    githubRepo,
     platforms: Object.fromEntries(
       assets.map((asset) => [
         asset.platform,
@@ -289,7 +327,7 @@ function writeAggregateManifest(outputPath, record) {
   validateOnDemandManifestV2({
     schemaVersion: 2,
     version: 'component-publisher',
-    githubRepo: 'maddada/Ghostex',
+    githubRepo: APP_RELEASE_GITHUB_REPO,
     assets: {},
     components,
   });
@@ -301,7 +339,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const component = requireIdentifier(options.component, 'component');
   const componentVersion = requireIdentifier(options.version, 'version');
-  const repo = options.repo ?? 'maddada/Ghostex';
+  const repo = options.repo ?? componentsGithubRepo();
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('repo must have owner/repository form');
   const tag = options.tag ?? `${component}-${componentVersion}`;
   requireIdentifier(tag, 'tag');
@@ -342,6 +380,15 @@ async function main() {
     ? { createRelease: false, uploads: [], noops: [] }
     : planComponentRelease({ assets: publishedAssets, release });
 
+  /*
+   * In Actions, github.token cannot write to the components repository, so a
+   * publish that would create or upload anything fails here, before touching
+   * GitHub, unless the dedicated token is configured.
+   */
+  if (!options.dryRun && process.env.GITHUB_ACTIONS === 'true' && (plan.createRelease || plan.uploads.length > 0)) {
+    requireComponentsGithubToken();
+  }
+
   if (plan.createRelease) {
     process.stdout.write(`${options.dryRun ? 'DRY-RUN ' : ''}CREATE ${repo} release ${tag}\n`);
     if (!options.dryRun) {
@@ -360,6 +407,7 @@ async function main() {
     component,
     componentVersion,
     downloadTag: tag,
+    githubRepo: repo,
   });
   const outputPath = options.output
     ? path.resolve(options.output)

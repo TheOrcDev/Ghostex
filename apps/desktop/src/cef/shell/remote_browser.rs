@@ -32,6 +32,13 @@ wrap_request_context_handler! {
 /// CDXC:Browser 2026-09-05 WHY:
 /// Set the proxy only after CEF initializes the request context, and admit no page loads until it succeeds.
 /// Chromium's implicit localhost bypass is disabled only in this dedicated context; app UI traffic retains its local context.
+///
+/// CDXC:Browser 2026-09-18 WHY:
+/// The error out-param must point at a writable `cef_string_t`. `CefString::default()` marshals
+/// through cef-rs as a NULL `cef_string_t*`, and CEF 148's SetPreference then returns false before
+/// touching the proxy at all (proven by an in-process A/B harness; the stored preference stayed at
+/// its default with a NULL slot and held the socks5 config with a backed slot). A default-constructed
+/// error also made CEF discard every real failure message.
 fn configure_proxy(context: &RequestContext, port: u16) -> Result<()> {
     let mut proxy = cef::dictionary_value_create().context("create remote proxy settings")?;
     proxy.set_string(
@@ -50,19 +57,29 @@ fn configure_proxy(context: &RequestContext, port: u16) -> Result<()> {
     );
     let mut value = cef::value_create().context("create remote proxy value")?;
     value.set_dictionary(Some(&mut proxy));
-    let mut error = CefString::default();
+    let mut error_buf: cef::sys::_cef_string_utf16_t = unsafe { std::mem::zeroed() };
+    let mut error = CefString::from(&mut error_buf as *mut cef::sys::_cef_string_utf16_t);
+    let set = context.set_preference(
+        Some(&CefString::from("proxy")),
+        Some(&mut value),
+        Some(&mut error),
+    ) != 0;
+    let failure = error.to_string();
+    unsafe { cef::sys::cef_string_utf16_clear(&mut error_buf) };
     anyhow::ensure!(
-        context.set_preference(
-            Some(&CefString::from("proxy")),
-            Some(&mut value),
-            Some(&mut error)
-        ) != 0,
-        "Could not configure the remote browser proxy"
+        set,
+        "Could not configure the remote browser proxy: {failure}"
     );
     Ok(())
 }
 
+/// CDXC:CefRuntime 2026-09-23 WHY:
+/// A restored remote tab prepares its proxy before browser creation reaches the deferred-init gate. Creating its request-context handler then aborts CEF with API version -1; context preparation must request the runtime and wait for initialization too.
 pub(crate) fn prepare_remote_browser_context(profile: &str, port: u16) -> Result<bool> {
+    if !super::context_initialized() {
+        super::request_runtime();
+        return Ok(false);
+    }
     if let Some(status) = REMOTE_CONTEXTS.with(|contexts| {
         contexts
             .borrow()
@@ -98,4 +115,8 @@ pub(crate) fn remote_browser_request_context(profile: &str) -> Result<RequestCon
         );
         Ok(entry.context.clone())
     })
+}
+
+pub(super) fn clear_remote_browser_contexts() {
+    REMOTE_CONTEXTS.with(|contexts| contexts.borrow_mut().clear());
 }

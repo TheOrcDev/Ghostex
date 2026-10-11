@@ -42,6 +42,7 @@ pub(crate) fn session_card_primary_title(title: &str, agent_id: Option<&str>) ->
         || is_ignored_generic_agent_terminal_title(&normalized)
         || is_path_like_terminal_title(&normalized)
         || is_shell_location_terminal_title(&normalized)
+        || is_windows_default_powershell_title(&normalized)
     {
         return Some(agent_default_title(agent_id));
     }
@@ -107,6 +108,8 @@ pub(crate) fn normalize_terminal_title(title: Option<&str>) -> Option<String> {
         .trim_start_matches(is_leading_terminal_title_status_marker)
         .trim();
     let sanitized = strip_oc_prefixes(without_markers).trim().to_string();
+    let sanitized = crate::agents::strip_freebuff_title_prefix(&sanitized);
+    let sanitized = crate::agents::strip_empryo_title_suffix(sanitized).to_string();
     if let Some(cursor_title) = normalize_cursor_terminal_title(&sanitized) {
         return cursor_title;
     }
@@ -383,6 +386,7 @@ pub(crate) fn is_ignored_placeholder_session_title_text(lower: &str) -> bool {
             | "cursor agent session"
             | "cursor cli session"
             | "cursor session"
+            | "freebuff session"
             | "mastra session"
             | "mastra code session"
             | "devin session"
@@ -430,6 +434,7 @@ pub(crate) fn is_ignored_generic_agent_terminal_title(title: &str) -> bool {
             | "cursor cli"
             | "cursor-agent"
             | "droid"
+            | "empryo"
             | "factory droid"
             | "grok"
             | "grok build"
@@ -500,6 +505,8 @@ pub(crate) fn is_agent_command_executable_name(value: &str) -> bool {
             | "cursor-agent"
             | "devin"
             | "droid"
+            | "empryo"
+            | "freebuff"
             | "gemini"
             | "grok"
             | "hermes"
@@ -631,7 +638,11 @@ pub(crate) fn is_agent_status_boundary_char(ch: char) -> bool {
         )
 }
 
+/// See CDXC:SessionTitles 2026-10-04 in server/src/agents/terminal_title.rs.
 pub(crate) fn is_windows_default_powershell_title(title: &str) -> bool {
+    if crate::agents::is_windows_default_powershell_title(title) {
+        return true;
+    }
     let lower = title.to_lowercase();
     let bytes = lower.as_bytes();
     if bytes.len() < 2 || !bytes[0].is_ascii_lowercase() {

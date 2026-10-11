@@ -112,7 +112,11 @@ impl<'a> DomainRepository<'a> {
                     let version = crate::session_chat_draft_handoffs::returned_version(
                         self.db, project, session, &content,
                     )?;
-                    let transaction = self.db.unchecked_transaction().map_err(sql_error)?;
+                    let transaction = rusqlite::Transaction::new_unchecked(
+                        self.db,
+                        rusqlite::TransactionBehavior::Immediate,
+                    )
+                    .map_err(sql_error)?;
                     crate::session_chat_draft_recovery::record(
                         &transaction,
                         project,

@@ -26,6 +26,10 @@ bead statuses, add bead comments, or link a session to a card.
   installed Beads version.
 - Inspect nearby beads before creating a new one so title, labels, status, and
   external-ref style match the project.
+- If the project has no Beads workspace yet (no `.beads` folder, or `bd` says
+  no beads database was found), stop and ask the user whether they want Beads
+  set up in this project. Run `bd init`, or anything else that creates `.beads`
+  files, only after they say yes.
 
 ## Working A Bead: Link This Session First
 
@@ -90,7 +94,7 @@ not for an agent that is already doing the bead's work.
 To dispatch a bead through Ghostex, run:
 
 ```bash
-gx board start-work <bead-id> [--agent <agentId>] [--project-path <path>|--project-id <id>] [--json]
+gx board start-work <bead-id> [--agent <agentId>] [--model <model>] [--effort <level>] [--project-path <path>|--project-id <id>] [--json]
 ```
 
 - **The command is the dispatch.** It creates and starts the visible worker
@@ -102,6 +106,15 @@ gx board start-work <bead-id> [--agent <agentId>] [--project-path <path>|--proje
   worker session yourself — it is not a preparation step before separately
   starting another worker. Calling it and then starting your own worker puts
   two workers on the same card.
+- **Pick the worker's model with `--model` and `--effort`** (Claude, Codex and
+  Pi workers only, when `start-work` creates a new worker; a Pi model is
+  `<provider>/<model>` and its effort is a thinking level such as `high`, and
+  Ghostex releases before October 2026 refuse a Pi model). A reused linked worker
+  keeps its existing model and effort. The choice applies to the new worker
+  session only, a resume keeps it, and the user's default model is untouched.
+  Ghostex releases whose
+  `gx board --help` does not list them ignore the flags, and the worker starts
+  on the default model.
 - **Already working the bead? Do not call it.** An agent that is itself doing
   the bead's work must not run the command; that would create an additional
   worker for work that is already underway.

@@ -70,5 +70,8 @@ pub(crate) fn detect_effort_notice(text: &str) -> Option<TerminalDialog> {
         input: None,
         input_value: String::new(),
         actions: vec!["confirm".to_string(), "cancel".to_string()],
+        side_question: None,
+        blocks: None,
+        picker: None,
     })
 }

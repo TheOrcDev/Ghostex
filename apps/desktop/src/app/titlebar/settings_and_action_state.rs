@@ -75,6 +75,22 @@ impl GhostexGpuiApp {
         self.open_gpui_app_modal_window(modal, open_message, sidebar_state_message, window, cx);
     }
 
+    pub(crate) fn open_gpui_settings_accounts_page(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let modal = GpuiAppModalKind::Settings;
+        let sidebar_state_message = self.gpui_app_modal_sidebar_state_message_for_open(modal, cx);
+        let mut open_message = serde_json::json!({
+            "initialTab": "accounts",
+            "modal": modal.modal_id(),
+            "type": "open",
+        });
+        open_message["latestSidebarStateMessage"] = sidebar_state_message.clone();
+        self.open_gpui_app_modal_window(modal, open_message, sidebar_state_message, window, cx);
+    }
+
     pub(crate) fn run_gpui_titlebar_tips_header_action(
         &mut self,
         action_index: usize,
@@ -85,10 +101,10 @@ impl GhostexGpuiApp {
             0 => self.open_gpui_browser_action_url(GHOSTEX_DOCS_URL.to_string(), window, cx),
             // CDXC:Onboarding 2026-09-15 DECISION:
             // User: "i want setup button in the tips dropdown to open this new one instead of the old one";
-            // since 2026-09-15 the automatic first run opens the same Onboarding modal (modals.rs
-            // `open_gpui_first_launch_setup_with_sidebar_state`), and the old FirstLaunchSetup modal stays in
-            // the tree under its own id ("might come back to it"). SEE-ALSO: delayed_send.rs for the CEF
-            // titlebar-host twin of this button.
+            // since 2026-09-15 the automatic first run opens the same Onboarding modal (modals/modal_window.rs
+            // `open_gpui_first_launch_setup_with_sidebar_state`). The old setup modal was deleted on
+            // 2026-09-27 (user: "delete old setup one not new one that's active"). SEE-ALSO: delayed_send/app_modal_sidebar_command/hotkey_action.rs
+            // `openWorkspaceWelcome`, Quick Access's Setup Ghostex row, which opens the same modal.
             // CDXC:Onboarding 2026-09-15 DECISION:
             // User: hide all buttons that talk about video for Ghostex. The old Video header
             // action is gone, so Setup and Updates shifted down one index.
@@ -217,7 +233,13 @@ impl GhostexGpuiApp {
         );
     }
 
+    /// Empty while the Actions extension is off, so the Start menu, the Start Action hotkeys and
+    /// every other runner find nothing to run; the saved actions themselves stay in gxserver.
     pub(crate) fn visible_gpui_titlebar_actions(&self) -> Vec<GpuiTitlebarAction> {
+        if !self.built_in_extension_enabled(ghostex_settings_catalog::built_in_extensions::ACTIONS)
+        {
+            return Vec::new();
+        }
         self.titlebar_actions_snapshot.clone()
     }
 
@@ -278,7 +300,7 @@ impl GhostexGpuiApp {
                     this.titlebar_actions_snapshot = actions;
                     cx.notify();
                 }
-                this.refresh_extensions_in_background(cx);
+                this.refresh_extensions_if_stale(cx);
             });
         })
         .detach();
@@ -371,7 +393,10 @@ impl GhostexGpuiApp {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.titlebar_quick_action_button_on_cooldown() {
+        if self.titlebar_quick_action_button_on_cooldown()
+            || !self
+                .built_in_extension_enabled(ghostex_settings_catalog::built_in_extensions::ACTIONS)
+        {
             return;
         }
         let Some(action) = self.active_gpui_titlebar_action() else {

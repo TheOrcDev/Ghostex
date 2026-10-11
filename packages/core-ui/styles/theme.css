@@ -42,8 +42,8 @@
   --app-tooltip-foreground: #f0f0f0;
   /*
    * CDXC:Theming 2026-08-24:
-   * Fallback accent so surfaces paint the shipped sky tone before the
-   * accentColor setting hydrates onto <body>.
+   * Accent of the default neutral tint, painted until the tint-derived accent
+   * hydrates onto <body> (getAccentColorForBackgroundTint in titlebar-color.ts).
    */
   --ghostex-accent: #86d3f8;
   --custom-sidebar-titlebar-foreground-color: #d8d8d8;
@@ -62,12 +62,12 @@
      CDXC:Tooltips 2026-05-26-22:29: Tooltip typography should also match the Resources manager dropdown, including its system font stack, weight, and line height.
      CDXC:Tooltips 2026-06-16-09:58: Shared tooltip backgrounds should be darker than the prior near-#181818 surface so hover labels read as distinct overlays against dark terminal content.
      CDXC:Tooltips 2026-06-16-11:24: Increase tooltip darkness again to near-#0b0b0b after visual review showed the first darkening was still too light.
-     CDXC:Tooltips 2026-06-30-11:15: All app tooltip surfaces should use the same slight 5px corner radius as the macOS sidebar top icon buttons, preserving the compact chrome while avoiding square tooltip corners. */
+     CDXC:Tooltips 2026-10-05 DECISION: User: "Please make the tooltips in this app all have rounded corners, not square ones." Every tooltip takes the 8px radius of the app's menus (TOOLTIP_RADIUS in gpui-component's tooltip.rs); supersedes the 2026-06-30 5px radius. */
   --ghostex-tooltip-background: rgba(11, 11, 11, 0.98);
   --ghostex-tooltip-foreground: rgba(255, 255, 255, 0.78);
   --ghostex-tooltip-strong-foreground: rgba(255, 255, 255, 0.94);
   --ghostex-tooltip-border: rgba(255, 255, 255, 0.12);
-  --ghostex-tooltip-radius: 5px;
+  --ghostex-tooltip-radius: 8px;
   --ghostex-tooltip-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   --ghostex-tooltip-font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
   --working-primary: color-mix(in srgb, #2f6feb 60%, #ffb454 40%);
@@ -197,8 +197,8 @@ body[data-sidebar-theme='plain-light'],
   --ghostex-tooltip-strong-foreground: #18181b;
   --ghostex-tooltip-border: rgba(0, 0, 0, 0.14);
   --ghostex-tooltip-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
-  /* CDXC:Theming 2026-09-14 SEE-ALSO: apps/desktop/src/app/helpers/titlebar.rs owns the matching #f4f4f5 light-mode chrome decision. */
-  --app-background: #f4f4f5;
+  /* CDXC:Theming 2026-09-22 SEE-ALSO: the light chrome colour comes from the Light theme preset or custom contrast/tint (packages/shared/ghostex-settings/titlebar-color.ts (deleted 2026-10-01)); its React publisher was the sidebar deleted on 2026-09-24, so React pages paint the #f4f4f5 Light Gray default. apps/desktop/src/app/helpers/titlebar/chrome_tints.rs resolves the same colour natively. */
+  --app-background: var(--custom-sidebar-titlebar-light-background-color, #f4f4f5);
   --app-modal-background: #ffffff;
   --app-dropdown-background: #ffffff;
   --app-foreground: #262626;
@@ -482,7 +482,7 @@ body[data-sidebar-custom-theme='true']:is([data-sidebar-theme='plain-light'], [d
 .ghostex-root[data-sidebar-custom-theme='true']:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']),
 .stack[data-sidebar-custom-theme='true']:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']) {
   color-scheme: light;
-  --app-background: #f4f4f5;
+  --app-background: var(--custom-sidebar-titlebar-light-background-color, #f4f4f5);
   --app-card: color-mix(in srgb, var(--workspace-sidebar-theme-color) 5%, #ffffff 95%);
   --app-card-active: color-mix(in srgb, var(--workspace-sidebar-theme-color) 12%, #f1f5fb 88%);
   --app-border: color-mix(in srgb, var(--workspace-sidebar-theme-color) 30%, #000000 12%);

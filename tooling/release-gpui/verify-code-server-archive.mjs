@@ -305,6 +305,7 @@ export function parseCodeServerChecksumSidecar(contents, expectedArchiveName) {
   return match[1];
 }
 
+/** @param {{ archivePath: string, componentVersion: string, platform: string, sidecarPath?: string }} options */
 export async function verifyCodeServerArchive({ archivePath, componentVersion, platform, sidecarPath }) {
   const expectedArchiveName = codeServerComponentNames(componentVersion, platform).archiveName;
   if (basename(archivePath) !== expectedArchiveName) {

@@ -2,22 +2,30 @@ use crate::app::helpers::*;
 use crate::*;
 use std::path::Path;
 
-/// CDXC:CodeEditor 2026-09-14 WHY:
+/// CDXC:CodeEditor 2026-09-23 WHY:
 /// Windows Ghostex ships its native editor beside the app. The downloadable
 /// windows-x64 component contains the WSL editor, so a PowerShell remote must
 /// use its installed native payload instead of uploading that Linux archive.
+/// Prefer the folder the app recorded in `$gxAppDir` (the install that last ran), then the per-user install the release installer and the local start both use (`%LOCALAPPDATA%\Ghostex\current`), then a Program Files install, including when the managed CLI lives separately under Data/gxserver.
 pub(crate) fn gpui_remote_windows_code_setup() -> String {
     format!(
         r#"{}
 $gxApp=Split-Path (Split-Path (Split-Path $gxExe -Parent) -Parent) -Parent
-$gxCodeCandidates=@((Join-Path $gxApp 'code-server'), (Join-Path $gxData 'code-server/package'))
-$gxCode=$gxCodeCandidates | Where-Object {{ (Test-Path -LiteralPath (Join-Path $_ 'lib/node.exe')) -and (Test-Path -LiteralPath (Join-Path $_ 'lib/vscode/out/server-main.js')) }} | Select-Object -First 1
+$gxPF=$env:ProgramW6432
+if (!$gxPF) {{ $gxPF=$env:ProgramFiles }}
+$gxCodeCandidates=@()
+if ($gxAppDir) {{ $gxCodeCandidates+=Join-Path $gxAppDir 'code-server' }}
+$gxCodeCandidates+=@((Join-Path $env:LOCALAPPDATA 'Ghostex/current/code-server'), (Join-Path $gxPF 'Ghostex/code-server'), (Join-Path $gxApp 'code-server'), (Join-Path $gxData 'code-server/package'))
+$gxCode=$gxCodeCandidates | Where-Object {{ (Test-Path -LiteralPath (Join-Path $_ 'lib/node.exe') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $_ 'out/node/entry.js') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $_ 'lib/vscode/out/server-main.js') -PathType Leaf) }} | Select-Object -First 1
 if (!$gxCode) {{ throw 'The Windows Ghostex installation is missing its native Code editor. Update Ghostex on that machine.' }}
 "#,
         gpui_remote_windows_cli_setup()
     )
 }
 
+/// CDXC:PromptEditor 2026-09-23 WHY:
+/// Windows SSH launches Code elevated; its default pipe ACL grants Administrators write access but excludes the account's non-elevated agent. Restrict the owned pipe to the account SID and SYSTEM so both tokens can connect.
+/// Windows PowerShell supplies the framework PipeSecurity APIs; keeping this initializer small also respects OpenSSH's command-line limit.
 pub(crate) fn gpui_remote_windows_code_launch(project_path: &Path) -> String {
     format!(
         r#"{}
@@ -38,10 +46,17 @@ $gxStart.Arguments='"'+$gxEntry+'" --auth none --bind-addr 127.0.0.1:{} --disabl
 $gxStart.UseShellExecute=$false
 $gxStart.CreateNoWindow=$true
 $gxChild=[Diagnostics.Process]::Start($gxStart)
-try {{ $gxChild.WaitForExit(); exit $gxChild.ExitCode }} finally {{ if (!$gxChild.HasExited) {{ $gxChild.Kill() }} }}
+try {{
+    & {{
+{}
+    }} -PipePath $gxPipe
+    $gxChild.WaitForExit()
+    exit $gxChild.ExitCode
+}} finally {{ if (!$gxChild.HasExited) {{ $gxChild.Kill() }} }}
 "#,
         gpui_remote_windows_code_setup(),
         gpui_powershell_quote(&project_path.to_string_lossy()),
-        SOURCE_CODE_SERVER_REMOTE_PORT
+        SOURCE_CODE_SERVER_REMOTE_PORT,
+        include_str!("windows_code_pipe.ps1")
     )
 }

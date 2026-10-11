@@ -8,7 +8,7 @@ export function extractManagedTooltipPlacements(source) {
   }
 
   return new Set(
-    [...match.groups.body.matchAll(/^\s*(?:#\[[^\]]+\]\s*)*(?<name>[A-Z][A-Za-z0-9_]*)\s*,/gmu)].map(
+    [...match.groups.body.matchAll(/^\s*(?:#\[[^\]]+\]\s*)*(?<name>[A-Z][A-Za-z0-9_]*)\s*(?:\{[^}]*\}|\([^)]*\))?\s*,/gmu)].map(
       ({ groups }) => groups.name
     )
   );

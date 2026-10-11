@@ -1,10 +1,6 @@
 type GhostexGpuiWorkareaApi = {
   manageDocsResourceBaseUrl?: string;
   postManageFilesRequest?: (payload: string) => boolean;
-  postProjectBeadsRequest?: (payload: string) => boolean;
-  postProjectBoardImageRequest?: (payload: string) => boolean;
-  postProjectBoardRequest?: (payload: string) => boolean;
-  supportsManageFileChangePolling?: boolean;
 };
 
 type GhostexGpuiWorkareaWindow = Window & {
@@ -19,7 +15,7 @@ const BRIDGE_SEND_MAX_ATTEMPTS = 250;
 
 /*
  * CDXC:CefRuntime 2026-06-24-11:03:
- * Kanban and Manage reuse the first-party React pages inside CEF, so GPUI installs a narrow compatibility shim before those pages mount. The shim maps the existing page-owned WebKit message-handler calls to fixed CEF bridge functions, queues only bounded in-memory JSON payloads during renderer bridge installation, and never exposes generic IPC, paths, logs, persistence, fallback URLs, or a WKWebView/WebKit runtime.
+ * The Files view's embed page (manage.html) runs inside CEF, so GPUI installs a narrow compatibility shim before the page mounts. The shim maps the existing page-owned WebKit message-handler calls to fixed CEF bridge functions, queues only bounded in-memory JSON payloads during renderer bridge installation, and never exposes generic IPC, paths, logs, persistence, fallback URLs, or a WKWebView/WebKit runtime.
  */
 function postToCefBridge(functionName: keyof GhostexGpuiWorkareaApi, message: unknown): void {
   const payload = JSON.stringify(message);
@@ -52,15 +48,6 @@ function installMessageHandler(name: string, functionName: keyof GhostexGpuiWork
   };
 }
 
-export function installKanbanCefBridge(): void {
-  installMessageHandler('ghostexProjectBeads', 'postProjectBeadsRequest');
-  installMessageHandler('ghostexProjectBoard', 'postProjectBoardRequest');
-  installMessageHandler('ghostexProjectBoardImages', 'postProjectBoardImageRequest');
-}
-
 export function installManageCefBridge(): void {
-  const target = window as GhostexGpuiWorkareaWindow;
-  target.ghostexGpui = target.ghostexGpui ?? {};
-  target.ghostexGpui.supportsManageFileChangePolling = true;
   installMessageHandler('ghostexManageFiles', 'postManageFilesRequest');
 }

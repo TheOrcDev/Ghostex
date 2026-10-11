@@ -32,6 +32,9 @@ pub const WORKTREE_TEMP_BRANCH_PREFIX: &str = "ghostex/";
 pub const WORKTREE_TEMP_BRANCH_SUFFIX_LENGTH: usize = 8;
 /// Runtime-settings key holding the marker described at the top of this file.
 pub const WORKTREE_SESSION_RUNTIME_KEY: &str = "worktreeSession";
+/// Marker flag for a session started on a branch the caller named (a work-mode ticket branch):
+/// the auto-rename never touches it.
+pub const WORKTREE_SESSION_CHOSEN_BRANCH_KEY: &str = "branchChosen";
 /// Cadence of the temp-branch auto-rename pass.
 pub const WORKTREE_BRANCH_RENAME_SWEEP_INTERVAL_SECONDS: u64 = 60;
 /// At most this many branches are renamed per pass, so a machine that somehow
@@ -116,7 +119,7 @@ CDXC:Worktrees 2026-08-09-18:40:
 Renaming a worktree types ONE name that becomes two things: the branch keeps it
 verbatim (so `feat/kanban-assignee` is possible) while the folder gets this slug,
 because `/` cannot be part of a directory name. This mirrors
-`worktreeRenameFolderSlug` in `packages/shared/worktree-rename-name.ts` — the daemon slugs
+`worktreeRenameFolderSlug` in `packages/shared/worktree-rename-name.ts` (deleted 2026-10-01) — the daemon slugs
 the name itself rather than accepting a destination path from a renderer, so a
 client can never point the move at a directory the user did not name. Case is
 preserved on purpose: `slugify_branch_title` above lowercases because it slugs a
@@ -283,9 +286,20 @@ its original placeholder title source, and only once.
 - the recorded branch is still the `ghostex/<8hex>` temp shape (a branch already
   renamed, or one the user renamed by hand, is finished business),
 - the session has a REAL title: different from the one gxserver created it with,
-  and no longer the placeholder title source every fresh row starts on.
+  and no longer the placeholder title source every fresh row starts on,
+- the session was not started on a branch the caller chose (a work-mode ticket
+  branch carries `branchChosen`; it already has its final name).
 */
 pub fn plan_worktree_branch_rename(session: &Value) -> Option<WorktreeBranchRenamePlan> {
+    let chosen_branch = session
+        .pointer(&format!(
+            "/runtimeSettings/{WORKTREE_SESSION_RUNTIME_KEY}/{WORKTREE_SESSION_CHOSEN_BRANCH_KEY}"
+        ))
+        .and_then(Value::as_bool)
+        == Some(true);
+    if chosen_branch {
+        return None;
+    }
     let marker = read_worktree_session_marker(session)?;
     if marker.renamed_at.is_some() || !is_worktree_temp_branch(&marker.branch) {
         return None;
@@ -696,7 +710,7 @@ mod tests {
     fn rename_folder_slugs_fold_separators_without_lowercasing() {
         /*
         CDXC:Worktrees 2026-08-09-18:40:
-        Same table as `packages/shared/worktree-rename-name.test.ts`. The daemon computes
+        Same table as `packages/shared/worktree-rename-name.test.ts` (deleted 2026-10-01). The daemon computes
         the destination folder itself, so if these two rules ever drift the
         modal's live preview stops describing the folder the user actually gets.
         */

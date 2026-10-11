@@ -319,7 +319,7 @@ pub(crate) enum GpuiRemoteIdePathKind {
     File,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_open_remote_path_in_windows_wsl_editor(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -397,7 +397,7 @@ pub(crate) fn gpui_open_remote_path_in_windows_wsl_editor(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_open_remote_path_in_windows_wsl_editor(
     _config: &GpuiRemoteMachineConfig,
     _execution_target: &GpuiRemoteExecutionTarget,
@@ -418,22 +418,30 @@ pub(crate) fn gpui_open_remote_path_in_vscode_remote_ssh(
     }
     gpui_remote_ide_open_easy_connect_refusal(config)?;
     let remote_authority = gpui_vscode_remote_ssh_authority(config)?;
-    if !gpui_command_exists_on_path(target.command) {
-        return Err("Configured editor is not available for GPUI remote IDE open.".to_string());
+    #[cfg(windows)]
+    return gpui_launch_windows_remote_editor(
+        target.command,
+        &["--reuse-window", "--remote", &remote_authority, remote_path],
+    );
+    #[cfg(not(windows))]
+    {
+        if !gpui_command_exists_on_path(target.command) {
+            return Err("Configured editor is not available for GPUI remote IDE open.".to_string());
+        }
+        let mut command = std::process::Command::new("/usr/bin/env");
+        command
+            .arg(target.command)
+            .arg("--reuse-window")
+            .arg("--remote")
+            .arg(remote_authority)
+            .arg(remote_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| "Configured editor could not open the remote target.".to_string())
     }
-    let mut command = std::process::Command::new("/usr/bin/env");
-    command
-        .arg(target.command)
-        .arg("--reuse-window")
-        .arg("--remote")
-        .arg(remote_authority)
-        .arg(remote_path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Configured editor could not open the remote target.".to_string())
 }
 
 pub(crate) fn gpui_open_remote_path_in_zed_remote_ssh(
@@ -451,20 +459,25 @@ pub(crate) fn gpui_open_remote_path_in_zed_remote_ssh(
                 .to_string(),
         );
     }
-    if !gpui_command_exists_on_path(target.command) {
-        return Err("Configured editor is not available for GPUI remote IDE open.".to_string());
-    }
     let remote_uri = gpui_zed_remote_ssh_uri(config, remote_path)?;
-    let mut command = std::process::Command::new("/usr/bin/env");
-    command
-        .arg(target.command)
-        .arg(remote_uri)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Configured editor could not open the remote target.".to_string())
+    #[cfg(windows)]
+    return gpui_launch_windows_remote_editor(target.command, &[&remote_uri]);
+    #[cfg(not(windows))]
+    {
+        if !gpui_command_exists_on_path(target.command) {
+            return Err("Configured editor is not available for GPUI remote IDE open.".to_string());
+        }
+        let mut command = std::process::Command::new("/usr/bin/env");
+        command
+            .arg(target.command)
+            .arg(remote_uri)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| "Configured editor could not open the remote target.".to_string())
+    }
 }
 
 /*

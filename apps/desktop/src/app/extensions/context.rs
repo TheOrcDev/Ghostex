@@ -147,6 +147,5 @@ impl GhostexGpuiApp {
                 }
             });
         }
-        self.broadcast_chat_bar_extension_context_changes(cx);
     }
 }

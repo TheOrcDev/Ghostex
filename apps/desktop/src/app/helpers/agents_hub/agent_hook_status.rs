@@ -238,9 +238,7 @@ pub(crate) fn gpui_settings_command_agent_ids(
 }
 
 pub(crate) fn gpui_home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/Users/Shared"))
+    shared_settings::ghostex_storage_paths().home_dir.clone()
 }
 
 /// Stash-request markers mirror the CLI's shared state-directory resolution
@@ -278,13 +276,30 @@ pub(crate) fn gpui_remove_prompt_stash_request_marker(project_id: &str, session_
 }
 
 pub(crate) fn gpui_which_command(command: &str) -> Option<PathBuf> {
-    if command.contains('/') || command.trim().is_empty() {
+    if command.contains(['/', '\\']) || command.trim().is_empty() {
         return None;
     }
+    #[cfg(windows)]
+    let candidates = {
+        let extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        let mut names = vec![command.to_string()];
+        if PathBuf::from(command).extension().is_none() {
+            names.extend(
+                extensions
+                    .split(';')
+                    .filter(|extension| !extension.is_empty())
+                    .map(|extension| format!("{command}{extension}")),
+            );
+        }
+        names
+    };
+    #[cfg(not(windows))]
+    let candidates = vec![command.to_string()];
     env::var_os("PATH")
         .into_iter()
         .flat_map(|path_value| env::split_paths(&path_value).collect::<Vec<_>>())
-        .map(|directory| directory.join(command))
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .flat_map(|directory| candidates.iter().map(move |name| directory.join(name)))
         .find(|candidate| gpui_is_executable_file(candidate))
 }
 
@@ -297,6 +312,13 @@ pub(crate) fn gpui_is_probably_ghostex_command(path: &Path, command: &str) -> bo
         return true;
     }
     let realpath = gpui_realpath_or_self(path);
+    /*
+    CDXC:Cli 2026-09-30 WHY:
+    The Homebrew cask's `command_wrapper` stanza installs HOMEBREW_PREFIX/bin/ghostex as a symlink to the marked wrapper at Caskroom/ghostex/<version>/.homebrew-command-wrappers/ghostex, so the marker is read from the file the symlink resolves to. Without this every Homebrew install failed skill installs with "could not prove it belongs to Ghostex" (GitHub issue #182).
+    */
+    if gpui_is_marked_ghostex_wrapper_file(&realpath) {
+        return true;
+    }
     if gpui_is_ghostex_app_owned_command_realpath(command, &realpath) {
         return true;
     }
@@ -306,6 +328,9 @@ pub(crate) fn gpui_is_probably_ghostex_command(path: &Path, command: &str) -> bo
         .unwrap_or(false)
 }
 
+/// CDXC:SessionChat 2026-09-30 DECISION:
+/// User: when neither the Default Agent View nor the agent's own override is set, treat it as Chat automatically. A settings file that never saved `preferredAgentInterface` therefore means Chat, the shared default in `packages/settings-catalog/src/data/defaults.rs` that the Settings modal and onboarding already show; falling back to the enum's Terminal default made a fresh Linux install display Chat while every new session opened in Terminal.
+/// SEE-ALSO: `PreferredInterfaceSettings::resolve` in packages/gx-core/src/sidebar_actions/remote_focus.rs.
 pub(crate) fn gpui_preferred_agent_interface_from_settings(
     settings: &serde_json::Map<String, serde_json::Value>,
 ) -> GpuiPreferredAgentInterface {
@@ -313,7 +338,7 @@ pub(crate) fn gpui_preferred_agent_interface_from_settings(
         .get("preferredAgentInterface")
         .and_then(serde_json::Value::as_str)
         .and_then(GpuiPreferredAgentInterface::from_str)
-        .unwrap_or_default()
+        .unwrap_or(GpuiPreferredAgentInterface::Chat)
 }
 
 /// Per-agent override of the Default Agent View, read straight off the shared
@@ -350,11 +375,8 @@ pub(crate) fn gpui_effective_preferred_agent_interface_for_agent_icon(
 }
 
 pub(crate) fn gpui_session_chat_background_color() -> Hsla {
-    if gpui_session_chat_uses_light_theme(
+    rgb(gpui_session_chat_background_rgb(
         shared_settings::shared_sidebar_settings_snapshot().object(),
-    ) {
-        rgb(0xfdfdfd).into()
-    } else {
-        rgb(0x0d0d0d).into()
-    }
+    ))
+    .into()
 }

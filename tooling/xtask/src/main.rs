@@ -1,0 +1,108 @@
+//! `cargo xtask <command>`: the repository's dev, start and build commands. The `xtask` alias lives in the root `.cargo/config.toml`, so every command runs from the repository root on macOS, Linux and Windows.
+//! The packaging shell scripts under apps/desktop/scripts/ still do the building; JavaScript tools (bun, vite, tsc, vitest, tailwind) still run for the pages and checks that are TypeScript.
+
+mod codesign;
+mod gxserver;
+mod help;
+mod http;
+mod isolated;
+mod remote_build;
+mod start;
+mod start_server;
+mod tasks;
+mod util;
+
+const USAGE: &str = "Usage: cargo xtask <command> [arguments]
+
+Desktop app
+  start [--optimized] [--debug-info[=<level>]] [--verbose] [--profile] [--build-only] [--install-only] [--isolated[=<variant>]] [--prepare-only]
+                          build, install and launch the desktop app (a fast dev build; --optimized for performance work;
+                          --debug-info builds with symbols for crash debugging, off by default;
+                          --install-only installs the already staged build on Linux and Windows)
+  remote-start [--repo <owner/name>] [--build-only]
+                          Linux x64: build the desktop app on a Blacksmith machine, then install and launch it here
+                          (setup: tooling/remote-build/README.md)
+  start-server [--optimized]
+                          macOS: rebuild only gxserver and swap it into /Applications/Ghostex.app
+  build                   macOS: package the app bundle without installing it
+  gx-isolated [--isolated=<variant>] [--print | <ghostex arguments>]
+                          run an isolated variant's ghostex CLI
+  setup-windows           Windows: install the build prerequisites and prepare sources
+
+Web build
+  web-build [--debug]     build apps/gpui-web into apps/gpui-web/www/dist
+  web-dev [--debug]       build the wasm and run the Vite dev server on :4174
+  start-web [<ghostex web arguments>]
+                          build the web app and serve it with `ghostex web` on :4173
+
+Checks and generators
+  typecheck               root TypeScript gate (storage lint, Help files, tsc, release scripts)
+  desktop-typecheck       apps/desktop/tsconfig.json (CEF entry modules, Files embed page)
+  test [<vitest arguments>]
+                          the vitest suites
+  storage-check           client-storage access lint
+  help-generate           regenerate the skills/ghostex-help references from packages/settings-catalog
+  help-check              fail when those generated files are stale
+  build-sidebar-css       regenerate packages/core-ui/styles/shadcn.generated.css
+  build-editor            build the GhostexEditor page and app
+  generate-mobile-chat-agents
+                          write the phone's chat-capable agent list
+  generate-mobile-tabler-icons
+                          regenerate the phone's Tabler icon set
+
+Other
+  gxserver-remote-linux [--arch x64|arm64|all] [--allow-cross] | --release
+                          package gxserver for remote Linux hosts
+  history [<arguments>]   run the ghostex-history CLI
+  cli [<arguments>]       run the checkout's ghostex CLI
+  remote-build-pack --stage <dir> --base <manifest> --out <dir>
+                          (runs on the remote build machine) pack the files that differ from the laptop's staged app
+
+Release commands stay in package.json for now (`bun run release:*`).";
+
+fn main() {
+    util::sanitize_cargo_run_environment();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
+        println!("{USAGE}");
+        std::process::exit(if args.is_empty() { 2 } else { 0 });
+    }
+    let name = args.remove(0);
+    let result = match name.as_str() {
+        "start" => start::run(&args),
+        "start-server" => start_server::run(&args),
+        "remote-start" => remote_build::run(&args),
+        "remote-build-pack" => remote_build::pack(&args),
+        "build" => tasks::build(&args),
+        "gx-isolated" => isolated::run_cli(&args),
+        "setup-windows" => tasks::setup_windows(&args),
+        "web-build" => tasks::web_build(&args),
+        "web-dev" => tasks::web_dev(&args),
+        "start-web" => tasks::start_web(&args),
+        "typecheck" => tasks::typecheck(&args),
+        "desktop-typecheck" => tasks::desktop_typecheck(&args),
+        "test" => tasks::test(&args),
+        "storage-check" => tasks::storage_check(&args),
+        "help-generate" => tasks::help_generate(&args),
+        "help-check" => tasks::help_check(&args),
+        "build-sidebar-css" => tasks::build_sidebar_css(&args),
+        "build-editor" => tasks::build_editor(&args),
+        "generate-mobile-chat-agents" => {
+            tasks::mobile_script(&name, "generate-chat-agents.mjs", &args)
+        }
+        "generate-mobile-tabler-icons" => {
+            tasks::mobile_script(&name, "generate-tabler-icons.mjs", &args)
+        }
+        "gxserver-remote-linux" => tasks::gxserver_remote_linux(&args),
+        "history" => tasks::history(&args),
+        "cli" => tasks::cli(&args),
+        other => Err(format!("unknown command `{other}`.\n\n{USAGE}").into()),
+    };
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("cargo xtask {name}: {error}");
+            std::process::exit(1);
+        }
+    }
+}

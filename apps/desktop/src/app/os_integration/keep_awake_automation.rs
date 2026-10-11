@@ -41,6 +41,12 @@ impl GhostexGpuiApp {
         CDXC:KeepAwake 2026-06-27-00:40:
         Native titlebar Keep Awake also holds for non-sleeping terminal sessions with projected Delayed Send timers. GPUI derives the same automatic input from live command-tab model state instead of the raw timer map so sleeping tabs and orphan persisted command rows cannot keep the power hold alive.
         */
+        // The automatic holds start from the lead window only, so a New Window does not take a
+        // second hold at launch; a hold started by hand in another window is still kept up to date
+        // here (app/workspace_windows/).
+        if !self.is_lead_window() && self.keep_awake_runtime.is_none() {
+            return;
+        }
         let settings = settings_snapshot.keep_awake_titlebar_settings();
         let mut changed = self.refresh_gpui_keep_awake_runtime();
         if self.refresh_gpui_keep_awake_working_session_grace(settings) {

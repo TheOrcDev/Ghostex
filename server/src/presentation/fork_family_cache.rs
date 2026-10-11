@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::Connection;
@@ -39,6 +39,12 @@ pub(crate) fn read_session_fork_families(
             |row| row.get(0),
         )
         .map_err(sql_error)?;
+    /*
+    CDXC:StateSync 2026-09-18 WHY:
+    Legacy registries carry the same sessionId under several projects, and the builder picks among such rows by updatedAt order, which a title write can change without touching the lineage token.
+    The cache used to refuse those registries outright, so one with 50 duplicates rebuilt the whole graph from 9,000 rows on every delta (over half of gxserver's CPU). The duplicates' own order joins the key instead; it is a few rows to read and changes exactly when the pick could.
+    */
+    let revision = format!("{revision}|{}", duplicate_session_order(&transaction)?);
     let database = database.unwrap();
     let cached = {
         let mut cache = cache
@@ -65,13 +71,7 @@ pub(crate) fn read_session_fork_families(
     let rows = DomainRepository::new(&transaction, server_id).list_session_fork_rows()?;
     let families = Arc::new(SessionForkFamilies::build(&rows));
     transaction.commit().map_err(sql_error)?;
-    // Duplicate IDs use the legacy updatedAt ordering to choose a row. Such
-    // registries cannot reuse a lineage-only generation across title updates.
-    let unique_ids = rows
-        .iter()
-        .filter_map(|row| row.get("sessionId").and_then(serde_json::Value::as_str))
-        .collect::<HashSet<_>>();
-    if rows.len() <= MAX_CACHED_SESSIONS && unique_ids.len() == rows.len() {
+    if rows.len() <= MAX_CACHED_SESSIONS {
         let mut cache = cache
             .lock()
             .map_err(|_| DomainStateError::corrupt_state("Session fork cache is poisoned."))?;
@@ -87,4 +87,29 @@ pub(crate) fn read_session_fork_families(
         });
     }
     Ok(families)
+}
+
+/// The ordered rows of every sessionId that appears more than once, which is what decides the builder's pick among them.
+fn duplicate_session_order(db: &Connection) -> Result<String, DomainStateError> {
+    let mut statement = db
+        .prepare(
+            "SELECT sessionId, projectId FROM sessions
+             WHERE sessionId IN (SELECT sessionId FROM sessions GROUP BY sessionId HAVING count(*) > 1)
+             ORDER BY updatedAt DESC, projectId ASC, sessionId ASC",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql_error)?;
+    let mut order = String::new();
+    for row in rows {
+        let (session_id, project_id) = row.map_err(sql_error)?;
+        order.push_str(&session_id);
+        order.push('/');
+        order.push_str(&project_id);
+        order.push(',');
+    }
+    Ok(order)
 }

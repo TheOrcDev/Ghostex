@@ -10,6 +10,83 @@ pub(crate) struct RemoteBrowserRuntime {
 }
 
 impl GhostexGpuiApp {
+    pub(crate) fn browser_project_remote_machine_id(&self) -> Option<String> {
+        self.browser_tabs_project_id
+            .as_deref()
+            .and_then(gpui_remote_project_reference_from_project_id)
+            .map(|reference| reference.remote_machine_id)
+    }
+
+    /// CDXC:RemoteMachines 2026-09-23 WHY:
+    /// Ordinary new Browser tabs belong to their machine-scoped project just like remote links. Assign that computer before the first page load; an unassigned tab uses the local CEF context and sends a remote project's localhost address to this computer.
+    pub(crate) fn assign_new_browser_tab_project_machine(&mut self, tab_id: BrowserTabId) {
+        let remote_machine_id = self.browser_project_remote_machine_id();
+        if let Some(tab) = self
+            .browser_tabs
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
+        {
+            tab.remote_machine_id = remote_machine_id;
+            tab.runtime_favicon_image =
+                browser_favicon_cache_lookup(&tab.url, tab.remote_machine_id.as_deref());
+        }
+    }
+
+    /// CDXC:RemoteMachines 2026-09-23 WHY:
+    /// A loopback link names the session's computer. The OS browser would open this computer instead, so remote chat and terminal links use the machine's embedded SOCKS context even when ordinary web links prefer the external browser. Carry the originating terminal identity through the deferred open, and scope tab reuse to that same machine.
+    pub(crate) fn try_open_remote_loopback_link(
+        &mut self,
+        url: &str,
+        target: GpuiEngineTerminalEventTarget,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !gpui_remote_link_is_loopback(url) {
+            return false;
+        }
+        let remote_project = match target {
+            GpuiEngineTerminalEventTarget::Agents(session_id) => self
+                .remote_attach_sessions
+                .iter()
+                .find_map(|(key, mapped)| {
+                    (*mapped == session_id).then(|| GpuiRemoteProjectReference {
+                        remote_machine_id: key.remote_machine_id.clone(),
+                        project_id: key.project_id.clone(),
+                    })
+                }),
+            GpuiEngineTerminalEventTarget::Command(session_id) => self
+                .command_remote_action_session_for_command_tab(session_id)
+                .map(|reference| GpuiRemoteProjectReference {
+                    remote_machine_id: reference.remote_machine_id,
+                    project_id: reference.project_id,
+                }),
+        };
+        let Some(remote_project) = remote_project else {
+            return false;
+        };
+        let message = GpuiSidebarOpenBrowserUrlMessage {
+            url: url.to_string(),
+            reuse: GpuiBrowserRendererOpenReuse::Similar,
+            from_quick_header: false,
+            project_id: Some(gpui_remote_scoped_project_id(
+                &remote_project.remote_machine_id,
+                &remote_project.project_id,
+            )),
+        };
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.open_browser_url_from_renderer_command_with_machine(
+                    message,
+                    Some(remote_project.remote_machine_id),
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+        true
+    }
+
     pub(crate) fn render_remote_browser_placeholder(
         &self,
         machine_id: &str,
@@ -36,7 +113,7 @@ impl GhostexGpuiApp {
             .justify_center()
             .gap(px(12.0))
             .p(px(24.0))
-            .bg(chrome_color(0x101010, 0xffffff))
+            .bg(glass_clear(chrome_color(0x101010, 0xffffff).into()))
             .child(
                 svg()
                     .path(BROWSER_ICON_WORLD)
@@ -64,8 +141,8 @@ impl GhostexGpuiApp {
                         .py(px(7.0))
                         .rounded(px(8.0))
                         .border_1()
-                        .border_color(chrome_color(0x3b3b3b, 0xd4d4d4))
-                        .bg(chrome_color(0x252525, 0xf0f0f0))
+                        .border_color(glass_divider(chrome_color(0x3b3b3b, 0xd4d4d4).into()))
+                        .bg(glass_card(chrome_color(0x252525, 0xf0f0f0).into(), 1.5))
                         .text_color(chrome_color(0xeeeeee, 0x252525))
                         .cursor_pointer()
                         .child(if connected { "Retry" } else { "Connect" })
@@ -191,6 +268,11 @@ impl GhostexGpuiApp {
                     .iter_mut()
                     .find(|tab| tab.id == tab_id && tab.url == page_url)
                 {
+                    if let Some(cache_key) =
+                        browser_favicon_cache_key(&tab.url, tab.remote_machine_id.as_deref())
+                    {
+                        browser_favicon_cache_store_image(&cache_key, &image);
+                    }
                     tab.runtime_favicon_image = Some(image);
                     app.record_browser_history_page(runtime_key, tab_id, "", false);
                     cx.notify();
@@ -222,9 +304,7 @@ impl GhostexGpuiApp {
         {
             return None;
         }
-        if !self.remote_gxserver_connections.contains_key(machine_id) {
-            return None;
-        }
+        let target = self.gpui_remote_gxserver_request_target(machine_id)?;
         let settings = shared_settings::shared_sidebar_settings_snapshot();
         let config = gpui_remote_machine_config_from_settings(settings.object(), machine_id)?;
         let generation = self
@@ -236,7 +316,7 @@ impl GhostexGpuiApp {
         let background = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             let result = background
-                .spawn(async move { start_remote_browser_tunnel(&config).map(Arc::new) })
+                .spawn(async move { start_remote_browser_tunnel(&config, &target).map(Arc::new) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this
@@ -299,7 +379,7 @@ impl GhostexGpuiApp {
             return;
         }
         let profile = self.browser_profiles.active_profile_id();
-        if let Some(tab_id) = self.browser_tabs.add_loaded_popup_tab(
+        if let Some(tab_id) = self.browser_tabs.open_loaded_popup_tab(
             site.url.clone(),
             profile,
             cef::BrowserPopupPlacement::Selected,
@@ -315,7 +395,7 @@ impl GhostexGpuiApp {
                 tab.runtime_favicon_image = site.favicon;
             }
             self.open_gpui_browser_action_url(site.url, window, cx);
-            self.request_sidebar_browser_tab_reveal(tab_id);
+            self.reveal_new_browser_tab(tab_id);
             self.persist_shell_layout_state();
             cx.notify();
         }
@@ -345,7 +425,7 @@ impl GhostexGpuiApp {
             return;
         }
         let profile = self.browser_profiles.active_profile_id();
-        if let Some(tab_id) = self.browser_tabs.add_loaded_popup_tab(
+        if let Some(tab_id) = self.browser_tabs.open_loaded_popup_tab(
             site.url.clone(),
             profile,
             cef::BrowserPopupPlacement::Selected,
@@ -361,7 +441,7 @@ impl GhostexGpuiApp {
                 tab.runtime_favicon_image = site.favicon;
             }
             self.open_gpui_browser_action_url(site.url, window, cx);
-            self.request_sidebar_browser_tab_reveal(tab_id);
+            self.reveal_new_browser_tab(tab_id);
             self.persist_shell_layout_state();
             cx.notify();
         }

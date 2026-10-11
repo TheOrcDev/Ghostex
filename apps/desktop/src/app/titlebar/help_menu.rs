@@ -1,24 +1,15 @@
-// Titlebar Help: the question-mark button, its sample-question popup menu, and
-// the flow that turns a picked question into a Ghostex Help quick chat.
+// Ghostex Help: the "Ask Ghostex" sample-question popup menu reached from the
+// titlebar's ⋯ menu or the Ghostex Help hotkey, and the flow that turns a picked
+// question into a Ghostex Help quick chat.
 
-use std::time::Duration;
-
-use gpui::AnyElement;
 use gpui::FontWeight;
-use gpui::InteractiveElement as _;
 use gpui::IntoElement;
-use gpui::MouseButton;
-use gpui::MouseDownEvent;
 use gpui::ParentElement as _;
 use gpui::Styled as _;
 use gpui::Window;
 use gpui::div;
-use gpui::prelude::FluentBuilder as _;
 use gpui::px;
-use gpui_component::ElementExt as _;
 use gpui_component::menu::PopupMenu;
-use gpui_component::tooltip::ManagedTooltipExt as _;
-use gpui_component::tooltip::ManagedTooltipPlacement;
 
 use super::popup_menu_builders::titlebar_popup_menu_with_scroll_behavior;
 use crate::app::consts::*;
@@ -26,10 +17,11 @@ use crate::app::helpers::*;
 use crate::app::window::*;
 use crate::*;
 
-/// CDXC:Onboarding 2026-09-09 DECISION:
-/// User: add a question-mark button to the titlebar that opens a dropdown of seven useful sample questions (for example making Claude control Codex, or matching the terminal width to the chat width); picking one starts a Ghostex Help chat.
+/// CDXC:Onboarding 2026-09-21 DECISION:
+/// User: Ask Ghostex goes back to opening as an overlay "just like before" the 2026-09-20 revamp made it a view tab; that tab page is gone and must not come back.
+/// The overlay is a dropdown of seven useful sample questions (for example making Claude control Codex, or matching the terminal width to the chat width); picking one starts a Ghostex Help chat.
 /// The first row is "Ask anything about Ghostex", and the sample rows show a short summary label while the full question is what gets staged.
-/// Picking a row never sends: the chat opens with the question as an editable draft and the user presses Enter (see createGhostexHelpChat in the sidebar runtime).
+/// Picking a row never sends: the chat opens with the question as an editable draft and the user presses Enter (see `gx_store_create_ghostex_help_chat` in gx_store/create/os_integration.rs, formerly createGhostexHelpChat in the sidebar runtime).
 pub(crate) struct GpuiTitlebarHelpQuestion {
     /// Titlebar icon asset for the row; each question gets its own so the
     /// menu does not repeat one glyph seven times.
@@ -229,7 +221,9 @@ impl GhostexGpuiApp {
         cx: &mut gpui::Context<Self>,
     ) {
         let open = !self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::Help);
-        let trigger_bounds = self.titlebar_help_button_bounds.get();
+        // Ask Ghostex is a row of the titlebar's ⋯ menu now, so the hotkey anchors
+        // its panel to that button.
+        let trigger_bounds = self.titlebar_more_button_bounds.get();
         self.set_gpui_titlebar_popup_open(
             GpuiTitlebarPopupKind::Help,
             open,
@@ -241,8 +235,8 @@ impl GhostexGpuiApp {
 
     /// A picked Help row: make sure the bundled `ghostex-help` skill is
     /// installed (a local folder copy, run off the UI thread), then ask the
-    /// sidebar runtime to start a Quick agent chat whose first message invokes
-    /// the skill with the question. The runtime owns quick-workspace creation,
+    /// Rust store (gx_store/create/os_integration.rs) to start a Quick agent chat whose first message invokes
+    /// the skill with the question. The store owns quick-workspace creation,
     /// the default prompt agent, and focusing the new session.
     pub(crate) fn run_gpui_titlebar_help_question(
         &mut self,
@@ -305,86 +299,5 @@ impl GhostexGpuiApp {
             });
         })
         .detach();
-    }
-
-    pub(crate) fn render_titlebar_help_button(
-        &self,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let open = self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::Help);
-        let icon_color = if open {
-            titlebar_icon_hover_color()
-        } else {
-            titlebar_icon_color()
-        };
-        let button_bounds = self.titlebar_help_button_bounds.clone();
-        let trigger_bounds = button_bounds.get();
-
-        div()
-            .id("ghostex-gpui-titlebar-button-help")
-            .relative()
-            .flex()
-            .h(px(TITLEBAR_CONTROL_HEIGHT))
-            .w(px(TITLEBAR_BUTTON_WIDTH))
-            .items_center()
-            .justify_center()
-            .when(cfg!(target_os = "windows"), |this| this.occlude())
-            .border_l_1()
-            .border_color(titlebar_button_border_color())
-            .text_color(icon_color)
-            .cursor_default()
-            .when(open, |this| this.bg(titlebar_active_segment_color()))
-            .hover(move |this| {
-                if open {
-                    this.bg(titlebar_active_segment_color())
-                        .text_color(titlebar_icon_hover_color())
-                } else {
-                    this.bg(titlebar_button_hover_color())
-                        .text_color(titlebar_icon_hover_color())
-                }
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    log_gpui_titlebar_popup_mouse_down(
-                        GpuiTitlebarPopupKind::Help,
-                        "left",
-                        "togglePopup",
-                        open,
-                        trigger_bounds,
-                        event,
-                        window,
-                    );
-                    this.show_gpui_titlebar_help_menu(window, cx);
-                }),
-            )
-            .when(!open, |this| {
-                this.managed_discrete_tooltip_with_placement(
-                    ManagedTooltipPlacement::Left,
-                    Duration::from_millis(300),
-                    |window, cx| titlebar_tooltip(TITLEBAR_HELP_TOOLTIP, window, cx),
-                )
-            })
-            .on_prepaint(move |bounds, window, _cx| {
-                let previous = button_bounds.get();
-                let first_capture = previous.is_none();
-                let moved = previous != Some(bounds);
-                button_bounds.set(Some(bounds));
-                if first_capture || moved {
-                    log_gpui_titlebar_popup_anchor(
-                        GpuiTitlebarPopupKind::Help,
-                        bounds,
-                        first_capture,
-                        moved,
-                        window,
-                    );
-                    window.request_animation_frame();
-                }
-            })
-            .child(titlebar_svg_icon(TITLEBAR_ICON_HELP, 16.0, icon_color))
-            .into_any_element()
     }
 }

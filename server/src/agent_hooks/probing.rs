@@ -143,6 +143,12 @@ pub(crate) fn resolve_cli_command(command: &str, home_dir: &Path) -> Option<Stri
     refresh_resolved_command_path(command, home_dir)
 }
 
+/// The PATH entries the user's login shell sets up, which is what a new session's shell starts with.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn login_shell_path(home_dir: &Path) -> Vec<String> {
+    super::probe_cache::login_shell_path_entries(home_dir)
+}
+
 pub(crate) fn refresh_cli_environment(home_dir: &Path) {
     super::probe_cache::invalidate_login_shell_path(home_dir);
 }
@@ -179,6 +185,20 @@ pub(super) fn resolve_command_path(command: &str, home_dir: &Path) -> Option<Str
         .map(ToString::to_string)
 }
 
+/// Stdout of a one-line CLI script run the way `resolve_command_path` finds CLIs, so a probe reaches the same binary a session would launch.
+pub(crate) fn cli_script_stdout(script: &str, home_dir: &Path, timeout: Duration) -> Option<String> {
+    let shell = command_shell();
+    let mut command_process = Command::new(&shell.executable);
+    command_process.args(shell.profileless_script_args(script));
+    apply_hook_command_environment(&mut command_process, home_dir);
+    #[cfg(not(windows))]
+    command_process.env(
+        "PATH",
+        normalize_gxserver_process_path(std::env::var("PATH").ok().as_deref(), home_dir),
+    );
+    run_command_stdout_with_timeout(command_process, timeout)
+}
+
 pub(crate) fn normalize_gxserver_process_path(
     current_path: Option<&str>,
     home_dir: &Path,
@@ -206,6 +226,12 @@ pub(crate) fn normalize_gxserver_process_path(
         "/usr/sbin".to_string(),
         "/sbin".to_string(),
     ]);
+    // The tools Ghostex installed itself come last (user decision 1A in managed_tools/paths.rs).
+    entries.extend(
+        crate::managed_tools::paths::path_dirs()
+            .iter()
+            .map(|dir| path_string(dir)),
+    );
     unique_path_entries(entries).join(":")
 }
 
@@ -233,6 +259,11 @@ fn run_login_shell_path_probe(shell_path: &str, home_dir: &Path) -> Vec<String> 
         shell.interactive_script_args(&format!("printf '\\n{SHELL_PATH_SENTINEL}%s\\n' \"$PATH\"")),
     );
     apply_hook_command_environment(&mut command, home_dir);
+    // A new terminal starts without the tool folders gxserver appended to its own PATH.
+    command.env(
+        "PATH",
+        crate::managed_tools::paths::process_path_without_tools(),
+    );
     let Some(stdout) = run_command_stdout_with_timeout(command, Duration::from_millis(2_000))
     else {
         return Vec::new();
@@ -256,12 +287,7 @@ pub(crate) fn run_command_stdout_with_timeout(
     mut command: Command,
     timeout: Duration,
 ) -> Option<String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    command
+    crate::platform::process::NoConsoleWindow::no_console_window(&mut command)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

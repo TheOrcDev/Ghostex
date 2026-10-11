@@ -19,6 +19,14 @@ pub(super) fn parse(mut params: Map<String, Value>, flags: &Flags) -> CliResult<
             "select-session-chat-model requires --model <model>, --mode <mode>, or --fast-mode <on|off>.".to_string(),
         ));
     }
+    if let Some(scope) = flags.text("scope") {
+        if !matches!(scope.as_str(), "session" | "default") {
+            return Err(CliError::Other(
+                "select-session-chat-model --scope takes session or default.".to_string(),
+            ));
+        }
+        params.insert("scope".to_string(), Value::String(scope));
+    }
     params.insert("model".to_string(), Value::String(model));
     params.insert("effort".to_string(), Value::String(effort));
     if !options.is_empty() {

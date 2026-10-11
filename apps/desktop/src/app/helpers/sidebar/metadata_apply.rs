@@ -165,6 +165,10 @@ pub(crate) fn gpui_next_sidebar_agent_metadata_state(
                 .collect::<Vec<_>>();
             Ok((next_agents, next_order, None))
         }
+        // gxserver alone decides what turning an agent on or off writes.
+        GpuiSidebarAgentMetadataWrite::SetEnabled { .. } => {
+            Err(GPUI_SIDEBAR_METADATA_GENERIC_ERROR.to_string())
+        }
         GpuiSidebarAgentMetadataWrite::SyncOrder {
             agent_ids,
             request_id,
@@ -206,13 +210,32 @@ pub(crate) fn gpui_next_sidebar_agent_metadata_state(
 
 pub(crate) fn gpui_apply_sidebar_command_metadata_write(
     write: GpuiSidebarCommandMetadataWrite,
+    remote_target: Option<crate::GpuiRemoteGxserverRequestTarget>,
 ) -> Result<Option<serde_json::Value>, String> {
-    let params = gpui_sidebar_command_mutation_params(&write);
-    let result = gpui_gxserver_rpc_result(
-        "/api/mutateSidebarHudSettings",
-        &params,
-        Duration::from_secs(10),
-    )?;
+    let mut params = gpui_sidebar_command_mutation_params(&write);
+    let remote_project = (write.scope() == GpuiSidebarCommandScope::Project)
+        .then(|| {
+            gpui_remote_project_reference_from_project_id(
+                gpui_sidebar_command_write_active_project_id(&write),
+            )
+        })
+        .flatten();
+    let result = if let Some(project) = remote_project {
+        let target = remote_target.ok_or_else(|| "Remote machine is not connected".to_string())?;
+        params["activeProjectId"] = serde_json::Value::String(project.project_id);
+        gpui_remote_gxserver_rpc_result(
+            &target,
+            "/api/mutateSidebarHudSettings",
+            &params,
+            Duration::from_secs(10),
+        )?
+    } else {
+        gpui_gxserver_rpc_result(
+            "/api/mutateSidebarHudSettings",
+            &params,
+            Duration::from_secs(10),
+        )?
+    };
     let item_ids = gpui_sidebar_metadata_mutation_item_ids(&result);
     Ok(match write {
         GpuiSidebarCommandMetadataWrite::SyncOrder { request_id, .. } => Some(
@@ -222,7 +245,6 @@ pub(crate) fn gpui_apply_sidebar_command_metadata_write(
     })
 }
 
-#[allow(dead_code)] // no caller: sidebar agent/command metadata is projected by gxserver now; kept as the local-state derivation
 pub(crate) fn gpui_sidebar_command_write_active_project_id(
     write: &GpuiSidebarCommandMetadataWrite,
 ) -> &str {

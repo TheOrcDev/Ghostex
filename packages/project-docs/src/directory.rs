@@ -118,6 +118,7 @@ pub fn children(
 }
 
 pub fn invalidate() {
+    crate::project::invalidate_indexes();
     if let Some(cache) = CACHE.get() {
         cache
             .lock()

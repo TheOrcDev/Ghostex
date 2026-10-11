@@ -86,6 +86,65 @@ pub fn context_initialized() -> bool {
     CEF_CONTEXT_INITIALIZED.load(Ordering::Acquire)
 }
 
+struct CefRuntimeDemand {
+    sender: futures::channel::mpsc::UnboundedSender<()>,
+    receiver: Mutex<Option<futures::channel::mpsc::UnboundedReceiver<()>>>,
+}
+
+static CEF_RUNTIME_DEMAND: OnceLock<CefRuntimeDemand> = OnceLock::new();
+
+fn runtime_demand() -> &'static CefRuntimeDemand {
+    CEF_RUNTIME_DEMAND.get_or_init(|| {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        CefRuntimeDemand {
+            sender,
+            receiver: Mutex::new(Some(receiver)),
+        }
+    })
+}
+
+/// CDXC:CefRuntime 2026-09-19 DECISION:
+/// User: defer CEF at launch so startup is as fast as possible, and start it when it is actually needed.
+/// Browser creation is the one place that knows a web view is wanted right now, and it runs inside app updates, so it only signals here; the app's listener starts the runtime on its next turn and the existing "not yet" retry paths create the view once the context is ready.
+pub fn request_runtime() {
+    let _ = runtime_demand().sender.unbounded_send(());
+}
+
+/// The app takes this once at launch and starts CEF on the first signal.
+pub fn take_runtime_demand_receiver() -> Option<futures::channel::mpsc::UnboundedReceiver<()>> {
+    runtime_demand()
+        .receiver
+        .lock()
+        .expect("CEF runtime demand mutex should not be poisoned")
+        .take()
+}
+
+/// Adds `feature` to a comma-separated Chromium feature switch
+/// (`enable-features` / `disable-features`), keeping any features CEF or the
+/// caller already put there.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn append_chromium_feature(
+    command_line: &mut CommandLine,
+    switch_name: &str,
+    feature: &str,
+) {
+    let switch_name = CefString::from(switch_name);
+    let existing = CefString::from(&command_line.switch_value(Some(&switch_name))).to_string();
+    let existing = existing.trim().trim_end_matches(',');
+    if existing.split(',').map(str::trim).any(|item| item == feature) {
+        return;
+    }
+    let features = if existing.is_empty() {
+        feature.to_string()
+    } else {
+        format!("{existing},{feature}")
+    };
+    command_line.append_switch_with_value(
+        Some(&switch_name),
+        Some(&CefString::from(features.as_str())),
+    );
+}
+
 wrap_app! {
     pub(crate) struct GhostexGpuiCefApp;
 
@@ -137,6 +196,7 @@ wrap_browser_process_handler! {
             profile on first launch.
             */
             CEF_CONTEXT_INITIALIZED.store(true, Ordering::Release);
+            browser_context_ready("default");
         }
 
         fn on_before_child_process_launch(&self, command_line: Option<&mut CommandLine>) {
@@ -150,6 +210,17 @@ wrap_browser_process_handler! {
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             platform::schedule_message_pump_work(delay_ms);
+        }
+
+        /// CDXC:PlatformSupport 2026-09-28 WHY:
+        /// Opening Ghostex while it already ran (the desktop icon, Start menu or taskbar again) started a second process on the same CEF profile; Chromium handed its command line to this instance, and returning 0 here let Chromium open its own "New Tab - Chromium" window with a "Restore pages?" bubble. Ghostex has no Chromium window of its own, so the relaunch is handled here: bring the Ghostex window forward and open nothing.
+        fn on_already_running_app_relaunch(
+            &self,
+            _command_line: Option<&mut CommandLine>,
+            _current_directory: Option<&CefString>,
+        ) -> c_int {
+            platform::activate_running_app();
+            1
         }
     }
 }
@@ -231,22 +302,19 @@ wrap_focus_handler! {
             let explicitly_active = native_view
                 .is_some_and(|native_view| {
                     active_cef_native_view() == Some(native_view as usize)
-                        || (cfg!(target_os = "windows")
+                        || (cfg!(any(target_os = "windows", target_os = "linux"))
                             && platform::native_view_owns_first_responder(native_view))
                 });
-            let sidebar_editable_focus_granted = native_view.is_some_and(|native_view| {
-                SIDEBAR_EDITABLE_FOCUS_NATIVE_VIEW.load(Ordering::Acquire)
-                    == native_view as usize
-            });
-            #[cfg(target_os = "windows")]
-            let cancel = hidden
-                || (source == FocusSource::NAVIGATION && !sidebar_editable_focus_granted);
-            #[cfg(not(target_os = "windows"))]
+            // CDXC:FocusRouting 2026-09-18 WHY:
+            // Linux has no AppKit mouse hook to mark a clicked CEF view active, and `focus_gpui_root_view` clears the registry on every terminal, chat-composer and chrome-input handoff. Like Windows, a SYSTEM request from the view that already holds native focus (checked against the real X11 focus tree above) establishes ownership; requiring the previous registry owner stranded chat input after any sidebar interaction.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            let cancel = hidden || source == FocusSource::NAVIGATION;
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             let cancel = hidden
                 || responder_outside
                 || !explicitly_active
                 || source == FocusSource::NAVIGATION;
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             if !cancel {
                 if let Some(native_view) = native_view {
                     set_active_cef_native_view(native_view as usize);
@@ -261,7 +329,6 @@ wrap_focus_handler! {
                     "surfaceHidden": hidden,
                     "responderOutside": responder_outside,
                     "explicitlyActive": explicitly_active,
-                    "sidebarEditableFocusGranted": sidebar_editable_focus_granted,
                     "canceled": cancel,
                 }),
             );
@@ -279,7 +346,7 @@ type SurfaceKeyOsEvent<'a> = Option<&'a mut cef::sys::XEvent>;
 
 /*
 CDXC:Browser 2026-09-09 SEE-ALSO:
-Browser CEF child views own page keystrokes, so history must be handled here as well as the GPUI Browser key context in main.rs.
+Browser CEF child views own page keystrokes, so history, reload (F5 and primary+R) and non-macOS find must be handled here as well as the GPUI Browser key context in main.rs.
 Other pages keep their page-owned shortcuts; Windows retains its existing surface zoom commands.
 */
 wrap_keyboard_handler! {
@@ -315,6 +382,30 @@ wrap_keyboard_handler! {
             if event.windows_key_code == history_key && modifiers == history_modifier {
                 if let Some(handler) = &self.page_metadata_handler {
                     handler(BrowserPageMetadataEvent::HistoryRequested);
+                    return 1;
+                }
+            }
+            let primary = if cfg!(target_os = "macos") {
+                command
+            } else {
+                control
+            };
+            // CDXC:Browser 2026-09-21 WHY:
+            // Windows and Linux deliver keys straight to the focused Chromium child window, so the GPUI Find binding never sees Ctrl+F while the page owns the keyboard. macOS reaches that binding through AppKit key equivalents, so raising it here too would be a second path for the same chord.
+            if cfg!(not(target_os = "macos"))
+                && event.windows_key_code == 0x46
+                && modifiers == primary
+            {
+                if let Some(handler) = &self.page_metadata_handler {
+                    handler(BrowserPageMetadataEvent::FindRequested);
+                    return 1;
+                }
+            }
+            let reload_chord = (event.windows_key_code == 0x74 && modifiers == 0)
+                || (event.windows_key_code == 0x52 && modifiers == primary);
+            if reload_chord && self.page_metadata_handler.is_some() {
+                if let Some(browser) = browser.as_deref() {
+                    browser.reload();
                     return 1;
                 }
             }
@@ -389,6 +480,13 @@ pub(crate) fn cef_origins_match(lhs: &str, rhs: &str) -> bool {
     }
 }
 
+/// CDXC:CefRuntime 2026-09-23 WHY:
+/// GPUI's Windows event loop calls ExitProcess after its quit callback, so shutdown after Application::run is unreachable. The app-level observer survives closing the main view; its future runs after GPUI removes the windows and flushes their drops, before Windows tears down CEF's DLL and worker threads.
+#[cfg(target_os = "windows")]
+pub(crate) fn register_windows_shutdown(cx: &gpui::App) {
+    cx.on_app_quit(|_| async { shutdown() }).detach();
+}
+
 #[allow(dead_code)]
 pub fn shutdown() {
     let Some(state) = CEF_RUNTIME.get() else {
@@ -408,6 +506,8 @@ pub fn shutdown() {
     CEF_GLOBAL_REQUEST_CONTEXT.with(|context| {
         context.borrow_mut().take();
     });
+    clear_remote_browser_contexts();
+    clear_workspace_browser_contexts();
     platform::invalidate_message_pump();
     cef::shutdown();
     CEF_CONTEXT_INITIALIZED.store(false, Ordering::Release);

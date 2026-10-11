@@ -60,11 +60,9 @@ impl GhostexGpuiApp {
                             consecutive_errors = 0;
                             continue;
                         }
-                        let _ = this.update(cx, |this, cx| {
+                        let _ = this.update(cx, |this, _| {
                             this.refresh_gpui_remote_gxserver_presentation_in_background(
-                                remote_machine_id.clone(),
-                                false,
-                                cx,
+                                &remote_machine_id,
                             );
                         });
                         return;
@@ -94,17 +92,30 @@ impl GhostexGpuiApp {
         not-connected line instead of quietly disappearing.
         */
         let local_label = if cfg!(target_os = "macos") {
-            "This Mac"
+            "This machine"
         } else if cfg!(target_os = "windows") {
             "This PC"
         } else {
             "This Computer"
         };
-        let mut machines = vec![serde_json::json!({
+        let local = serde_json::json!({
             "label": local_label,
             "machineId": GPUI_ADD_PROJECT_DIALOG_LOCAL_MACHINE_ID,
             "platform": gpui_add_project_dialog_local_platform(),
-        })];
+        });
+        // Only the PowerShell backend browses Windows drives; the WSL backend's gxserver sees Linux paths.
+        #[cfg(target_os = "windows")]
+        let local = {
+            let mut local = local;
+            if matches!(
+                crate::windows_terminal_backend::resolve_current(),
+                Ok(crate::windows_terminal_backend::ResolvedWindowsTerminalBackend::PowerShell)
+            ) {
+                local["startsAtDriveList"] = serde_json::json!(true);
+            }
+            local
+        };
+        let mut machines = vec![local];
         if let Some(saved_machines) = shared_settings::shared_sidebar_settings_snapshot()
             .object()
             .get("remoteMachines")
@@ -122,10 +133,21 @@ impl GhostexGpuiApp {
                     "label": label,
                     "machineId": machine_id,
                 });
-                if self
-                    .gpui_remote_gxserver_request_target(&machine_id)
-                    .is_none()
-                {
+                if let Some(target) = self.gpui_remote_gxserver_request_target(&machine_id) {
+                    // The picker validates the host filesystem, not the client OS.
+                    option["platform"] = serde_json::json!(match target.execution_target {
+                        GpuiRemoteExecutionTarget::WindowsPowerShell => "Win32",
+                        GpuiRemoteExecutionTarget::WindowsWsl { .. } => "Linux",
+                        GpuiRemoteExecutionTarget::PosixHost => "POSIX",
+                    });
+                    if matches!(
+                        target.execution_target,
+                        GpuiRemoteExecutionTarget::WindowsPowerShell
+                    ) {
+                        option["startsAtDriveList"] = serde_json::json!(true);
+                    }
+                } else {
+                    option["platform"] = serde_json::json!("unknown");
                     option["description"] = serde_json::json!("Not connected");
                 }
                 machines.push(option);
@@ -258,7 +280,8 @@ impl GhostexGpuiApp {
             .get("remoteMachineId")
             .and_then(serde_json::Value::as_str)
             .and_then(gpui_normalize_remote_machine_id);
-        let Some(params) = gpui_remote_repository_clone_start_params_from_command(command) else {
+        let Some(mut params) = gpui_remote_repository_clone_start_params_from_command(command)
+        else {
             self.dispatch_gpui_repository_clone_result(
                 request_id,
                 false,
@@ -296,6 +319,15 @@ impl GhostexGpuiApp {
             },
             None => None,
         };
+        // A clone on this computer lands in this window's workspace (`place_added_project`).
+        if target.is_none() {
+            if let (Some(workspace_id), Some(object)) = (
+                self.gx_store_window_non_default_workspace_id(),
+                params.as_object_mut(),
+            ) {
+                object.insert("workspaceId".to_string(), serde_json::json!(workspace_id));
+            }
+        }
         let running_description = if remote_machine_id.is_some() {
             "The remote clone is running."
         } else {

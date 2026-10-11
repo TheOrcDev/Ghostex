@@ -13,6 +13,16 @@ BUILD_NUMBER="$(release_gpui_build_number "$VERSION")"
 MOBILE_ROOT="$REPO_ROOT/apps/mobile/app"
 BUNDLE_ID="com.maddada.ghostex.ios"
 TEAM_ID="KTKP595G3B"
+# true stops after the archive and its Info.plist checks: a compile and signing check that
+# uploads nothing, so it never uses up the version's build number at App Store Connect.
+ARCHIVE_ONLY="${GHOSTEX_IOS_ARCHIVE_ONLY:-false}"
+case "$ARCHIVE_ONLY" in
+true | false) ;;
+*)
+	echo "GHOSTEX_IOS_ARCHIVE_ONLY must be true or false, got $ARCHIVE_ONLY" >&2
+	exit 1
+	;;
+esac
 
 release_gpui_require_command bun
 release_gpui_require_command pod
@@ -20,15 +30,16 @@ release_gpui_require_command xcodebuild
 : "${GHOSTEX_ASC_KEY_PATH:?Missing App Store Connect API key path}"
 : "${GHOSTEX_ASC_KEY_ID:?Missing App Store Connect API key ID}"
 : "${GHOSTEX_ASC_ISSUER_ID:?Missing App Store Connect API issuer ID}"
+: "${GHOSTEX_IOS_SIGNING_CERT_SHA256:?Missing the reused signing certificate fingerprint from the workflow import step}"
 
 export GHOSTEX_RELEASE_VERSION="$VERSION"
 export GHOSTEX_RELEASE_BUILD_NUMBER="$BUILD_NUMBER"
 
-# The React Native app packages the shared chat page as generated WebView
-# assets. Rebuild it from the release checkout so a committed asset from an
-# earlier shared-UI revision can never reach the TestFlight archive.
+# The React Native app's list of chat-capable agents is generated from
+# packages/shared/session-chat-agents.ts. Regenerate it from the release checkout so a
+# committed list from an earlier revision can never reach the TestFlight archive.
 cd "$REPO_ROOT"
-bun run build:mobile-chat
+node apps/mobile/app/scripts/generate-chat-agents.mjs
 
 cd "$MOBILE_ROOT"
 bunx expo prebuild --platform ios --no-install
@@ -76,6 +87,21 @@ INFO_PLIST="$ARCHIVE_PATH/Products/Applications/Ghostex.app/Info.plist"
 [[ "$(plutil -extract CFBundleIdentifier raw "$INFO_PLIST")" == "$BUNDLE_ID" ]]
 [[ "$(plutil -extract CFBundleShortVersionString raw "$INFO_PLIST")" == "$VERSION" ]]
 [[ "$(plutil -extract CFBundleVersion raw "$INFO_PLIST")" == "$BUILD_NUMBER" ]]
+
+# The archive must carry the reused certificate. A different one means xcodebuild created its own,
+# which the certificate cleanup keeps (it is newer than the reused one), so this stops loudly instead.
+codesign -d --extract-certificates="$RUNNER_TEMP/ghostex-archive-signer-" "$ARCHIVE_PATH/Products/Applications/Ghostex.app" 2>/dev/null
+SIGNER_SHA256="$(shasum -a 256 "$RUNNER_TEMP/ghostex-archive-signer-0" | cut -d' ' -f1)"
+[[ "$SIGNER_SHA256" == "$GHOSTEX_IOS_SIGNING_CERT_SHA256" ]] || {
+	echo "Ghostex.app is signed with certificate SHA-256 $SIGNER_SHA256, not the reused one ($GHOSTEX_IOS_SIGNING_CERT_SHA256)" >&2
+	exit 1
+}
+echo "Ghostex.app is signed with the reused signing certificate."
+
+if [[ "$ARCHIVE_ONLY" == true ]]; then
+	echo "Archived Ghostex $VERSION ($BUILD_NUMBER); archive-only run, nothing was uploaded."
+	exit 0
+fi
 
 xcodebuild -exportArchive \
 	-archivePath "$ARCHIVE_PATH" \

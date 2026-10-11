@@ -16,7 +16,7 @@ single small file. Run with:
 // this demo crate root so the real app binary keeps full dead-code coverage.
 #![allow(dead_code)]
 
-#[path = "../ghostty_vt.rs"]
+#[path = "../ghostty_vt/mod.rs"]
 mod ghostty_vt;
 #[path = "../terminal_environment.rs"]
 mod terminal_environment;

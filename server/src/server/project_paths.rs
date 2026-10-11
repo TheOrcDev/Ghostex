@@ -52,12 +52,15 @@ pub(crate) fn handle_browse_project_directories_http(
 
 /// CDXC:AddProject 2026-09-11 DECISION:
 /// User: offer Open existing project for registered paths and the repository root for a pasted file inside a repository.
-/// SEE-ALSO: packages/core-ui/add-project-modal/types.ts, apps/desktop/src/app/helpers/project/add_project_dialog.rs.
+/// SEE-ALSO: packages/core-ui/add-project-modal/types.ts (deleted 2026-10-01), apps/desktop/src/app/helpers/project/add_project_dialog.rs.
 fn browse_project_directories_with_inspection(
     params: &Map<String, Value>,
     state: &AppState,
 ) -> std::result::Result<Value, ProjectPathHttpError> {
     let mut result = browse_project_directories(params, &state.paths.home_dir)?;
+    if result.get("isDriveList").and_then(Value::as_bool) == Some(true) {
+        return Ok(result);
+    }
     let Some(input) = params.get("inspectPath") else {
         return Ok(result);
     };
@@ -73,7 +76,7 @@ fn browse_project_directories_with_inspection(
         Err(error) => {
             return Err(ProjectPathHttpError::bad_request(format!(
                 "Unable to inspect path: {error}"
-            )))
+            )));
         }
     };
     let kind = match metadata.as_ref() {
@@ -289,12 +292,43 @@ pub(crate) fn read_project_directory_browse_params(
     Ok(params.clone())
 }
 
+/// CDXC:AddProject 2026-09-23 WHY:
+/// The root chooser on a native Windows host lists all logical drives. Its isDriveList flag prevents clients from adding the virtual root or creating a folder there, and each fullPath belongs to the host regardless of the client's OS.
+/// CDXC:AddProject 2026-09-28 WHY:
+/// Local folder opens this list on native Windows hosts instead of `~/`, so the host's home folder leads it and stays one click away.
+/// SEE-ALSO: packages/core-ui/add-project-modal/add-project-modal.tsx (deleted 2026-10-01) (source rows).
 pub(crate) fn browse_project_directories(
     params: &Map<String, Value>,
     home_dir: &Path,
 ) -> std::result::Result<Value, ProjectPathHttpError> {
     let partial_path = normalize_browse_path_input(params.get("partialPath"), "partialPath")?;
     let limit = normalize_browse_limit(params.get("limit"))?;
+    #[cfg(windows)]
+    if partial_path == "/" || partial_path == "\\" {
+        // The root picker represents all host drives, not the daemon's current drive.
+        let drives = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+        if drives == 0 {
+            return Err(ProjectPathHttpError::bad_request(
+                "Unable to list Windows drives.",
+            ));
+        }
+        let home = path_to_string(home_dir);
+        let home_entry = (!home.is_empty() && home_dir.is_dir())
+            .then(|| json!({ "name": format!("Home ({home})"), "fullPath": home }));
+        let entries: Vec<Value> = home_entry
+            .into_iter()
+            .chain(
+                (0..26)
+                    .filter(|index| drives & (1 << index) != 0)
+                    .map(|index| {
+                        let path = format!("{}:/", char::from(b'A' + index as u8));
+                        json!({ "name": path, "fullPath": path })
+                    }),
+            )
+            .take(limit)
+            .collect();
+        return Ok(json!({ "entries": entries, "parentPath": "/", "isDriveList": true }));
+    }
     let cwd = params.get("cwd").and_then(Value::as_str);
     let resolved_input_path = resolve_browse_target(cwd, &partial_path, home_dir)?;
     let ends_with_separator =

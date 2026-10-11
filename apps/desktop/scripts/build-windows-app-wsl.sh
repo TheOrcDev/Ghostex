@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CDXC:PlatformSupport 2026-08-02:
-# Build and stage the native Win32 GPUI app from a WSL-owned `bun run start`
+# Build and stage the native Win32 GPUI app from a WSL-owned `cargo xtask start`
 # without routing any part of the workflow through PowerShell. Web resources
 # build with Windows Bun so Vite reads the NTFS checkout natively instead of
 # crawling thousands of modules through WSL's p9 mount. The pinned Windows
@@ -202,6 +202,10 @@ WSL_ZMX_CURRENT_PREFIX="$WSL_GXSERVER_CARGO_OUTPUT_ROOT/zmx-current"
 WSL_ZMX_CACHE_DIR="${GHOSTEX_WINDOWS_WSL_ZMX_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ghostex/zmx-build-cache/$WSL_ZIG_TARGET}"
 ZIG_CACHE="${GHOSTEX_WINDOWS_ZIG_CACHE_DIR:-$GPUI_DIR/build/zig-global-cache-windows}"
 mkdir -p "$CEF_CACHE" "$CARGO_OUTPUT_ROOT" "$WSL_GXSERVER_CARGO_OUTPUT_ROOT" "$WSL_ZMX_CURRENT_PREFIX" "$WSL_ZMX_CACHE_DIR" "$ZIG_CACHE"
+# shellcheck source=cef-distribution.sh
+source "$SCRIPT_DIR/cef-distribution.sh"
+ghostex_prepare_versioned_cef_path "$CEF_CACHE" >/dev/null
+CEF_DISTRIBUTION_DIR="$(ghostex_cef_distribution_dir "$CEF_CACHE" "$RUST_TARGET")"
 
 # Windows Bun keeps the large Vite module graph on native NTFS. Running Linux
 # Node against this /mnt/c checkout serializes more than ten thousand small-file
@@ -213,7 +217,8 @@ REPO_ROOT_WIN="$(wslpath -a -w "$REPO_ROOT")"
 report_build_phase "Building sidebar CSS and CEF web assets..."
 (
 	cd "$REPO_ROOT"
-	"$WINDOWS_BUN" run build:sidebar-css 2>&1 | cat
+	"$WINDOWS_BUN" x tailwindcss -i packages/core-ui/styles/shadcn.css -o packages/core-ui/styles/shadcn.generated.css --minify 2>&1 | cat
+	"$WINDOWS_BUN" apps/editor/scripts/build-editor-web.mjs 2>&1 | cat
 	"$REPO_ROOT/node_modules/.bin/vite.exe" build --config "$GPUI_DIR_WIN\\vite.config.ts" 2>&1 | cat
 )
 
@@ -263,6 +268,8 @@ printf '%s\r\n' \
 	"\"$WINDOWS_CARGO_WIN\" build --release --manifest-path \"$REPO_ROOT_WIN\\server\\Cargo.toml\" --target $RUST_TARGET --bin gxserver --bin ghostex" \
 	'if errorlevel 1 exit /b %errorlevel%' \
 	"\"$WINDOWS_CARGO_WIN\" build --release --locked --manifest-path \"$REPO_ROOT_WIN\\.dependencies\\wmx\\Cargo.toml\" --target $RUST_TARGET" \
+	'if errorlevel 1 exit /b %errorlevel%' \
+	"\"$WINDOWS_CARGO_WIN\" build --release --manifest-path \"$REPO_ROOT_WIN\\apps\\editor\\desktop\\Cargo.toml\" --target $RUST_TARGET" \
 	'exit /b %errorlevel%' \
 	>"$WINDOWS_BUILD_BATCH"
 report_build_phase "Building the native Windows GPUI shell..."
@@ -273,7 +280,7 @@ trap - EXIT
 build_current_wsl_gxserver() {
 	# CDXC:PlatformSupport 2026-08-03:
 	# A WSL-owned Windows development build must package gxserver and zmx from
-	# the same checkout as the native shell. Previously `bun run start` rebuilt
+	# the same checkout as the native shell. Previously `cargo xtask start` rebuilt
 	# GPUI but retained runtime pieces from a cached Linux archive, so daemon and
 	# terminal-title protocol fixes could be missing from the installed app.
 	#
@@ -373,9 +380,9 @@ EOF
 report_build_phase "Building the bundled WSL gxserver and zmx runtime..."
 build_current_wsl_gxserver
 
-CEF_RELEASE="$(dirname "$(find "$CEF_CACHE" -type f -iname libcef.dll -print -quit)")"
+CEF_RELEASE="$(dirname "$(find "$CEF_DISTRIBUTION_DIR" -type f -iname libcef.dll -print -quit 2>/dev/null)")"
 if [[ -z "$CEF_RELEASE" || ! -f "$CEF_RELEASE/libcef.dll" ]]; then
-	echo "cef-rs did not produce libcef.dll under $CEF_CACHE" >&2
+	echo "cef-rs did not produce libcef.dll under $CEF_DISTRIBUTION_DIR" >&2
 	exit 1
 fi
 CEF_RESOURCES="$CEF_RELEASE"
@@ -432,6 +439,10 @@ else
 	cp "$RUST_RELEASE_DIR/ghostex-gpui.exe" "$APP_DIR/Ghostex.exe"
 fi
 cp "$RUST_RELEASE_DIR/ghostex-gpui-cef-helper.exe" "$APP_DIR/"
+# Keep the Windows prompt helper and its composer page together in both build routes.
+mkdir -p "$APP_DIR/resources/GhostexEditor"
+cp "$RUST_RELEASE_DIR/ghostex-editor.exe" "$APP_DIR/resources/GhostexEditor/GhostexEditor.exe"
+cp -R "$REPO_ROOT/apps/editor/dist/web" "$APP_DIR/resources/GhostexEditor/web"
 mkdir -p "$APP_DIR/resources/native"
 for native_binary in gxserver.exe ghostex.exe wmx.exe; do
 	cp "$RUST_RELEASE_DIR/$native_binary" "$APP_DIR/resources/native/$native_binary"

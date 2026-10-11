@@ -39,8 +39,16 @@ impl GhostexGpuiApp {
             .get("automatic")
             .and_then(serde_json::Value::as_bool)
             == Some(true);
+        if !self.remote_reconnect_admit(&remote_machine_id, automatic) {
+            return;
+        }
         let connect_generation =
             self.next_gpui_remote_gxserver_connect_generation(&remote_machine_id);
+        let settings_snapshot = shared_settings::shared_sidebar_settings_snapshot();
+        let config = gpui_remote_machine_config_from_settings(
+            settings_snapshot.object(),
+            &remote_machine_id,
+        );
         if self
             .source_code_server_runtime
             .target
@@ -55,13 +63,22 @@ impl GhostexGpuiApp {
                 )
             })
         {
-            self.stop_source_code_server_runtime(cx);
+            self.refresh_source_code_server_runtime_child(cx);
+            // CDXC:CodeEditor 2026-09-23 WHY:
+            // Code owns a separate SSH connection. Restarting it for an automatic API-only reconnect races the old listener's shutdown and can accept that old listener as the new launch's readiness.
+            let preserve_code = automatic
+                && !install_approved
+                && self.source_code_server_runtime.state == SourceCodeServerRuntimeLaunchState::Ready
+                && config.as_ref().is_some_and(|config| {
+                    !config.disabled && self.source_code_server_runtime.target.as_ref().is_some_and(|target| {
+                        matches!(&target.endpoint, SourceCodeServerRuntimeEndpoint::Remote { machine_config, .. } if machine_config == config)
+                    })
+                });
+            if !preserve_code {
+                self.stop_source_code_server_runtime(cx);
+            }
         }
-        let settings_snapshot = shared_settings::shared_sidebar_settings_snapshot();
-        let Some(config) = gpui_remote_machine_config_from_settings(
-            settings_snapshot.object(),
-            &remote_machine_id,
-        ) else {
+        let Some(config) = config else {
             self.dispatch_gpui_remote_machine_status(remote_machine_id.as_str(), "invalid", cx);
             self.dispatch_gpui_app_modal_toast(
                 "warning",
@@ -197,14 +214,6 @@ impl GhostexGpuiApp {
                         None,
                         cx,
                     );
-                    self.clear_project_editor_companion_remote_attach_states_for_machine(
-                        remote_machine_id.as_str(),
-                    );
-                    self.reattach_project_editor_companion_remote_terminal_after_reconnect(
-                        remote_machine_id.as_str(),
-                        connect_generation,
-                        cx,
-                    );
                     let reconnects_active_remote_docs = self
                         .latest_sidebar_project_snapshot
                         .as_ref()
@@ -301,143 +310,5 @@ impl GhostexGpuiApp {
                 }
             }
         }
-    }
-
-    pub(crate) fn reattach_project_editor_companion_remote_terminal_after_reconnect(
-        &mut self,
-        remote_machine_id: &str,
-        connection_generation: u64,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.active_mode.is_project_editor_mode() || !self.project_editor_companion_is_visible()
-        {
-            return;
-        }
-        let Some(GpuiWorkspaceTerminalSessionKey::Remote(key)) =
-            self.project_editor_companion_active_terminal_key()
-        else {
-            return;
-        };
-        if key.remote_machine_id != remote_machine_id {
-            return;
-        }
-        if !self.gpui_remote_gxserver_connect_generation_is_current(
-            remote_machine_id,
-            connection_generation,
-        ) {
-            return;
-        }
-        let Some(shell_session_id) = self.remote_attach_sessions.get(&key).copied() else {
-            return;
-        };
-        let Some(slot_id) = self
-            .current_project_editor_companion_terminal_body_mount_slots()
-            .into_iter()
-            .find(|slot_id| slot_id.session_id == shell_session_id)
-        else {
-            return;
-        };
-        let attempt = GpuiProjectEditorCompanionRemoteAttachAttempt {
-            connection_generation,
-            remote_key: key.clone(),
-        };
-        if !self.project_editor_companion_remote_attach_attempt_is_current(slot_id, &attempt) {
-            return;
-        }
-        self.project_editor_companion_remote_attach_states.insert(
-            slot_id,
-            GpuiProjectEditorCompanionRemoteAttachState::Preparing(attempt.clone()),
-        );
-        let Some(target) = self.gpui_remote_gxserver_request_target(remote_machine_id) else {
-            self.record_project_editor_companion_remote_attach_unavailable(
-                slot_id,
-                attempt,
-                "Reconnect the remote machine to show this terminal.".to_string(),
-            );
-            return;
-        };
-        let settings_snapshot = shared_settings::shared_sidebar_settings_snapshot();
-        let Some(config) =
-            gpui_remote_machine_config_from_settings(settings_snapshot.object(), remote_machine_id)
-        else {
-            self.record_project_editor_companion_remote_attach_unavailable(
-                slot_id,
-                attempt,
-                "The saved remote machine is missing required SSH settings.".to_string(),
-            );
-            return;
-        };
-        let reference = GpuiRemoteAttachSessionReference {
-            remote_machine_id: key.remote_machine_id,
-            project_id: key.project_id,
-            session_id: key.session_id,
-        };
-        let background = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            let prepare_reference = reference.clone();
-            let result = background
-                .spawn(async move {
-                    gpui_prepare_remote_attach_terminal_plan(
-                        &config,
-                        &target,
-                        &prepare_reference,
-                        true,
-                        true,
-                    )
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.gpui_remote_gxserver_connect_generation_is_current(
-                    reference.remote_machine_id.as_str(),
-                    connection_generation,
-                ) || !this
-                    .project_editor_companion_remote_attach_states
-                    .get(&slot_id)
-                    .is_some_and(|state| state.attempt() == &attempt)
-                    || !this.project_editor_companion_remote_attach_attempt_is_current(
-                        slot_id, &attempt,
-                    )
-                {
-                    if this
-                        .project_editor_companion_remote_attach_states
-                        .get(&slot_id)
-                        .is_some_and(|state| state.attempt() == &attempt)
-                    {
-                        this.project_editor_companion_remote_attach_states
-                            .remove(&slot_id);
-                    }
-                    return;
-                }
-                let expected_key = GpuiRemoteAttachSessionKey::from(&reference);
-                if this.project_editor_companion_active_terminal_key()
-                    != Some(GpuiWorkspaceTerminalSessionKey::Remote(expected_key))
-                {
-                    this.project_editor_companion_remote_attach_states
-                        .remove(&slot_id);
-                    return;
-                }
-                let plan = match result {
-                    Ok(plan) => plan,
-                    Err(message) => {
-                        this.record_project_editor_companion_remote_attach_unavailable(
-                            slot_id, attempt, message,
-                        );
-                        cx.notify();
-                        return;
-                    }
-                };
-                this.project_editor_companion_remote_attach_states
-                    .remove(&slot_id);
-                this.open_gpui_remote_attach_terminal(
-                    reference,
-                    plan,
-                    None,
-                    AgentsWorkspaceNewTerminalPlacement::Tab,
-                    GpuiRemoteAttachOpenIntent::AttachExistingSession,
-                    cx,
-                );
-            });
-        })
-        .detach();
     }
 }

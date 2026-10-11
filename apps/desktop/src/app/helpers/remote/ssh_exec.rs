@@ -14,7 +14,7 @@ use std::{
 use crate::app::helpers::*;
 use crate::*;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_run_remote_ssh(
     config: &GpuiRemoteMachineConfig,
     remote_command: &str,
@@ -28,7 +28,7 @@ pub(crate) fn gpui_run_remote_ssh(
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_run_remote_ssh_in_execution_target(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -39,7 +39,45 @@ pub(crate) fn gpui_run_remote_ssh_in_execution_target(
     gpui_run_remote_ssh_raw(config, command.as_str(), timeout)
 }
 
-#[cfg(target_os = "macos")]
+/// CDXC:CodeEditor 2026-09-23 WHY:
+/// Native Windows rejects sufficiently large encoded commands before PowerShell starts. Code file/folder scripts have no input payload, so send the script through SSH stdin with a fixed reader instead of depending on compression to fit cmd's limit.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub(crate) fn gpui_run_remote_ssh_script_in_execution_target(
+    config: &GpuiRemoteMachineConfig,
+    execution_target: &GpuiRemoteExecutionTarget,
+    script: &str,
+    timeout: Duration,
+) -> GpuiRemoteProcessResult {
+    if !matches!(
+        execution_target,
+        GpuiRemoteExecutionTarget::WindowsPowerShell
+    ) {
+        return gpui_run_remote_ssh_in_execution_target(config, execution_target, script, timeout);
+    }
+    let target_arguments = match gpui_remote_ssh_target_arguments(config) {
+        Ok(arguments) => arguments,
+        Err(message) => return gpui_remote_ssh_refused_process_result(message),
+    };
+    let askpass = match gpui_remote_ssh_askpass_script(config) {
+        Ok(askpass) => askpass,
+        Err(message) => return gpui_remote_ssh_refused_process_result(message),
+    };
+    let mut arguments = gpui_remote_ssh_client_options(config.has_saved_password);
+    arguments.extend(target_arguments);
+    arguments.push(gpui_remote_command_for_execution_target(
+        execution_target,
+        "$gxScript=[Console]::In.ReadToEnd(); & ([ScriptBlock]::Create($gxScript))",
+    ));
+    gpui_run_remote_process_with_stdin_bytes(
+        &gpui_remote_ssh_executable(),
+        &arguments,
+        gpui_remote_ssh_askpass_environment(askpass.as_ref()),
+        script.as_bytes().to_vec(),
+        timeout,
+    )
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_run_remote_ssh_in_windows_wsl(
     config: &GpuiRemoteMachineConfig,
     distribution: Option<&str>,
@@ -50,7 +88,7 @@ pub(crate) fn gpui_run_remote_ssh_in_windows_wsl(
     gpui_run_remote_ssh_raw(config, command.as_str(), timeout)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_run_remote_ssh_raw(
     config: &GpuiRemoteMachineConfig,
     remote_command: &str,
@@ -62,10 +100,10 @@ pub(crate) fn gpui_run_remote_ssh_raw(
     };
     let askpass = match gpui_remote_ssh_askpass_script(config) {
         Ok(askpass) => askpass,
-        Err(_) => {
+        Err(message) => {
             return GpuiRemoteProcessResult {
                 exit_code: 126,
-                stderr: "Could not prepare SSH password helper.".to_string(),
+                stderr: message,
                 stdout: String::new(),
             };
         }
@@ -74,14 +112,14 @@ pub(crate) fn gpui_run_remote_ssh_raw(
     arguments.extend(target_arguments);
     arguments.push(remote_command.to_string());
     gpui_run_remote_process(
-        "/usr/bin/ssh",
+        &gpui_remote_ssh_executable(),
         &arguments,
         gpui_remote_ssh_askpass_environment(askpass.as_ref()),
         timeout,
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_run_remote_ssh_with_stdin_file_in_execution_target(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -95,10 +133,10 @@ pub(crate) fn gpui_run_remote_ssh_with_stdin_file_in_execution_target(
     };
     let askpass = match gpui_remote_ssh_askpass_script(config) {
         Ok(askpass) => askpass,
-        Err(_) => {
+        Err(message) => {
             return GpuiRemoteProcessResult {
                 exit_code: 126,
-                stderr: "Could not prepare SSH password helper.".to_string(),
+                stderr: message,
                 stdout: String::new(),
             };
         }
@@ -110,7 +148,7 @@ pub(crate) fn gpui_run_remote_ssh_with_stdin_file_in_execution_target(
         remote_command,
     ));
     gpui_run_remote_process_with_stdin_file(
-        "/usr/bin/ssh",
+        &gpui_remote_ssh_executable(),
         &arguments,
         gpui_remote_ssh_askpass_environment(askpass.as_ref()),
         stdin_path,
@@ -118,7 +156,7 @@ pub(crate) fn gpui_run_remote_ssh_with_stdin_file_in_execution_target(
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_upload_terminal_attachment_to_remote(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -176,7 +214,7 @@ pub(crate) fn gpui_upload_terminal_attachment_to_remote(
             "ghostex-gpui-terminal-attachment-{}-{unique_id}.tar.gz",
             std::process::id()
         ));
-        let archive_status = Command::new("/usr/bin/tar")
+        let archive_status = gpui_remote_background_command(&gpui_remote_tar_executable())
             .arg("-czf")
             .arg(staged_archive.as_path())
             .arg("-C")
@@ -224,7 +262,7 @@ pub(crate) fn gpui_upload_terminal_attachment_to_remote(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_upload_terminal_attachment_to_remote(
     _config: &GpuiRemoteMachineConfig,
     _execution_target: &GpuiRemoteExecutionTarget,
@@ -233,7 +271,7 @@ pub(crate) fn gpui_upload_terminal_attachment_to_remote(
     Err("Remote attachments are unavailable in this GPUI build.".to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_upload_terminal_clipboard_image_to_remote(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -268,7 +306,7 @@ pub(crate) fn gpui_upload_terminal_clipboard_image_to_remote(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_upload_terminal_clipboard_image_to_remote(
     _config: &GpuiRemoteMachineConfig,
     _execution_target: &GpuiRemoteExecutionTarget,
@@ -304,15 +342,13 @@ pub(crate) fn gpui_terminal_attachment_sanitized_filename(path: &Path) -> Result
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_remote_ssh_client_options(has_saved_password: bool) -> Vec<String> {
     /*
     CDXC:RemoteMachines 2026-06-24-14:34:
     Password-backed GPUI Remote machines use the same SSH askpass boundary as Swift: disable BatchMode, allow exactly one password prompt, and have the helper read the saved credential from Keychain. Key-only machines keep BatchMode so SSH cannot hang waiting for interactive input.
     */
     let mut arguments = vec![
-        "-o".to_string(),
-        "UseKeychain=yes".to_string(),
         "-o".to_string(),
         "AddKeysToAgent=yes".to_string(),
         "-o".to_string(),
@@ -326,6 +362,8 @@ pub(crate) fn gpui_remote_ssh_client_options(has_saved_password: bool) -> Vec<St
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
     ];
+    #[cfg(target_os = "macos")]
+    arguments.extend(["-o".to_string(), "UseKeychain=yes".to_string()]);
     if has_saved_password {
         arguments.extend([
             "-o".to_string(),
@@ -343,7 +381,7 @@ pub(crate) fn gpui_remote_ssh_client_options(has_saved_password: bool) -> Vec<St
     arguments
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_remote_ssh_client_options(has_saved_password: bool) -> Vec<String> {
     let mut arguments = vec![
         "-o".to_string(),
@@ -365,7 +403,7 @@ pub(crate) fn gpui_remote_ssh_client_options(has_saved_password: bool) -> Vec<St
     arguments
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_remote_ssh_target_arguments(
     config: &GpuiRemoteMachineConfig,
 ) -> Result<Vec<String>, String> {
@@ -382,7 +420,7 @@ pub(crate) fn gpui_remote_ssh_target_arguments(
     Ok(arguments)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_remote_ssh_target_arguments(
     config: &GpuiRemoteMachineConfig,
 ) -> Result<Vec<String>, String> {
@@ -454,4 +492,21 @@ pub(crate) fn gpui_login_shell_remote_command(command: &str) -> String {
     format!(
         "if [ -x /bin/zsh ]; then exec /bin/zsh -lic {quoted_command}; elif command -v zsh >/dev/null 2>&1; then exec zsh -lic {quoted_command}; else exec /bin/sh -lc {quoted_command}; fi"
     )
+}
+
+/// CDXC:RemoteMachines 2026-09-18 WHY:
+/// A managed tunnel must own its SSH process and forwarding socket. Reusing a user-configured multiplexing master can make the child exit successfully before the readiness probe and leaves tunnel shutdown tied to an unrelated master.
+/// SEE-ALSO: tunnel_and_auth.rs, browser_tunnel.rs, source_code_server.rs.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub(crate) fn gpui_remote_ssh_tunnel_options(has_saved_password: bool) -> Vec<String> {
+    let mut arguments = gpui_remote_ssh_client_options(has_saved_password);
+    arguments.extend([
+        "-o".to_string(),
+        "ControlMaster=no".to_string(),
+        "-o".to_string(),
+        "ControlPath=none".to_string(),
+        "-o".to_string(),
+        "ForkAfterAuthentication=no".to_string(),
+    ]);
+    arguments
 }

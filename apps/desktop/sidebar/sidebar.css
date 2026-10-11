@@ -8,7 +8,12 @@ body,
 }
 
 body {
-  background: #0e0e0e;
+  background: var(--app-background, var(--ghostex-sidebar-initial-background));
+  transition: none;
+}
+
+body[data-sidebar-starting] {
+  background: var(--ghostex-sidebar-initial-background);
 }
 
 .gpui-sidebar {

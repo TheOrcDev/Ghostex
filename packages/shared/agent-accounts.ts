@@ -19,8 +19,8 @@ export interface AccountPolicy {
   retryErrors: boolean;
 }
 export const DEFAULT_ACCOUNT_POLICY: AccountPolicy = {
-  enabled: false,
-  atLimit: 'wait',
+  enabled: true,
+  atLimit: 'switch',
   priority: 'soonestReset',
   retryErrors: true,
 };
@@ -53,7 +53,7 @@ export interface AgentAccount {
   status: 'ready' | 'loginRequired' | 'unavailable' | 'identityChanged';
   usage: AccountUsageWindow[];
   resetCredits?: number;
-  resetCreditDetails?: { id: string; expiresAt: string | null }[] | null;
+  resetCreditDetails?: { id: string; expiresAt: string | null; note?: string }[] | null;
   resetCreditsError?: string | null;
   showInTitlebar?: boolean;
   usageUpdatedAt?: string;
@@ -67,6 +67,31 @@ export interface AccountHelper {
   error?: string;
   installCommand: string;
   loginCommand: string;
+}
+export type AccountHelperToolAction = 'install' | 'update' | 'reinstall' | 'uninstall';
+/** Claude Swap or Codex Swap as installed on the machine, from gxserver's `helperStatus`. */
+export interface AccountHelperTool {
+  provider: AccountProvider;
+  installed: boolean;
+  path?: string;
+  installMethod?: 'uv' | 'pipx' | 'homebrew' | 'cargo' | 'script' | 'windowsInstaller' | 'unknown';
+  /** The actions gxserver can run now: `install` when missing, otherwise those the install method allows (empty when it cannot tell how it was installed). */
+  actions: AccountHelperToolAction[];
+  /** Tooltip for Install: exactly how Ghostex installs the helper. */
+  installPlan?: string;
+  /** Why Install cannot run here. */
+  unavailableReason?: string | null;
+  version?: string | null;
+  latestVersion?: string | null;
+  updateAvailable?: boolean | null;
+  checkError?: string | null;
+  job?: {
+    action: AccountHelperToolAction;
+    status: 'running' | 'complete' | 'failed';
+    output: string;
+    error?: string | null;
+    finishedAt?: string | null;
+  } | null;
 }
 /** Real account-switch stages carried by chat reads, snapshots and state frames. Omission leaves the last value; null clears it. */
 export interface AccountSwitchProgress {
@@ -103,6 +128,7 @@ export interface AgentAccountsState {
   setupJobs?: AccountSetupJob[];
   accounts: AgentAccount[];
   helpers: AccountHelper[];
+  helperTools?: AccountHelperTool[];
   defaults: Record<AccountProvider, AccountPolicy>;
   /** Effective account for new sessions per provider, resolved by gxserver from the provider's rule. */
   defaultAccounts: Partial<Record<AccountProvider, string>>;
@@ -128,7 +154,7 @@ export function quickLaunchAccountId(state: AgentAccountsState, provider: Accoun
 }
 
 export type AgentAccountsRequest =
-  | { operation: 'prepareReset'; id: string }
+  | { operation: 'redeemReset'; id: string; creditId: string; requestId: string }
   | { operation: 'titlebar'; cachedOnly?: boolean }
   | { operation: 'setTitlebar'; id: string; shown: boolean }
   | {
@@ -139,6 +165,9 @@ export type AgentAccountsRequest =
       shareHistory: true;
       accountId?: string;
       selector?: string;
+      /** Retry after sleeping these sessions and letting xswap end any other Codex it named. */
+      stopCodex?: true;
+      sleepSessions?: { projectId: string; sessionId: string }[];
     }
   | { operation: 'setupStatus'; owner: string }
   | { operation: 'setupInput'; owner: string; jobId: string; input: string }
@@ -153,7 +182,9 @@ export type AgentAccountsRequest =
   | { operation: 'session'; refresh?: boolean }
   | { operation: 'sessionPolicy'; policy: AccountPolicy | null }
   | { operation: 'select'; accountId: string | null }
-  | { operation: 'stopRecovery' };
+  | { operation: 'stopRecovery' }
+  | { operation: 'helperStatus'; fresh?: boolean }
+  | { operation: 'helperAction'; provider: AccountProvider; action: AccountHelperToolAction };
 export type AccountsTransport = (request: AgentAccountsRequest) => Promise<AgentAccountsState>;
 export interface AccountSetupJob {
   createdAt: number;
@@ -165,6 +196,11 @@ export interface AccountSetupJob {
   url?: string;
   output: string;
   error?: string;
+  /** Codex processes that stopped an xswap login: Ghostex sessions to sleep, and how many run outside Ghostex. */
+  blockers?: {
+    sessions: { projectId: string; sessionId: string; title: string }[];
+    others: number;
+  };
   acknowledged: boolean;
 }
 

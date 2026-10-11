@@ -15,6 +15,64 @@ pub fn format_help_command(signature: &str, description: &str) -> String {
     format!("  {signature}{}{description}", " ".repeat(gap_width))
 }
 
+/// `ghostex <command> --help`: the catalog rows for that one command, or the whole catalog when
+/// none name it.
+///
+/// CDXC:Cli 2026-09-24 WHY:
+/// A test agent reading another thread ran `read-session-chat --help` and got the 100-line catalog,
+/// then had to grep it for the two rows that mattered.
+pub fn command_usage(command_name: &str) -> String {
+    let catalog = usage();
+    let rows: Vec<&str> = catalog
+        .lines()
+        .filter(|line| {
+            let signature = line.trim_start();
+            line.starts_with("  ")
+                && (signature == command_name
+                    || signature.starts_with(&format!("{command_name} "))
+                    || signature.starts_with(&format!("{command_name} |")))
+        })
+        .collect();
+    if rows.is_empty() {
+        return catalog;
+    }
+    let mut text = format!("Usage:\n{}\n", rows.join("\n"));
+    if command_name == "read-session-chat" {
+        text.push_str(READ_SESSION_CHAT_HELP);
+    }
+    text.push_str("\nEvery command: ghostex --help");
+    text
+}
+
+const READ_SESSION_CHAT_HELP: &str = "
+Examples:
+  ghostex read-session-chat <session> --grep \"mobile|react native\" --context 1 --format text
+  ghostex read-session-chat <session> --all --role user --format text
+  ghostex read-session-chat <session> --since \"2026-09-21 23:00\" --until \"2026-09-21 23:30\" --format text
+  ghostex read-session-chat <session> --grep \"rust only\" --role user --before 0 --after 1 --format text
+
+<session> is a title, session id, global ref (S…:P…:G…), zmx name, agent session id, or the
+Session ID or Routing ID from the sidebar's Copy Details. Sleeping sessions read without waking.
+
+Whole-thread reader (any of these flags switches to it):
+  --all                 Walk the thread back to its first turn. Older turns come as prompt plus
+                        final reply, their tool work collapsed into one note.
+  --grep <a|b>          Case-insensitive plain-text search over the whole thread (not a regex;
+                        ^ $ . * match themselves); | separates alternatives. Matched rows are
+                        marked \"match\" in text output.
+  --role <list>         user, assistant, tool, system, reasoning or harness (injected task
+                        notifications and reminders). With --grep it limits which rows match.
+  --context <n>         Keep n rows before and after each match.
+  --before <n>          Keep n rows before each match (overrides --context on that side).
+  --after <n>           Keep n rows after each match; --before 0 --after 1 gives a prompt and its reply.
+  --since <date>        Keep rows at or after a local date or time (2026-09-21, 2026-09-21T18:00).
+  --until <date>        Keep rows before a local date or time; with --since it reads one window.
+  --last <n>            Keep only the newest n of the rows left after the other filters (with
+                        --grep, the newest n matches).
+  --format text|json    text prints a readable conversation in local time; json is the default.
+  --history-mode detail Every row, including each tool call, instead of collapsed turns.
+";
+
 /// The automations module owns the commands; this file owns their help rows.
 fn automation_help_commands() -> Vec<String> {
     vec![
@@ -56,7 +114,7 @@ pub fn usage() -> String {
             "Connect a new Claude account, or reconnect a selected cswap account",
         ),
         format_help_command(
-            "sessions | s | ls [--ungrouped|-u] [--json] [--mobile-summary]",
+            "sessions | s | ls [--ungrouped|-u] [--json [--full]] [--mobile-summary]",
             "List running terminal sessions",
         ),
         format_help_command(
@@ -147,11 +205,11 @@ pub fn usage() -> String {
             "Create a Quick chat workspace with its first terminal session",
         ),
         format_help_command(
-            "create-agent <agentId> --project-id id [--group-id id] [--first-input-draft text] [--defer-start]",
-            "Create and start a configured agent session; --first-input-draft stages text in its input without sending",
+            "create-agent <agentId> --project-id id [--group-id id] [--model m] [--effort e] [--first-input-draft text] [--run-on location] [--defer-start] [--replace-empty-sessions]",
+            "Create and start a configured agent session; --model/--effort (Claude, Codex; Pi takes provider/model and a thinking level) apply to this session only; Empryo takes provider/model and starts on it without changing Empryo's default; --first-input-draft stages text in its input without sending; --run-on local|docker|hetzner|vercel|daytona|e2b|digitalocean|docker:<host> runs Claude, Codex, OpenCode or Pi in an agentbox box",
         ),
         format_help_command(
-            "board start-work <bead-id> [--agent id] [--project-path path|--project-id id] [--json]",
+            "board start-work <bead-id> [--agent id] [--model m] [--effort e] [--project-path path|--project-id id] [--json]",
             "Dispatch a Project Board bead: reuse its usable linked session or create the worker",
         ),
         format_help_command(
@@ -161,6 +219,14 @@ pub fn usage() -> String {
         format_help_command(
             "notify --title text [--body text] [--session-id id]",
             "Post a notification to the Ghostex bell for a session; defaults to the calling session",
+        ),
+        format_help_command(
+            "show <file.html> [--title text] [--browser] [--json]",
+            "Publish a self-contained HTML page and print the ```visual block that shows it as a card in the chat; the card opens it in a floating window over the chat (--browser: in the browser). Questions written as <gx-questions> (or the page's own ghostex.submit(answers)) send the reader's answers back to you as a message",
+        ),
+        format_help_command(
+            "visual check <file.json|-> [--width N] [--light] [--out file.png]",
+            "Draw a ```visual block's JSON to a PNG and print its path, or read a ```questions block and list its questions, so an agent can check it before replying",
         ),
         format_help_command("run-agent <agentId>", "Run a configured agent button"),
         format_help_command(
@@ -180,8 +246,8 @@ pub fn usage() -> String {
             "Move a project in the desktop sidebar order",
         ),
         format_help_command(
-            "add-project <path> [--name name] [--create-if-missing]",
-            "Add a project to Ghostex; --create-if-missing creates the folder first",
+            "add-project <path> [--name name] [--create-if-missing] [--workspace name|id]",
+            "Add a project to Ghostex (in Personal unless --workspace names another workspace); --create-if-missing creates the folder first",
         ),
         format_help_command(
             "group-project (--project-id id|--path path|--name name) --group title",
@@ -200,7 +266,7 @@ pub fn usage() -> String {
             "Resolve a repository into its clone URLs",
         ),
         format_help_command(
-            "clone-repository <remoteUrl> <destinationPath> --json",
+            "clone-repository <remoteUrl> <destinationPath> [--workspace name|id] --json",
             "Clone a repository and register it as a project (waits for the job)",
         ),
         format_help_command(
@@ -285,6 +351,10 @@ pub fn usage() -> String {
             "Open Settings on a tab, with the setting's row searched",
         ),
         format_help_command(
+            "settings hotkeys [list|get|set|reset] ...",
+            "List hotkeys, or change, unassign or reset one (or --all) through the running desktop app",
+        ),
+        format_help_command(
             "guide [overview|features|settings|hotkeys]",
             "Print the built-in Ghostex guide, or one chapter of it",
         ),
@@ -293,16 +363,10 @@ pub fn usage() -> String {
     .join("\n");
 
     let automation_commands = {
-        let mut lines = vec![
-            format_help_command(
-                "automations --help",
-                "Show the complete scheduled automation workflow",
-            ),
-            format_help_command(
-                "save-agent --agent-id id --name name --command command",
-                "Unsupported renderer-era agent-button writer; not a project quick action",
-            ),
-        ];
+        let mut lines = vec![format_help_command(
+            "automations --help",
+            "Show the complete scheduled automation workflow",
+        )];
         lines.extend(automation_help_commands());
         lines.push(format_help_command(
             "bd <args...>",
@@ -314,18 +378,18 @@ pub fn usage() -> String {
     let input_commands = [
         format_help_command("send-text <selector> <text>", "Type text into a session by id or quoted title"),
         format_help_command("send-enter <selector>", "Send Enter to a session by id or quoted title"),
-        format_help_command("send-key <selector> <key>", "Send ctrl-c, escape, tab, or arrow keys"),
+        format_help_command("send-key <selector> <key>", "Send enter, ctrl-c, escape, tab, or arrow keys"),
         format_help_command("send-message <selector> <text>", "Type text and Enter into an existing session"),
-        format_help_command("send-message <agentId> <text>", "Unsupported in gxserver cutover until renderer-created visible sessions land"),
         format_help_command("read-text <selector> [--lines n] [--visible] [--json]", "Read terminal text by id or quoted title"),
         format_help_command("search-agent-prompts [--query text] [--agents a,b] [--project path] [--group-by-day] [--limit n] [--offset n] --json", "Search every prompt this machine has sent to an agent (the GUI behind gx f)"),
         format_help_command("read-agent-prompt-text --key <key> --json", "Read one prompt's full text by the key a search row reported"),
         format_help_command("toggle-agent-prompt-favorite --key <key> [--favorite true|false] --json", "Star or unstar a prompt; shares gx f's favorites file"),
         format_help_command("resolve-agent-prompt-launch --key <key> [--action resume|fork] [--fork-agent id] --json", "Resolve whether opening a prompt focuses a live session or runs a command"),
-        format_help_command("read-session-chat <selector> [--subagent name-or-id] [--limit n] [--before-offset n] [--history-mode turns|detail] [--preserve-newest] [--wait-ms n --fingerprint f] --json", "Read a session or subagent transcript; --wait-ms long-polls the main chat"),
+        format_help_command("read-session-chat <selector> [--subagent name-or-id] [--limit n] [--before-offset n] [--history-mode turns|detail] [--preserve-newest] [--wait-ms n --fingerprint f] --json", "Read a session or subagent transcript; --wait-ms long-polls the main chat; without --before-offset, --history-mode turns starts at the newest turn"),
+        format_help_command("read-session-chat <selector> --all|--grep <text> [--role user,assistant] [--context n] [--before n] [--after n] [--since date] [--until date] [--last n] [--history-mode detail] [--format text|json]", "Read a whole thread in one call: --all walks it to the first turn, --grep searches it (a|b for either word), --context keeps rows around each match, --since/--until/--last trim it, --format text prints a readable conversation; read-session-chat --help has examples. <selector> can be a title, session id, global ref, zmx name, agent session id, or Copy Details' Session ID or Routing ID"),
         format_help_command("switch-draft-agent <selector> --agent-id <id> --json", "Switch an unprompted draft session to another project agent"),
         format_help_command("send-session-chat-key <selector> --key <key> --json", "Queue Enter or a shifted option key behind this session's pending chat writes"),
-        format_help_command("select-session-chat-model <selector> [--model <model> --effort <effort>] [--mode <mode>] [--fast-mode on|off] [--defer] --json", "Change chat model, effort or mode; --defer queues the choice until the agent is ready"),
+        format_help_command("select-session-chat-model <selector> [--model <model> --effort <effort>] [--scope session|default] [--mode <mode>] [--fast-mode on|off] [--defer] --json", "Change chat model, effort or mode; --scope session applies it to this session without changing the agent's default (Claude, Codex 0.157 or newer, OpenCode); --defer queues the choice until the agent is ready"),
         format_help_command("read-session-chat-skills <selector> --json", "List skills available to the session's agent"),
         format_help_command("read-session-chat-files <selector> --json", "List the session project's files for @ mentions"),
         format_help_command("send-session-chat-message <selector> <text>", "Send a chat message into an agent session"),
@@ -334,6 +398,7 @@ pub fn usage() -> String {
         format_help_command("interrupt-session-chat <selector>", "Interrupt the session's running agent turn"),
         format_help_command("handoff-session-chat-draft <selector>", "Move the agent CLI's composer draft out of the terminal and print it"),
         format_help_command("read-session-chat-queue <selector> --json", "Read the session's queued chat prompts and synced composer draft"),
+        format_help_command("session-chat-rpc <method> --params-base64 <base64 json>", "Perform one session chat request for a remote chat client and print its outcome"),
         format_help_command("queue-session-chat-prompt <selector> <text>", "Queue a prompt for delivery the next time the agent stops"),
         format_help_command("update-session-chat-queued-prompt <selector> --prompt-id <id> [--text '<text>'] [--retry]", "Edit a queued prompt, or move a failed one back to queued"),
         format_help_command("remove-session-chat-queued-prompt <selector> --prompt-id <id> --json", "Delete a queued prompt and print the row that was removed"),
@@ -344,7 +409,7 @@ pub fn usage() -> String {
         format_help_command("wait-for-text <selector> <regex> [--timeout-seconds n] [--interval-seconds n] [--lines n] [--json]", "Poll a session until a scrollback line matches the regex; exits 1 on timeout or dead session"),
         format_help_command("rename-session <sessionId> <title> [--json]", "Rename a session"),
         format_help_command("rename-session --session-id <id> --title <title> [--json]", "Flag form used by Android SSH actions"),
-        format_help_command("rename-command <selector> <title>", "Send the agent rename command"),
+        format_help_command("rename-command <selector> <title>", "Rename a session through its agent's own rename command, waking a sleeping session to deliver it"),
         format_help_command("session-note read --session-id <id> [--project-id id] [--json]", "Read the note attached to the session's agent conversation"),
         format_help_command("session-note save --session-id <id> [--project-id id] --note '<text>' [--json]", "Attach a note to the session's agent conversation; an empty note clears it"),
     ]
@@ -376,6 +441,46 @@ pub fn usage() -> String {
             "Park or unpark a session, honoring Sleep session when parking",
         ),
         format_help_command(
+            "work-mode on|off [--project-id id|--path path] | status | linear-key [--project-id id] [--clear]",
+            "Turn work mode on or off for a project (default: the current folder), or save the Linear API key from stdin",
+        ),
+        format_help_command(
+            "work-mode create-ticket --title t [--description d] [--team-id id] [--linear-project-id id] [--no-assign] [--start] | start <SPX-1245|#218|PR link> [--pr 412] [--agent id] [--model m] [--effort e] [--cloud [--provider claude-code] [--prompt-file path]]",
+            "Create a ticket assigned to you (a Linear ticket, or a GitHub issue when the workspace's tracker is GitHub), or start an agent on a ticket in a worktree on its branch, linked to it; nothing is sent to the agent. --cloud starts a Claude Code cloud session on the ticket's branch instead, with the file's task or one drafted from the ticket, and prints its link",
+        ),
+        format_help_command(
+            "work-mode tracker [linear|github] [--workspace name|id | --project-id id | --path path]",
+            "Show or set the workspace's primary tracker: Linear tickets & projects, or GitHub issues & projects (a team workspace's owners set it for the whole team)",
+        ),
+        format_help_command(
+            "work-mode cleanup <session> clean-up|keep",
+            "Answer the offer a session gets when its linked PR is merged: remove its worktree and park it, or keep both",
+        ),
+        format_help_command(
+            "workspace list | create <name> [--kind work|personal] | rename <workspace> <new name> | move-project <project> <workspace> | delete <workspace>",
+            "List this computer's workspaces and their projects, create, rename or delete one, or move a project (by id, name or folder) into one; a workspace is named by id or name",
+        ),
+        format_help_command(
+            "team join <invite link> [--name n] [--slack-user U…] | status | invite | identity [--slack-user U…] [--linear-user id] | threads <ticket> | ping | leave | deploy [--team-name n] [--project slug] [--convex-team slug] [--dev]  (each takes --workspace name|id)",
+            "Connect a Work workspace to its team's Convex project: join with an invite link, or deploy Ghostex's functions with your Convex CLI login",
+        ),
+        format_help_command(
+            "team flow [show] | set [--working-channel C…] [--watch-only C1,C2] [--default-run cloud|local] [--linear-team KEY] [--qc-owner U…] [--instructions-file path] | map <channel> --repo owner/name [--project name] [--linear-team KEY] [--linear-project name] | unmap <channel>",
+            "Read or change the team's Slack flow: the working channel, watch-only channels, which repo each channel's work goes to, where new work runs, and the team instructions",
+        ),
+        format_help_command(
+            "team slack-manifest [--name n] | slack-connect [--dev] | linear-connect [--remove] | own-linear-key on|off",
+            "Print the Slack app manifest for this team; store the Slack bot token and signing secret on the team's Convex project (read from stdin); owners set or remove the team's Linear key (read from stdin); own-linear-key on creates the Slack tickets you request with this workspace's Linear key instead",
+        ),
+        format_help_command(
+            "slack post [--session <session>] \"<text>\" [--final]",
+            "Post to the Slack working thread of the session's ticket; --final also posts it once in the threads the request came from",
+        ),
+        format_help_command(
+            "link-session <selector> [--pr n|url|none] [--linear SPX-1,SPX-2|none] [--issue n|none] [--linear-project name|none] [--github-project owner/number|none] [--auto] | --candidates pullRequest|linearIssue|linearProject|githubIssue|githubProject [--query text]",
+            "Link a session to a PR, Linear or GitHub issues, a Linear project or a GitHub Project; --auto goes back to what its branch says; --candidates lists what the Link to picker suggests",
+        ),
+        format_help_command(
             "tag-session <id> <tag|none>",
             "Set or clear a session tag (built-in tag, or a custom tag by name or id)",
         ),
@@ -386,14 +491,6 @@ pub fn usage() -> String {
         format_help_command(
             "close-after-done <id>",
             "Toggle Close After Done for a session",
-        ),
-        format_help_command(
-            "set-visible-count <1|2|3|4|6|9>",
-            "Set visible session count",
-        ),
-        format_help_command(
-            "set-view-mode <grid|horizontal|vertical>",
-            "Set session layout mode",
         ),
         format_help_command(
             "browser --help",
@@ -408,12 +505,32 @@ pub fn usage() -> String {
             "Show Ghostex Computer Use skill setup for Cua Driver",
         ),
         format_help_command(
+            "spaceo --help",
+            "Show Ghostex SpaceO skill setup for driving Mac apps on SpaceO's virtual displays",
+        ),
+        format_help_command(
             "cli --help",
             "Show general Ghostex CLI discovery and agent skill setup",
         ),
         format_help_command(
-            "fable-5.6-orchestration --help",
-            "Show Ghostex Fable 5.6 Orchestration skill setup",
+            "agents --help",
+            "Communicate and coordinate with other agents",
+        ),
+        format_help_command(
+            "orchestrator --help",
+            "Run an orchestrator: one agent you talk to that starts, supervises, and reports on thread sessions",
+        ),
+        format_help_command(
+            "agentbox status | list | url <session> [--screen] [--json]",
+            "Check agentbox readiness, list boxes, and print a box session's web app or screen URL",
+        ),
+        format_help_command(
+            "agent-cli status | install <agent> | update <agent> [--json]",
+            "Install, update, and check the agent CLIs (claude, codex, cursor, grok, …)",
+        ),
+        format_help_command(
+            "agents-orchestration --help",
+            "Show Ghostex Agents skill setup (launch and coordinate other agents)",
         ),
         format_help_command(
             "manage-beads --help",
@@ -428,6 +545,10 @@ pub fn usage() -> String {
             "Show Ghostex Move Codex Session skill setup",
         ),
         format_help_command("guide --help", "Show Ghostex Help skill setup"),
+        format_help_command(
+            "agent-sync status | plan | apply [--agent id] [--json]",
+            "Point every agent at the shared ~/.agents skills, instructions, and hooks",
+        ),
         format_help_command("toggle-sidebar", "Collapse or expand the sidebar"),
     ]
     .join("\n");
@@ -455,6 +576,10 @@ pub fn usage() -> String {
         ),
         format_help_command("server status [--json]", "Print gxserver runtime state"),
         format_help_command(
+            "server endpoint",
+            "Print the running daemon's port and auth token as JSON (for SSH clients)",
+        ),
+        format_help_command(
             "server version | server --version",
             "Print the gxserver package version",
         ),
@@ -471,14 +596,6 @@ pub fn usage() -> String {
         format_help_command(
             "bundle [output-dir] [--lines n]",
             "Save state, logs, and a screenshot",
-        ),
-        format_help_command(
-            "assert-card <id> [--agent-icon codex] [--visible true]",
-            "Assert card projection",
-        ),
-        format_help_command(
-            "wait-for <id> [--agent-icon codex] [--timeout-ms n]",
-            "Wait for card projection",
         ),
     ]
     .join("\n");
@@ -532,6 +649,8 @@ Sessions:
   Projects and sessions follow the macOS sidebar order, including the active Last Active sort mode.
   Each project prints its path once as the section header, then compact session rows without field labels.
   --ungrouped/-u prints one flat list and prefixes each row with the project name.
+  --json prints each session's agent, title, global ref, agent session id, zmx name, project and status;
+  add --full for every field Ghostex keeps about each session and project.
 
 Attach:
   attach/resume uses the stored tmux, zmx, or zellij provider session when present.
@@ -572,8 +691,8 @@ Specialized workflows:
   Everyday Ghostex work (sessions, orchestration, automations, quick actions,
   chat queues, prompt history, server, diagnostics) is covered by ghostex --help
   and the focused help pages. Use $ghostex-embedded-browser-use,
-  $ghostex-browser-use, $ghostex-computer-use, $ghostex-manage-beads,
-  $ghostex-fable-56-orchestration, $ghostex-auto-rename-session, or
+  $ghostex-browser-use, $ghostex-computer-use, $ghostex-spaceo,
+  $ghostex-manage-beads, $ghostex-agents, $ghostex-auto-rename-session, or
   $ghostex-move-codex-session when their domain applies. Use $ghostex-help to
   explain how a Ghostex feature works or to change an app setting for the user
   (ghostex guide, ghostex settings).
@@ -762,7 +881,7 @@ Behavior:
   save-command writes to the live gxserver project store and refreshes normal project state.
   Reusing a command id replaces that action definition in the same ordered position; a new id is appended.
   Do not edit workspace-state.json or the Ghostex state database directly.
-  Terminal and Browser quick actions are project customCommands, not agent buttons; do not use save-agent.
+  Terminal and Browser quick actions are project customCommands, not agent buttons.
   Use run-action to execute them; run-command and click-button are renderer-only legacy paths.
 
 Inspect:
@@ -776,7 +895,7 @@ Inspect:
 pub fn board_usage() -> String {
     let commands = [
         format_help_command(
-            "board start-work <bead-id> [--agent id] [--project-path path|--project-id id] [--json]",
+            "board start-work <bead-id> [--agent id] [--model m] [--effort e] [--project-path path|--project-id id] [--json]",
             "Dispatch a Project Board bead through gxserver",
         ),
         format_help_command(
@@ -794,7 +913,7 @@ pub fn board_usage() -> String {
         "Ghostex Project Board - dispatch bead work through gxserver
 
 Usage:
-  ghostex board start-work <bead-id> [--agent <agentId>] [--project-path <path>|--project-id <id>] [--json]
+  ghostex board start-work <bead-id> [--agent <agentId>] [--model <model>] [--effort <level>] [--project-path <path>|--project-id <id>] [--json]
   ghostex board associate <bead-id> [--session-id <alias|id|title>] [--project-id <id>] [--json]
   gx board start-work <bead-id>
   gx board associate <bead-id>
@@ -809,6 +928,10 @@ Behavior:
   is returned as {{ \"projectId\": ..., \"sessionId\": ..., \"created\": false }} instead of creating a second worker.
   Without --agent, the bead assignee is matched case-insensitively against configured agents,
   falling back to the default prompt agent.
+  --model and --effort start a new Claude, Codex or Pi worker on that model and effort for this
+  session only (a Pi model is <provider>/<model> and its effort a thinking level); your default
+  model is unchanged, and a resumed worker keeps them. A reused worker keeps
+  whatever it already runs.
   Pass --project-path <repo> (or --project-id) to start the worker in the project the card is
   about; the bead is still looked up on that project's board. Without either, the worker starts
   in the project whose own path is the Beads directory - the board itself - never in a sibling
@@ -839,6 +962,10 @@ pub fn server_usage() -> String {
             "Stop gxserver and kill tracked zmx sessions",
         ),
         format_help_command("server status [--json]", "Print gxserver runtime state"),
+        format_help_command(
+            "server endpoint",
+            "Print the running daemon's port and auth token as JSON (for SSH clients)",
+        ),
         format_help_command("server version", "Print the gxserver package version"),
         format_help_command("server --version", "Alias for server version"),
         format_help_command("server help | server --help", "Show this help"),
@@ -1038,6 +1165,11 @@ Usage:
   gx settings set <key> <value> [--json]
   gx settings reset <key> [--json]
   gx settings open [<key>] [--tab <id>] [--json]
+  gx settings hotkeys [list] [<search>] [--changed] [--json]
+  gx settings hotkeys get <id> [--json]
+  gx settings hotkeys set <id> <keys> [--replace] [--json]
+  gx settings hotkeys reset <id> [--json]
+  gx settings hotkeys reset --all [--json]
   gx settings --help
 
 Keys:
@@ -1057,9 +1189,20 @@ Writing:
   (structured values, account and remote-pairing state, secrets, Settings UI
   actions) cannot be set; use settings open <key> so the user can change them.
 
+Hotkeys:
+  Ids are the camelCase action ids from `ghostex guide hotkeys` (a title such
+  as \"Fork Session\" works too). Keys are written like cmd+shift+o: modifiers
+  cmd, ctrl, alt (option) and shift, then one key (a letter, digit, symbol,
+  f1-f24, up, down, left, right, tab, enter, escape, space, backspace, delete,
+  home, end, pageup, pagedown). Separate a two-step sequence with a space. On
+  Windows and Linux cmd means Ctrl. `none` unassigns a hotkey. set refuses keys
+  another hotkey already uses unless --replace moves them (the other hotkey is
+  left unassigned). Changes save through the running desktop app like the
+  Hotkeys page and bind at once.
+
 Tabs (for --tab):
   settings integrations extensions osIntegration remote projects agents
-  accounts actions openTargets hotkeys about
+  accounts actions openTargets hotkeys debugging about
 "
     .to_string()
 }
@@ -1082,6 +1225,30 @@ What the skill teaches:
 Fallback:
   Use codex fork --all --last --yolo -C <folder-path> only when the user does
   not want to copy the session id.
+"
+    .to_string()
+}
+
+pub fn visuals_usage() -> String {
+    "Ghostex Visuals - check chat visual blocks and install the agent skill
+
+Usage:
+  gx visual --help
+  gx visual check <file.json|-> [--width N] [--light] [--out file.png]
+  gx visual install-skill [--json]
+
+Agent skill:
+  Use $ghostex-visuals when the user asks for it: charts, stats and tables go
+  in the reply as a ```visual block; questions go in a ```questions block,
+  which the chat shows as a form; mockups and small tools are HTML pages
+  published with `ghostex show`.
+
+check:
+  Draws the block's JSON (or the whole fenced block) exactly as the chat lays
+  it out and prints the path of a PNG to look at, or the error that names what
+  to fix. --width defaults to 640; use 360 for a phone. A ```questions block
+  is read instead: check lists its questions and answer keys, or names the
+  problem.
 "
     .to_string()
 }
@@ -1109,27 +1276,27 @@ Boundary:
     .to_string()
 }
 
-pub fn fable56_orchestration_usage() -> String {
-    "Ghostex Fable 5.6 Orchestration - install the agent skill for the Fable plan / Codex implement / Fable verify pipeline
+pub fn agents_orchestration_usage() -> String {
+    "Ghostex Agents - install the agent skill for launching and coordinating other agents
 
 Usage:
-  gx fable-5.6-orchestration --help
-  gx fable-5.6-orchestration install-skill [--json]
+  gx agents-orchestration --help
+  gx agents-orchestration install-skill [--json]
 
 Agent skill:
-  Use $ghostex-fable-56-orchestration to run a multi-phase coding task as a
-  pipeline over Ghostex panes: plan inline with Fable, launch one Codex
-  gpt-5.6 worker pane per phase, then verify with a Fable pane and spawn
-  fixer panes until verification passes.
+  Use $ghostex-agents when one agent needs other agents to do
+  part of the work: launch them with a specific model and effort, send them
+  tasks, read their replies, wait for them to finish, and verify the result.
 
 What the skill teaches:
-  Ask for Fable and Codex effort levels, write a self-contained phase plan
-  file, launch workers with create-session, monitor sentinels with read-text,
-  verify acceptance criteria with a Fable pane, and cap the fix loop.
+  Read ghostex agents --help and ghostex --help first, resolve your own
+  session and project, hand over self-contained tasks, keep the global
+  reference of every created session, confirm delivery, wait on a last-line
+  sentinel with wait-for-text, verify independently, and cap fix rounds.
 
 Boundary:
   Use Ghostex CLI commands instead of raw zmx/tmux control when coordinating
-  panes inside Ghostex.
+  sessions inside Ghostex.
 "
     .to_string()
 }
@@ -1154,6 +1321,32 @@ Desktop Control requirements:
 Boundary:
   Use $ghostex-computer-use for native macOS apps.
   Use $ghostex-browser-use for supported external browser page content.
+  Use $ghostex-embedded-browser-use and gx browser --help for embedded Ghostex browser panes.
+"
+    .to_string()
+}
+
+pub fn spaceo_usage() -> String {
+    "Ghostex SpaceO - install the agent skill for driving Mac apps on SpaceO's virtual displays
+
+Usage:
+  gx spaceo --help
+  gx spaceo install-skill [--json]
+
+Agent skill:
+  Use $ghostex-spaceo when a task needs a native Mac app or a Chromium page
+  driven out of the user's way. SpaceO opens the app on a headless virtual
+  display, so the agent clicks, types and takes screenshots there while the
+  user keeps their own screen, pointer and focus.
+
+Requirements:
+  An Apple Silicon Mac with macOS 14 or later. Install SpaceO from
+  Settings > Integrations, then turn on Accessibility and Screen Recording for
+  the app SpaceO names there. `spaceo doctor` checks the Mac without changing it.
+
+Boundary:
+  Use $ghostex-spaceo for Mac apps that should run off-screen.
+  Use $ghostex-computer-use to drive apps on the user's own screen.
   Use $ghostex-embedded-browser-use and gx browser --help for embedded Ghostex browser panes.
 "
     .to_string()

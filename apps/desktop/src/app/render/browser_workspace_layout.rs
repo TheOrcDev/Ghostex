@@ -26,6 +26,7 @@ use gpui_component::v_flex;
 use crate::app::consts::*;
 use crate::app::helpers::*;
 use crate::app::model::*;
+use crate::app::render::resize_rail::*;
 use crate::*;
 
 impl GhostexGpuiApp {
@@ -146,60 +147,31 @@ impl GhostexGpuiApp {
     ) -> AnyElement {
         let split_id = split.id;
         let axis = split.axis;
-        match split.axis {
-            WorkspaceSplitAxis::Horizontal => div()
-                .id(format!("ghostex-gpui-browser-split-handle-{}", split_id.0))
-                .flex()
-                .flex_shrink_0()
-                .h_full()
-                .w(px(WORKSPACE_SPLIT_HANDLE_THICKNESS))
-                .items_center()
-                .justify_center()
-                .cursor_ew_resize()
-                .bg(workspace_split_handle_color())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        this.handle_browser_split_handle_mouse_down(
-                            split_id, axis, event, window, cx,
-                        );
-                    }),
-                )
-                .child(
-                    div()
-                        .h_full()
-                        .w(px(WORKSPACE_SPLIT_SEPARATOR_THICKNESS))
-                        .cursor_ew_resize()
-                        .bg(browser_split_separator_color()),
-                )
-                .into_any_element(),
-            WorkspaceSplitAxis::Vertical => div()
-                .id(format!("ghostex-gpui-browser-split-handle-{}", split_id.0))
-                .flex()
-                .flex_shrink_0()
-                .h(px(WORKSPACE_SPLIT_HANDLE_THICKNESS))
-                .w_full()
-                .items_center()
-                .justify_center()
-                .cursor_ns_resize()
-                .bg(workspace_split_handle_color())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        this.handle_browser_split_handle_mouse_down(
-                            split_id, axis, event, window, cx,
-                        );
-                    }),
-                )
-                .child(
-                    div()
-                        .h(px(WORKSPACE_SPLIT_SEPARATOR_THICKNESS))
-                        .w_full()
-                        .cursor_ns_resize()
-                        .bg(browser_split_separator_color()),
-                )
-                .into_any_element(),
-        }
+        let rail = div()
+            .id(format!("ghostex-gpui-browser-split-handle-{}", split_id.0))
+            .relative()
+            .flex_shrink_0()
+            .bg(browser_split_separator_color());
+        let rail = match axis {
+            WorkspaceSplitAxis::Horizontal => rail.h_full().w(px(WORKSPACE_SPLIT_HANDLE_THICKNESS)),
+            WorkspaceSplitAxis::Vertical => rail.w_full().h(px(WORKSPACE_SPLIT_HANDLE_THICKNESS)),
+        };
+        // Browser pages are CEF on both sides, so the strip only ever catches the mouse over the panes'
+        // native tab bars and toolbars, plus the rail itself between the pages.
+        rail.child(resize_rail_deferred_strip(
+            resize_rail_grab_strip(
+                format!("ghostex-gpui-browser-split-grab-strip-{}", split_id.0),
+                axis,
+                ResizeRailGrabSide::Straddle,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.handle_browser_split_handle_mouse_down(split_id, axis, event, window, cx);
+                }),
+            ),
+        ))
+        .into_any_element()
     }
 
     pub(crate) fn render_browser_leaf(
@@ -227,7 +199,8 @@ impl GhostexGpuiApp {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .border_1()
+            .border_r_1()
+            .border_b_1()
             .border_color(browser_pane_border_color_for_state(border_state))
             .bg(workspace_terminal_placeholder_color())
             .child(self.render_browser_toolbar(pane_id, cx))

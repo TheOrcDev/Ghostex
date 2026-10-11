@@ -27,7 +27,6 @@ use gpui::point;
 use gpui::px;
 use gpui::size;
 
-use crate::app::consts::*;
 use crate::app::helpers::*;
 use crate::app::window::*;
 use crate::*;
@@ -113,6 +112,8 @@ impl GhostexGpuiApp {
         let main_window_native_view = self.parent_ns_view;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // The anchor is measured from the main window's frame.
+            display_id: self.main_window_popup_owner().display_for(bounds, cx),
             focus: false,
             show: true,
             kind: WindowKind::PopUp,
@@ -120,7 +121,11 @@ impl GhostexGpuiApp {
             is_resizable: false,
             is_minimizable: false,
             titlebar: None,
-            window_background: WindowBackgroundAppearance::Transparent,
+            window_background: if crate::app::window::toast::toast_window_glass() {
+                WindowBackgroundAppearance::Blurred
+            } else {
+                WindowBackgroundAppearance::Transparent
+            },
             ..Default::default()
         };
         self.app_toast_window = cx
@@ -130,34 +135,11 @@ impl GhostexGpuiApp {
                     app,
                     toasts,
                     hovered_toast_id: None,
+                    blur_region: Vec::new(),
                 })
             })
             .ok();
         self.app_toast_window_height = stack_height;
-    }
-
-    pub(crate) fn dispatch_gpui_sidebar_remote_event(
-        &mut self,
-        message: serde_json::Value,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:RemoteMachines 2026-06-24-16:48:
-        GPUI remote-machine status and presentation events are Rust-owned sidebar-only messages. Send only sanitized state enums, machine ids, and gxserver presentation snapshots/deltas into SidebarApp; remote auth tokens, SSH host/user/key data, paths from Settings commands, URLs, daemon response bodies, stdout/stderr, and command text must stay out of CEF globals and logs.
-
-        CDXC:RemoteMachines 2026-06-24-17:19:
-        Response-capable remote session requests may dispatch only request ids, success state, generic errors, and explicit safe metadata results such as previous-session search rows. Mutating remote session responses must be sanitized before this event boundary so renderer code never receives launch commands, tokens, SSH details, raw daemon bodies, or provider internals.
-        */
-        let Some(sidebar) = self.sidebar.clone() else {
-            return;
-        };
-        let script = format!(
-            "window.dispatchEvent(new CustomEvent('{GPUI_SIDEBAR_REMOTE_EVENT_NAME}', {{ detail: {} }})); undefined;",
-            message
-        );
-        sidebar.update(cx, |surface, _| {
-            surface.execute_app_owned_script(&script);
-        });
     }
 
     pub(crate) fn dispatch_gpui_remote_machine_status(
@@ -198,19 +180,29 @@ impl GhostexGpuiApp {
         */
         self.remote_machine_connect_states
             .insert(remote_machine_id.to_string(), state.to_string());
+        // The sanitized summary of THIS transition, which the machine tab and the sidebar's
+        // machine notice draw (gx_store/remote_clients.rs). A transition without a message leaves
+        // the last failure's standing, but a new attempt or a connection clears it so a later
+        // failure never explains itself with an earlier one's reason.
+        if let Some(message) = message.map(str::trim).filter(|message| !message.is_empty()) {
+            self.remote_machine_status_messages
+                .insert(remote_machine_id.to_string(), message.to_string());
+        } else if state == GpuiRemoteGxserverConnectState::Connected.wire_status_state()
+            || gpui_remote_gxserver_status_state_is_connect_progress(state)
+        {
+            self.remote_machine_status_messages
+                .remove(remote_machine_id);
+        }
+        // Every connect transition funnels through here, so this is also where the store learns
+        // whether it still has a daemon to subscribe to on that machine: a client starts on the
+        // connected edge and is retired on every other one, which leaves the machine's rows on
+        // screen as stale rather than dropping them.
+        self.gx_store_sync_remote_clients(true, cx);
+        self.remote_reconnect_on_status(remote_machine_id, state, cx);
         if state == GpuiRemoteGxserverConnectState::Connected.wire_status_state() {
             self.attach_surfaced_remote_workspace_terminals(remote_machine_id, cx);
         }
         self.refresh_session_chat_runtime_endpoints(false, cx);
-        let mut payload = serde_json::json!({
-            "machineId": remote_machine_id,
-            "state": state,
-            "type": "remoteMachineStatus",
-        });
-        if let Some(message) = message.map(str::trim).filter(|message| !message.is_empty()) {
-            payload["message"] = serde_json::Value::String(message.to_string());
-        }
-        self.dispatch_gpui_sidebar_remote_event(payload, cx);
     }
 
     pub(crate) fn dispatch_gpui_settings_action_status(

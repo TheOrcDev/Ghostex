@@ -33,7 +33,7 @@ node gxserver-rs/compat/run-compat.mjs --target rust --suite phase0 --port 58746
 
 ```sh
 GHOSTEX_GXSERVER_BIN=gxserver-rs/target/debug/gxserver gx server status --json
-GHOSTEX_GXSERVER_BIN=/absolute/path/to/gxserver-rs/target/debug/gxserver bun run start
+GHOSTEX_GXSERVER_BIN=/absolute/path/to/gxserver-rs/target/debug/gxserver cargo xtask start
 ```
 
 If Rust is selected on an occupied port, the expected result is a `portConflict` or compatibility-harness port blocker, not a TypeScript fallback.
@@ -50,7 +50,7 @@ bunx vitest run scripts/ghostex-cli.test.mjs native/sidebar/gxserver-rust-port-s
 cargo fmt --manifest-path gxserver-rs/Cargo.toml
 cargo test --manifest-path gxserver-rs/Cargo.toml
 node --check gxserver-rs/compat/run-compat.mjs
-bun run typecheck
+cargo xtask typecheck
 ```
 
 Blocked until alternate-port support lands:
@@ -62,7 +62,7 @@ node gxserver-rs/compat/run-compat.mjs --target rust --suite phase0 --bin gxserv
 Additional note:
 
 ```sh
-bun run test
+cargo xtask test
 ```
 
 The targeted Phase 2 Vitest command passed.

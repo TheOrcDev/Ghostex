@@ -23,6 +23,14 @@ pub(crate) fn gpui_prompt_editor_backend_setting_is_monaco() -> bool {
 }
 
 pub(crate) fn gpui_current_zmx_prompt_editor_attach_mode_is_monaco() -> bool {
+    // CDXC:PromptEditor 2026-09-16 WHY:
+    // WSL's Linux CLI cannot open the native helper's named pipe; preserve its machine-editor capability until that cross-environment bridge exists.
+    #[cfg(windows)]
+    if windows_terminal_backend::current_preference()
+        == windows_terminal_backend::WindowsTerminalBackendPreference::Wsl
+    {
+        return false;
+    }
     gpui_prompt_editor_backend_setting_is_monaco()
         && gpui_resolved_ghostex_editor_executable().is_some()
 }
@@ -78,11 +86,15 @@ pub(crate) fn gpui_default_ghostex_editor_executable() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn gpui_default_ghostex_editor_executable() -> Option<PathBuf> {
-    env::var_os("LOCALAPPDATA")
-        .and_then(|value| {
-            gpui_ghostex_editor_executable_candidate(
-                PathBuf::from(value).join("Ghostex/GhostexEditor/GhostexEditor.exe"),
-            )
+    env::current_exe()
+        .ok()
+        .and_then(|executable| ghostex_editor_client::bundled_executable(&executable))
+        .or_else(|| {
+            env::var_os("LOCALAPPDATA").and_then(|value| {
+                gpui_ghostex_editor_executable_candidate(
+                    PathBuf::from(value).join("Ghostex/GhostexEditor/GhostexEditor.exe"),
+                )
+            })
         })
         .or_else(|| {
             gpui_ghostex_editor_executable_candidate(
@@ -111,6 +123,14 @@ pub(crate) fn gpui_ghostex_editor_executable_candidate(candidate: PathBuf) -> Op
     gpui_is_executable_file(&executable).then_some(executable)
 }
 
+#[cfg(windows)]
+pub(crate) fn gpui_ghostex_editor_socket_path() -> PathBuf {
+    env::var_os("GHOSTEX_EDITOR_SOCKET")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(ghostex_editor_client::default_pipe_path()))
+}
+
 /// Socket resolution mirror of the daemon's `resolveSocketPath`
 /// (apps/editor/macos DaemonSupport.swift ↔ scripts/ghostex-cli.mjs): env
 /// override, then the shared Ghostex runtime directory.
@@ -128,15 +148,23 @@ pub(crate) fn gpui_ghostex_editor_socket_path() -> PathBuf {
         .join("ghostex-editor.sock")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn gpui_ghostex_editor_daemon_request(
     request: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     use std::io::{BufRead as _, BufReader, Write as _};
+    #[cfg(unix)]
     let mut stream =
         std::os::unix::net::UnixStream::connect(gpui_ghostex_editor_socket_path()).ok()?;
+    #[cfg(windows)]
+    let mut stream = ghostex_editor_client::PipeStream::connect(
+        &gpui_ghostex_editor_socket_path().to_string_lossy(),
+        Duration::from_millis(750),
+    )
+    .ok()?;
     let timeout = Some(Duration::from_millis(750));
     stream.set_read_timeout(timeout).ok()?;
+    #[cfg(unix)]
     stream.set_write_timeout(timeout).ok()?;
     let mut line = serde_json::to_string(request).ok()?;
     line.push('\n');
@@ -147,7 +175,7 @@ pub(crate) fn gpui_ghostex_editor_daemon_request(
 }
 
 pub(crate) fn gpui_ghostex_editor_daemon_open_count() -> u64 {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         gpui_ghostex_editor_daemon_request(
             &serde_json::json!({"v": GHOSTEX_EDITOR_PROTOCOL_VERSION, "type": "ping"}),
@@ -159,7 +187,7 @@ pub(crate) fn gpui_ghostex_editor_daemon_open_count() -> u64 {
         })
         .unwrap_or(0)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         0
     }
@@ -170,7 +198,7 @@ pub(crate) fn gpui_ghostex_editor_daemon_bring_to_front() {
 }
 
 pub(crate) fn gpui_ghostex_editor_daemon_front(originating_session_id: Option<&str>) -> bool {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let mut request = serde_json::json!({
             "v": GHOSTEX_EDITOR_PROTOCOL_VERSION,
@@ -188,7 +216,7 @@ pub(crate) fn gpui_ghostex_editor_daemon_front(originating_session_id: Option<&s
                     .is_some_and(|count| count > 0)
         });
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = originating_session_id;
         false
@@ -213,12 +241,12 @@ pub(crate) fn gpui_prewarm_ghostex_editor_daemon() {
             .arg(gpui_ghostex_editor_socket_path());
         command.process_group(0);
     }
+    // Not DETACHED_PROCESS: Windows ignores CREATE_NO_WINDOW next to it, and a daemon with no console opens a visible one for every console program it starts.
     #[cfg(windows)]
     {
+        use crate::app::helpers::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
         use std::os::windows::process::CommandExt as _;
-        const DETACHED_PROCESS: u32 = 0x00000008;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
     let _ = command.spawn();
 }

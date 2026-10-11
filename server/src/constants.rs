@@ -20,7 +20,14 @@ Chat attachments cap at 32 MiB on disk (saveSessionChatAttachment); the same
 4/3 base64 inflation plus envelope headroom lands at 44 MiB.
 */
 pub const GXSERVER_ATTACHMENT_BODY_LIMIT_BYTES: usize = 44 * 1024 * 1024;
-pub const GXSERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/*
+CDXC:Feedback 2026-10-04 WHY:
+sendFeedback carries up to five 5 MiB images as base64 (about 35 MB), the same
+36 MiB request cap the feedback relay itself enforces.
+*/
+pub const GXSERVER_FEEDBACK_BODY_LIMIT_BYTES: usize = 36 * 1024 * 1024;
+/// The app version (`package.json`), not the placeholder crate version; see `server/build.rs`.
+pub const GXSERVER_VERSION: &str = env!("GHOSTEX_BUILD_MARKETING_VERSION");
 
 pub const GXSERVER_CAPABILITIES: &[&str] = &[
     "health",
@@ -71,6 +78,7 @@ pub const GXSERVER_CAPABILITIES: &[&str] = &[
     the prompt-editor selector this daemon accepts before sending the create.
     */
     "codeServerPromptEditor",
+    "browserTcpWebSocketV1",
     /*
     CDXC:SessionNotes 2026-08-24:
     Session notes are keyed by the agent session id and published on the
@@ -128,4 +136,9 @@ pub const GXSERVER_MIGRATION_IDS: &[&str] = &[
     "0036_custom_session_tags",
     "0037_session_fork_revision",
     "0038_delayed_send_watched_session",
+    "0039_session_chat_selection_scope",
+    "0040_prune_consumed_draft_recovery",
+    "0041_coordinators",
+    "0042_coordinator_pending_messages",
+    "0043_session_chat_send_requests",
 ];

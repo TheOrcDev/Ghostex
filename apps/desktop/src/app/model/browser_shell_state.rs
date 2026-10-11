@@ -32,15 +32,21 @@ pub(crate) fn browser_tab_model_to_shell_state_json(model: &BrowserTabModel) -> 
                     None
                 };
                 /*
-                CDXC:Browser 2026-07-12:
-                Persist the tab's last displayed title so restart shows the
-                same sidebar/tab-strip label instead of regressing to the
-                URL-host fallback (e.g. "Google.com" for a tab that showed
-                "New Tab"). Only Loaded tabs with a sanitized URL carry a
-                cached title, and it is bounded before serialization.
+                CDXC:Browser 2026-09-18 WHY:
+                Persist only a page-reported title, never display_title(): when
+                no CEF title callback has run, display_title() falls back to the
+                URL host ("localhost"), and restoring that fallback as
+                runtime_page_title made it masquerade as a real page title — the
+                Dev servers menu then overwrote freshly probed page titles with
+                "localhost". Supersedes the 2026-07-12 wording. Restart labels
+                are unchanged because restore regenerates the same URL-host
+                fallback into `title` for tabs without a cached title, and it is
+                still bounded before serialization.
                 */
                 let cached_title = if state == BrowserTabState::Loaded {
-                    sanitize_browser_tab_cached_title(&tab.display_title())
+                    tab.runtime_page_title
+                        .as_deref()
+                        .and_then(sanitize_browser_tab_cached_title)
                 } else {
                     None
                 };
@@ -379,10 +385,14 @@ pub(crate) fn browser_tab_from_shell_state(
     } else {
         None
     };
+    let remote_machine_id = json_string_field(object, "remoteMachineId")
+        .and_then(crate::app::helpers::gpui_normalize_remote_machine_id);
+    let cached_favicon_image = (state == BrowserTabState::Loaded)
+        .then(|| browser_favicon_cache_lookup(&url, remote_machine_id.as_deref()))
+        .flatten();
     Some(BrowserTab {
         id,
-        remote_machine_id: json_string_field(object, "remoteMachineId")
-            .and_then(crate::app::helpers::gpui_normalize_remote_machine_id),
+        remote_machine_id,
         profile_id: json_u64_field(object, "profileId")
             .map(BrowserProfileId)
             .filter(|profile_id| browser_profiles.contains_profile(*profile_id))
@@ -394,7 +404,7 @@ pub(crate) fn browser_tab_from_shell_state(
         },
         runtime_page_title: cached_title,
         runtime_favicon_url: None,
-        runtime_favicon_image: None,
+        runtime_favicon_image: cached_favicon_image,
         runtime_favicon_fetch: None,
         runtime_is_loading: false,
         runtime_can_go_back: false,

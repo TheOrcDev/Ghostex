@@ -1,10 +1,11 @@
 import { type ReactNode } from 'react';
 
-export function ManagePreviewMessage({ icon, title }: { icon: ReactNode; title: string }) {
+export function ManagePreviewMessage({ action, icon, title }: { action?: ReactNode; icon: ReactNode; title: string }) {
   return (
-    <div className='manage-preview-message'>
+    <div className='manage-preview-message' data-has-action={action ? 'true' : undefined}>
       {icon}
       <span>{title}</span>
+      {action}
     </div>
   );
 }

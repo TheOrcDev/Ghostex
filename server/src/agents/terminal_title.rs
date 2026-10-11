@@ -24,6 +24,8 @@ pub(crate) fn normalize_terminal_title(title: &str) -> Option<String> {
         return None;
     }
     let value = strip_oc_prefixes(value.trim_start_matches(is_leading_title_marker).trim());
+    let value = strip_freebuff_title_prefix(&value);
+    let value = strip_empryo_title_suffix(value).to_string();
     if let Some(cursor) = normalize_cursor_terminal_title(&value) {
         return cursor;
     }
@@ -131,6 +133,7 @@ pub(crate) fn is_ignored_placeholder_session_title_text(lower: &str) -> bool {
             | "devin session"
             | "droid session"
             | "factory droid session"
+            | "freebuff session"
             | "gemini session"
             | "grok build session"
             | "grok session"
@@ -173,6 +176,7 @@ pub(crate) fn is_generic_agent_title(title: &str) -> bool {
             | "cursor cli"
             | "cursor-agent"
             | "droid"
+            | "empryo"
             | "factory droid"
             | "grok"
             | "grok build"
@@ -236,6 +240,66 @@ pub(crate) fn is_leading_title_marker(ch: char) -> bool {
                 | '\u{1f916}'
                 | '\u{1f514}'
         )
+}
+
+/// CDXC:SessionTitles 2026-10-04 DECISION:
+/// User: hide "Freebuff:" from the start of Freebuff's titles in the sidebar and everywhere else in the app ("Freebuff: what model is this?" shows as "what model is this?").
+/// Freebuff titles its terminal `Freebuff: <first prompt>`; only that exact spelling is stripped, so other titles that mention Freebuff stay as they are.
+/// SEE-ALSO: server/src/presentation/title_normalization.rs and packages/gx-core/src/quick_access/session_titles.rs normalize titles with the same rule.
+pub(crate) fn strip_freebuff_title_prefix(title: &str) -> &str {
+    title
+        .strip_prefix("Freebuff: ")
+        .map(str::trim_start)
+        .unwrap_or(title)
+}
+
+/// CDXC:SessionTitles 2026-10-06 WHY:
+/// Empryo titles its terminal `<tab label> — Empryo (beta)`, `✦ <tab label> · working — Empryo (beta)` while a turn runs, and a bare `Empryo (beta)` before its first tab mounts. The agent name and the working word are stripped like every other agent's, so the row shows the tab label alone and a bare title reads as the generic "Empryo" placeholder. The parenthesised channel is matched loosely so a later "(rc)" or no suffix at all still strips.
+/// SEE-ALSO: server/src/presentation/title_normalization.rs and packages/gx-core/src/quick_access/session_titles.rs normalize titles with the same rule.
+pub(crate) fn strip_empryo_title_suffix(title: &str) -> &str {
+    const SUFFIX: &str = " \u{2014} empryo";
+    let trimmed = title.trim_end();
+    // Most titles are not Empryo's; skip the lower-casing for them.
+    if !trimmed
+        .as_bytes()
+        .windows("empryo".len())
+        .any(|window| window.eq_ignore_ascii_case(b"empryo"))
+    {
+        return title;
+    }
+    // Rows from before the built-in agent read ` — empryo`; ASCII folding keeps byte offsets.
+    let folded = trimmed.to_ascii_lowercase();
+    let body = if is_empryo_channel_tail(folded.strip_prefix("empryo")) {
+        ""
+    } else {
+        match folded.rfind(SUFFIX) {
+            Some(index) if is_empryo_channel_tail(Some(&folded[index + SUFFIX.len()..])) => {
+                &trimmed[..index]
+            }
+            _ => return title,
+        }
+    };
+    let body = body.trim_end();
+    let body = body
+        .strip_suffix(" \u{00b7} working")
+        .unwrap_or(body)
+        .trim_end();
+    if body.is_empty() {
+        "Empryo"
+    } else {
+        body
+    }
+}
+
+fn is_empryo_channel_tail(tail: Option<&str>) -> bool {
+    match tail {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix(" (")
+            .and_then(|inner| inner.strip_suffix(')'))
+            .is_some_and(|inner| !inner.is_empty() && !inner.contains(['(', ')'])),
+        None => false,
+    }
 }
 
 pub(crate) fn strip_oc_prefixes(title: &str) -> String {
@@ -439,12 +503,21 @@ pub(crate) fn is_agent_status_boundary_char(ch: char) -> bool {
         )
 }
 
+/// CDXC:SessionTitles 2026-09-22 WHY:
+/// Elevated ConPTY shells prefix their executable title with Administrator. That shell context must be filtered just like the unelevated path or waking a session overwrites its chosen name.
+///
+/// CDXC:SessionTitles 2026-10-04 DECISION:
+/// User: new Freebuff sessions (and maybe the others) were titled "Windows PowerShell"; "this shouldn't be the case". The console's own default titles (`Windows PowerShell`, `PowerShell`) are shell context like the executable path, so they never name a session.
 pub(crate) fn is_windows_default_powershell_title(title: &str) -> bool {
     let normalized = title.trim().to_ascii_lowercase().replace('/', "\\");
     let path = normalized
-        .strip_suffix(" .")
+        .strip_prefix("administrator:")
         .unwrap_or(&normalized)
-        .trim_end();
+        .trim_start();
+    if matches!(path, "windows powershell" | "powershell") {
+        return true;
+    }
+    let path = path.strip_suffix(" .").unwrap_or(path).trim_end();
     let bytes = path.as_bytes();
     bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
@@ -491,6 +564,8 @@ pub(crate) fn is_agent_command_executable_name(value: &str) -> bool {
             | "mastracode"
             | "devin"
             | "droid"
+            | "empryo"
+            | "freebuff"
             | "gemini"
             | "grok"
             | "hermes"

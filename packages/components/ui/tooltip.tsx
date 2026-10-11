@@ -88,13 +88,10 @@ function TooltipContent({
           style={{
             ...tooltipSurfaceStyle,
             /*
-             * CDXC:Tooltips 2026-09-05 DECISION:
-             * User: a tooltip must have a sensical max width. Long content (the
-             * chat model pill carries a whole agent status line) used to stretch
-             * the popup to 90vw and render as one unreadable full-window line,
-             * so cap the measure at 24rem and let it wrap instead.
+             * CDXC:Tooltips 2026-09-27 DECISION:
+             * User: "the tooltip should wrap after 60 chars ALWAYS in this app I don't want massive width tooltips". Sixty characters average 30em of text, plus the popup's padding and border, the same measure as the GPUI tooltip (`text_measure` in gpui-component's `tooltip.rs`). Supersedes the 2026-09-05 cap of 24rem.
              */
-            maxWidth: 'min(24rem, 90vw, var(--available-width, 90vw))',
+            maxWidth: 'min(calc(30em + 1.5rem + 2px), 90vw, var(--available-width, 90vw))',
             zIndex: 'var(--ghostex-tooltip-z-index, 1400)',
             ...style,
           }}

@@ -1,70 +1,204 @@
+//! Native GPUI New Thread picker (Cmd+Shift+T). Its React twin, `NewThreadPalette` in
+//! packages/core-ui/new-thread-palette.tsx, was deleted with the React web app on 2026-09-24.
+//!
 //! CDXC:AgentLauncher 2026-09-09 DECISION:
-//! User: the desktop New Thread picker (Cmd+Shift+T) is drawn natively in GPUI so it opens instantly and is sized to its rows (up to twelve agents plus the Browser and Terminal rows, then it scrolls); the web app keeps the React palette because it is React-based.
+//! User: the desktop New Thread picker (Cmd+Shift+T) is drawn natively in GPUI so it opens instantly and is sized to its rows (up to twelve agents plus the Browser and Terminal rows, then it scrolls).
 //! It mirrors the project-header agent dropdown: every agent with its account count and chat badge, the last-used agent first and preselected, typing filters, Up/Down move, Enter starts, Tab or Right on Claude or Codex opens that provider's account list (Left, Backspace on an empty query, or Esc goes back), Esc closes. The highlighted row uses the sidebar's focused-session chrome and is never bolded.
-//! SEE-ALSO: apps/desktop/src/app/new_thread_picker_lifecycle.rs (open, close, data), packages/core-ui/new-thread-palette.tsx (web), packages/core-ui/accounts/agent-launcher-menu.tsx (the dropdown this mirrors).
-use crate::app::helpers::*;
-use crate::app::titlebar::account_usage::{
-    account_display_name, account_display_text, claude_headline_windows,
+//!
+//! CDXC:AppModal 2026-09-16 DECISION:
+//! User: "please fix this modal, also please ensure that we use the gpui components that we created in the gpui app and we're not using the older modals": the picker takes its colours from the shared native modal kit palette in both appearances. It used dark-only white tints that vanished on the light theme (search border, key hints, divider, white agent logos) while the highlighted row stayed black.
+//! SEE-ALSO: apps/desktop/src/app/native_sidebar/agent_launcher_menu.rs (the dropdown this mirrors), apps/desktop/src/app/window/native_modal_kit/ (the shared palette), apps/desktop/src/app/new_thread_picker_lifecycle.rs (open, close, preload, data), apps/desktop/src/bin/native_modal_demo.rs (standalone preview).
+//!
+//! This module depends only on the kit, gpui and gpui-component so the preview binary can include it with `#[path]`.
+use super::native_modal_kit::*;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyElement, App, AppContext as _, Context, Div, ElementId, Entity, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Rgba, ScrollHandle, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px, rgb, size,
 };
-use crate::*;
-use gpui::{ScrollHandle, SharedString};
-use gpui_component::Sizable as _;
-use gpui_component::Size as ComponentSize;
 use gpui_component::input::{
     Backspace, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveLeft,
     MoveRight, MoveUp,
 };
-use serde_json::{Value, json};
+use gpui_component::scroll::Scrollbar;
+use gpui_component::{Sizable as _, Size as ComponentSize, h_flex, v_flex};
+use std::rc::Rc;
 
-const ROW_TEXT_SIZE: f32 = 13.0;
-const ICON_PATH_BROWSER: &str = "titlebar/world.svg";
-const ICON_PATH_TERMINAL: &str = "titlebar/terminal-2.svg";
-const ICON_PATH_ACCOUNTS: &str = "titlebar/user-circle.svg";
-const ICON_PATH_CHAT: &str = "titlebar/message-circle.svg";
-const ICON_PATH_SEARCH: &str = "titlebar/search.svg";
-const ICON_PATH_BACK: &str = "titlebar/chevron-left.svg";
-const ICON_PATH_AGENT_FALLBACK: &str = "titlebar/terminal-2.svg";
+#[path = "new_thread_picker_run_on.rs"]
+mod run_on;
+pub(crate) use run_on::*;
+
+/*
+CDXC:AgentLauncher 2026-09-09 DECISION:
+User: the native New Thread picker is sized to its rows: the search field, the key-hint row, one row per agent up to twelve, the divider, and the Browser and Terminal rows; more agents scroll. The chrome height is the 6px top inset, 36px search field, 32px hint row, 2px list inset, 9px divider, two 36px rows, the 6px bottom inset, and the 2px frame border.
+SEE-ALSO: the 30px Run on row is added only when agentbox is installed and the project is on this computer (CDXC:AgentBox in new_thread_picker_run_on.rs); otherwise the picker is exactly this.
+*/
+pub(crate) const NEW_THREAD_PICKER_WIDTH: f32 = 420.0;
+pub(crate) const NEW_THREAD_PICKER_SEARCH_HEIGHT: f32 = 36.0;
+pub(crate) const NEW_THREAD_PICKER_ROW_HEIGHT: f32 = 36.0;
+pub(crate) const NEW_THREAD_PICKER_MAX_AGENT_ROWS: usize = 12;
+pub(crate) const NEW_THREAD_PICKER_CHROME_HEIGHT: f32 = 165.0;
+
+/// `.quick-access-surface`: Inter at 14px over 20px.
+const PICKER_FONT: &str = crate::ui_fonts::UI_FONT;
+const ROW_TEXT_SIZE: f32 = 14.0;
+const ROW_LINE_HEIGHT: f32 = 20.0;
+const SCROLLBAR_WIDTH: f32 = 5.0;
+
+const PLACEHOLDER_AGENTS: &str = "Search agents, browser, terminal...";
+const PLACEHOLDER_ACCOUNTS: &str = "Search accounts...";
+const HINT_MOVE: &str = "Move";
+const HINT_START: &str = "Start";
+const HINT_BACK: &str = "Back";
+const HINT_ACCOUNTS: &str = "Accounts";
+const HINT_CLOSE: &str = "Close";
+const ROW_BROWSER: &str = "Browser";
+const ROW_TERMINAL: &str = "Terminal";
+const ROW_CLI_LOGIN: &str = "Current CLI login";
+const ROW_ADD_ACCOUNT: &str = "Add account";
+const ROW_TRY_AGAIN: &str = "Try again";
+const DEFAULT_SUFFIX: &str = "· Default";
+const EMPTY_AGENTS: &str = "Nothing matches.";
+const EMPTY_ACCOUNTS: &str = "No accounts found.";
+const LOADING_AGENTS: &str = "Loading agents…";
+const READING_ACCOUNTS: &str = "Reading accounts…";
+const CLI_LOGIN_HINT: &str = "Uses your existing CLI sign-in. No account switcher needed.";
+const ADD_ACCOUNT_HINT: &str = "Add your account to see usage and reset times in Ghostex.";
+
+const ICON_CODE: &str = "modals/new-thread-picker/code.svg";
+const ICON_ACCOUNTS: &str = "modals/new-thread-picker/user.svg";
+const ICON_CHAT: &str = "modals/new-thread-picker/message-circle.svg";
+const ICON_BROWSER: &str = "modals/new-thread-picker/world.svg";
+const ICON_TERMINAL: &str = "modals/new-thread-picker/terminal-2.svg";
+const ICON_BACK: &str = "modals/new-thread-picker/chevron-left.svg";
+const ICON_SEARCH: &str = "modals/new-thread-picker/search.svg";
+const ICON_CLEAR: &str = "modals/new-thread-picker/x.svg";
 
 /// Search field, key hints, list insets, the divider, and the Browser and
 /// Terminal rows, plus one row per agent up to the visible maximum; longer
-/// agent lists scroll inside that frame.
-pub(crate) fn new_thread_picker_window_height(agent_count: usize) -> f32 {
+/// agent lists scroll inside that frame. `run_on` adds the Run on row.
+pub(crate) fn new_thread_picker_window_height(agent_count: usize, run_on: bool) -> f32 {
     NEW_THREAD_PICKER_CHROME_HEIGHT
+        + if run_on {
+            NEW_THREAD_PICKER_RUN_ON_HEIGHT
+        } else {
+            0.0
+        }
         + agent_count.min(NEW_THREAD_PICKER_MAX_AGENT_ROWS) as f32 * NEW_THREAD_PICKER_ROW_HEIGHT
 }
 
-#[derive(Clone, Debug)]
+/// The `.quick-access-surface` tokens the React palette layers over the app
+/// theme, resolved from the kit palette.
+#[derive(Clone, Copy)]
+struct PickerColors {
+    /// `--app-dropdown-background`.
+    surface: Rgba,
+    /// The titlebar popup chrome every floating native menu uses (#3f3f3f dark, #d4d4d4 light).
+    frame_border: Rgba,
+    /// `--quick-access-item-color`: #b4b8bf dark, #404040 light.
+    item: Rgba,
+    /// `--app-foreground` on the surface: #b4b8bf dark, #262626 light.
+    foreground: Rgba,
+    /// `--app-muted`.
+    muted: Rgba,
+    /// `.group-agent-menu-label`: foreground 86%, muted 14%.
+    label: Rgba,
+    /// `.group-agent-launcher-icon`, `.new-thread-palette-glyph`: foreground 62%, muted 38%.
+    glyph: Rgba,
+    /// `.new-thread-palette-row[data-selected='true']`: the composer fill in the dark
+    /// sidebar, the active card fill in the light one.
+    selected_background: Rgba,
+    selected_ring: Rgba,
+    selected_label: Rgba,
+    /// `[data-slot='command-input-wrapper'] [data-slot='input-group']` on the surface.
+    input_background: Rgba,
+    /// `--input`.
+    input_border: Rgba,
+    /// `[data-slot='command-separator']`: `--app-border` at 70%.
+    divider: Rgba,
+    light: bool,
+}
+
+impl PickerColors {
+    fn resolve(p: &ModalPalette) -> Self {
+        if p.light {
+            let foreground = rgb(0x262626);
+            Self {
+                // Solid: under glass the app thins it into its frosted fill (`surface_color`).
+                surface: p.solid_surface,
+                frame_border: p.hairline,
+                item: rgb(0x404040),
+                foreground,
+                muted: p.muted,
+                label: css_mix(foreground, 0.86, p.muted),
+                glyph: css_mix(foreground, 0.62, p.muted),
+                selected_background: modal_rgba(0x000000, 0.05),
+                selected_ring: modal_rgba(0x000000, 0.06),
+                selected_label: foreground,
+                input_background: p.panel,
+                input_border: modal_rgba(0x000000, 0.12),
+                divider: modal_rgba(0x000000, 0.12 * 0.7),
+                light: true,
+            }
+        } else {
+            let foreground = rgb(0xb4b8bf);
+            Self {
+                surface: p.solid_surface,
+                frame_border: modal_rgba(0xffffff, 0.12),
+                item: foreground,
+                foreground,
+                muted: p.muted,
+                label: css_mix(foreground, 0.86, p.muted),
+                glyph: css_mix(foreground, 0.62, p.muted),
+                selected_background: modal_rgba(0xffffff, 0.06),
+                selected_ring: modal_rgba(0xffffff, 0.05),
+                selected_label: rgb(0xd8d8d8),
+                input_background: modal_rgba(0xffffff, 0.04),
+                input_border: modal_rgba(0xffffff, 0.15),
+                divider: modal_rgba(0xffffff, 0.10 * 0.7),
+                light: false,
+            }
+        }
+    }
+
+    /// `getBrandAgentLogoStyle`: white and near-white brand marks take
+    /// `--ghostex-light-icon-color` (the foreground) on the light theme.
+    fn brand(&self, accent: u32) -> Rgba {
+        if self.light && matches!(accent, 0xffffff | 0xedecec) {
+            self.foreground
+        } else {
+            rgb(accent)
+        }
+    }
+}
+
+/// One sidebar HUD agent button, with its logo resolved by the host.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NewThreadPickerAgent {
     pub(crate) agent_id: String,
     pub(crate) name: String,
+    /// The HUD icon id (`claude`, `codex`, ...), which is also the provider family.
     pub(crate) icon: Option<String>,
+    /// The logo asset, its rendered size, and its brand colour; `None` draws the generic code glyph.
+    pub(crate) icon_path: Option<&'static str>,
+    pub(crate) icon_svg_size: f32,
+    pub(crate) icon_accent: u32,
+    /// The HUD's `usesOwnLogin`: the agent's command picks its own login, so it lists no accounts.
+    pub(crate) uses_own_login: bool,
 }
 
 impl NewThreadPickerAgent {
-    fn from_hud(value: &Value) -> Option<Self> {
-        let agent_id = value.get("agentId")?.as_str()?.trim();
-        let name = value.get("name")?.as_str()?.trim();
-        if agent_id.is_empty() || name.is_empty() {
-            return None;
-        }
-        Some(Self {
-            agent_id: agent_id.to_string(),
-            name: name.to_string(),
-            icon: value
-                .get("icon")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|icon| !icon.is_empty())
-                .map(str::to_string),
-        })
-    }
-
     fn family(&self) -> &str {
         self.icon.as_deref().unwrap_or(&self.agent_id)
     }
 
-    /// Claude and Codex are the providers with Ghostex-managed accounts.
+    /// Claude and Codex are the providers with Ghostex-managed accounts, unless the agent's command
+    /// picks its own login.
     pub(crate) fn provider(&self) -> Option<&'static str> {
+        if self.uses_own_login {
+            return None;
+        }
         match self.family() {
             "claude" => Some("claude"),
             "codex" => Some("codex"),
@@ -72,7 +206,7 @@ impl NewThreadPickerAgent {
         }
     }
 
-    /// Port of `resolveSessionChatTranscriptAgent` in packages/shared/session-chat.ts.
+    /// Port of `resolveSessionChatTranscriptAgent` in packages/shared/session-chat-agents.ts.
     fn supports_chat(&self) -> bool {
         [self.agent_id.as_str(), self.family()]
             .into_iter()
@@ -100,47 +234,59 @@ impl NewThreadPickerAgent {
                 )
             })
     }
-
-    fn icon_path(&self) -> &'static str {
-        self.icon
-            .as_deref()
-            .and_then(workspace_tab_agent_icon_path)
-            .unwrap_or(ICON_PATH_AGENT_FALLBACK)
-    }
-
-    fn icon_svg_size(&self) -> f32 {
-        self.icon
-            .as_deref()
-            .map(workspace_tab_agent_svg_size)
-            .unwrap_or(12.0)
-    }
-
-    fn icon_color(&self) -> Hsla {
-        match self.icon.as_deref() {
-            Some(icon) => rgb(workspace_tab_agent_icon_accent_color(icon)).into(),
-            None => rgb(0xffffff).opacity(0.62).into(),
-        }
-    }
 }
 
-/// The sidebar HUD agent buttons in dropdown order, with the last-used agent
-/// moved to the front so it is the preselected row.
-pub(crate) fn order_new_thread_picker_agents(
-    hud_agents: &[Value],
-    primary_agent_id: Option<&str>,
-) -> Vec<NewThreadPickerAgent> {
-    let mut agents: Vec<NewThreadPickerAgent> = hud_agents
-        .iter()
-        .filter_map(NewThreadPickerAgent::from_hud)
-        .collect();
-    if let Some(primary_index) = primary_agent_id
-        .and_then(|primary| agents.iter().position(|agent| agent.agent_id == primary))
-    {
-        let primary = agents.remove(primary_index);
-        agents.insert(0, primary);
-    }
-    agents
+/// One registered Claude or Codex account, already masked and summarised by the host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NewThreadPickerAccount {
+    pub(crate) id: String,
+    pub(crate) provider: String,
+    pub(crate) name: String,
+    /// `AccountLauncherUsage`: the usage figures line, when the account has any.
+    pub(crate) usage: Option<String>,
+    pub(crate) ready: bool,
+    pub(crate) is_default: bool,
 }
+
+pub(crate) struct NewThreadPickerConfig {
+    pub(crate) palette: ModalPalette,
+    pub(crate) agents: Vec<NewThreadPickerAgent>,
+    pub(crate) agents_loaded: bool,
+    /// `None` until the accounts list has been read once.
+    pub(crate) accounts: Option<Vec<NewThreadPickerAccount>>,
+    /// The agentbox boxes a thread can run in, as last read.
+    pub(crate) boxes: NewThreadPickerBoxes,
+    /// Settings' default location: `local` or a box's `runLocation`.
+    pub(crate) default_run_location: String,
+    /// The app closes the picker when its window stops being key; the preview keeps it open.
+    pub(crate) close_when_inactive: bool,
+}
+
+/// What the picker asks its host to do. The picker removes its own window
+/// before sending any command except `RetryAccounts`.
+pub(crate) enum NewThreadPickerCommand {
+    /// `runSidebarAgent { agentId, accountId?, runLocation? }`.
+    LaunchAgent {
+        agent_id: String,
+        account_id: Option<String>,
+        /// A box's `runLocation`; `None` runs on this computer.
+        run_location: Option<String>,
+    },
+    /// `openBrowserPaneInGroup`.
+    OpenBrowser,
+    /// `createSession`.
+    CreateTerminal,
+    /// Settings on its Accounts page.
+    AddAccount,
+    /// Settings on its Cloud Boxes page (the Run on row's set-up link).
+    OpenCloudBoxesSettings,
+    /// Read the accounts list again after a failure.
+    RetryAccounts,
+    /// Escape, or the window lost activation.
+    Closed,
+}
+
+pub(crate) type NewThreadPickerHost = Rc<dyn Fn(NewThreadPickerCommand, &mut App)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickerRow {
@@ -167,80 +313,21 @@ fn matches_query(text: &str, normalized_query: &str) -> bool {
         .all(|needle| haystack_chars.any(|candidate| candidate == needle))
 }
 
-/// Port of `accountUsageLabel` in packages/shared/account-usage-label.ts.
-/// CDXC:AgentProviders 2026-09-12 SEE-ALSO:
-/// packages/shared/account-usage-label.ts owns the shared Fable percentage label decision.
-fn usage_window_label(window: &Value) -> Option<String> {
-    if window["model"]
-        .as_str()
-        .is_some_and(|model| model.eq_ignore_ascii_case("fable"))
-    {
-        return Some("Fable".to_string());
-    }
-    let seconds = window["limitWindowSeconds"].as_i64().unwrap_or(0);
-    let duration = if seconds > 0 {
-        if seconds % 86_400 == 0 {
-            Some(format!("{}d", seconds / 86_400))
-        } else if seconds % 3_600 == 0 {
-            Some(format!("{}h", seconds / 3_600))
-        } else {
-            Some(format!("{}m", seconds / 60))
-        }
-    } else if window["id"].as_str() == Some("fiveHour") {
-        Some("5h".to_string())
-    } else if window["id"].as_str() == Some("sevenDay") || window["model"].is_string() {
-        Some("7d".to_string())
-    } else {
-        None
-    };
-    match duration {
-        Some(duration) => Some(match window["model"].as_str() {
-            Some(model) => format!("{model} {duration}"),
-            None => duration,
-        }),
-        None => window["label"].as_str().map(str::to_string),
-    }
-}
-
-/// Port of `AccountLauncherUsage` in packages/core-ui/accounts/agent-launcher-menu.tsx:
-/// Claude shows its two tightest limits out of weekly, five-hour, and Fable, Codex the weekly window and available resets.
-fn account_usage_line(account: &Value) -> Option<String> {
-    let windows = account["usage"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let main: Vec<&Value> = windows.iter().filter(|w| w["model"].is_null()).collect();
-    let weekly = main.iter().copied().find(|w| {
-        w["id"].as_str() == Some("sevenDay")
-            || w["limitWindowSeconds"].as_i64().unwrap_or(0) >= 604_800
-    });
-    let percent = |w: &Value| -> Option<String> {
-        let label = usage_window_label(w)?;
-        let used = w["usedPercent"].as_f64()?;
-        Some(format!("{label}: {}%", used.round() as i64))
-    };
-    let values: Vec<String> = if account["provider"].as_str() == Some("claude") {
-        claude_headline_windows(windows)
-            .into_iter()
-            .filter_map(percent)
-            .collect()
-    } else {
-        let mut values: Vec<String> = weekly.and_then(percent).into_iter().collect();
-        if let Some(resets) = account["resetCredits"].as_u64() {
-            values.push(format!("{resets}rs"));
-        }
-        values
-    };
-    (!values.is_empty()).then(|| values.join(" · "))
-}
-
 pub(crate) struct GpuiNewThreadPickerWindow {
-    main_app: gpui::WeakEntity<GhostexGpuiApp>,
+    host: NewThreadPickerHost,
+    colors: PickerColors,
+    /// Set by the app when the picker's window is blurred under window glass.
+    pub(crate) glass: bool,
+    /// The app's frosted menu fill for this picker's surface, set with `glass`.
+    pub(crate) frosted_fill: Option<gpui::Hsla>,
     input: Entity<InputState>,
     agents: Vec<NewThreadPickerAgent>,
     agents_loaded: bool,
-    accounts: Option<Value>,
+    accounts: Option<Vec<NewThreadPickerAccount>>,
     accounts_error: Option<String>,
+    run_on: RunOnState,
+    /// The Run on chips' horizontal scroll (new_thread_picker_run_on.rs).
+    run_on_scroll: ScrollHandle,
     query: String,
     selected: usize,
     scope: Option<usize>,
@@ -248,78 +335,107 @@ pub(crate) struct GpuiNewThreadPickerWindow {
     /// Set once the window has been key; a preloaded hidden window is never
     /// active, so losing activation only closes a window that was shown.
     was_active: bool,
-    _subscriptions: Vec<gpui::Subscription>,
+    close_when_inactive: bool,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl GpuiNewThreadPickerWindow {
-    pub(crate) fn new(
-        main_app: gpui::WeakEntity<GhostexGpuiApp>,
-        agents: Vec<NewThreadPickerAgent>,
-        agents_loaded: bool,
-        accounts: Option<Value>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
-        cx.new(|cx| {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder("Search agents, browser, terminal...")
-            });
-            let change_subscription = cx.subscribe_in(
-                &input,
-                window,
-                |this: &mut Self, input, event: &InputEvent, _window, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        this.query = input.read(cx).value().to_string();
-                        this.selected = 0;
-                        this.scroll.scroll_to_item(0);
-                        cx.notify();
-                    }
-                },
-            );
-            let activation_subscription =
-                cx.observe_window_activation(window, |this, window, cx| {
-                    // CDXC:AgentLauncher 2026-09-11 WHY:
-                    // A hidden preload has never owned activation, so an inactive notification must not close it and create another preload.
-                    if window.is_window_active() {
-                        this.was_active = true;
-                    } else if this.was_active {
-                        this.close(window, cx);
-                    }
-                });
-            input.update(cx, |input, cx| input.focus(window, cx));
-            Self {
-                main_app,
-                input,
-                agents,
-                agents_loaded,
-                accounts,
-                accounts_error: None,
-                query: String::new(),
-                selected: 0,
-                scope: None,
-                scroll: ScrollHandle::new(),
-                was_active: window.is_window_active(),
-                _subscriptions: vec![change_subscription, activation_subscription],
-            }
-        })
+    /// The picker's own surface colour, which the app thins into its frosted menu fill.
+    pub(crate) fn surface_color(&self) -> gpui::Hsla {
+        hsla(self.colors.surface)
     }
 
-    /// Reuses a preloaded window for a new open: fresh agent order, cached
-    /// accounts, empty query, agent list scope, first row selected, input focused.
+    pub(crate) fn new(
+        config: NewThreadPickerConfig,
+        host: NewThreadPickerHost,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(PLACEHOLDER_AGENTS));
+        let change_subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.query = input.read(cx).value().to_string();
+                    this.selected = 0;
+                    this.scroll.scroll_to_item(0);
+                    cx.notify();
+                }
+            },
+        );
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            // CDXC:AgentLauncher 2026-09-11 WHY:
+            // A hidden preload has never owned activation, so an inactive notification must not close it and create another preload.
+            if window.is_window_active() {
+                this.was_active = true;
+            } else if this.was_active && this.close_when_inactive {
+                super::popup_dismissal::dismiss_on_focus_loss(
+                    this,
+                    window,
+                    cx,
+                    |this, window, cx| this.close(window, cx),
+                );
+            }
+        });
+        let press_subscription = super::popup_dismissal::observe_main_window_press(
+            window,
+            cx,
+            |this: &mut Self, window, cx| {
+                // A hidden preload is not on screen for a press to click away from.
+                if this.was_active && this.close_when_inactive {
+                    this.close(window, cx);
+                }
+            },
+        );
+        input.update(cx, |input, cx| input.focus(window, cx));
+        let picker = Self {
+            glass: false,
+            frosted_fill: None,
+            host,
+            colors: PickerColors::resolve(&config.palette),
+            input,
+            agents: config.agents,
+            agents_loaded: config.agents_loaded,
+            accounts: config.accounts,
+            accounts_error: None,
+            run_on: RunOnState::new(config.boxes, config.default_run_location),
+            run_on_scroll: ScrollHandle::new(),
+            query: String::new(),
+            selected: 0,
+            scope: None,
+            scroll: ScrollHandle::new(),
+            was_active: window.is_window_active(),
+            close_when_inactive: config.close_when_inactive,
+            _subscriptions: vec![
+                change_subscription,
+                activation_subscription,
+                press_subscription,
+            ],
+        };
+        picker.reveal_selected_run_location();
+        picker
+    }
+
+    /// Reuses a preloaded window for a new open: current palette, fresh agent
+    /// order, cached accounts, empty query, agent list scope, first row
+    /// selected, input focused.
     pub(crate) fn reset(
         &mut self,
-        agents: Vec<NewThreadPickerAgent>,
-        agents_loaded: bool,
-        accounts: Option<Value>,
+        config: NewThreadPickerConfig,
         window: &mut Window,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        self.agents = agents;
-        self.agents_loaded = agents_loaded;
-        if accounts.is_some() {
-            self.accounts = accounts;
+        self.colors = PickerColors::resolve(&config.palette);
+        self.agents = config.agents;
+        self.agents_loaded = config.agents_loaded;
+        if config.accounts.is_some() {
+            self.accounts = config.accounts;
             self.accounts_error = None;
         }
+        self.run_on = RunOnState::new(config.boxes, config.default_run_location);
+        self.fit_window_height(window);
+        self.reveal_selected_run_location();
         self.scope = None;
         self.selected = 0;
         self.clear_query(window, cx);
@@ -332,7 +448,7 @@ impl GpuiNewThreadPickerWindow {
         &mut self,
         agents: Vec<NewThreadPickerAgent>,
         window: &mut Window,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         let selected_agent_id = self
             .scope
@@ -360,21 +476,29 @@ impl GpuiNewThreadPickerWindow {
                 })
                 .unwrap_or(0);
         }
+        self.fit_window_height(window);
+        cx.notify();
+    }
+
+    /// The frame follows the agent count and whether the Run on row is drawn.
+    pub(super) fn fit_window_height(&self, window: &mut Window) {
         window.resize(size(
             px(NEW_THREAD_PICKER_WIDTH),
-            px(new_thread_picker_window_height(self.agents.len())),
+            px(new_thread_picker_window_height(
+                self.agents.len(),
+                self.run_on.shown(),
+            )),
         ));
-        cx.notify();
     }
 
     pub(crate) fn set_accounts(
         &mut self,
-        accounts: Result<Value, String>,
-        cx: &mut gpui::Context<Self>,
+        accounts: Result<Vec<NewThreadPickerAccount>, String>,
+        cx: &mut Context<Self>,
     ) {
         match accounts {
-            Ok(state) => {
-                self.accounts = Some(state);
+            Ok(accounts) => {
+                self.accounts = Some(accounts);
                 self.accounts_error = None;
             }
             Err(error) => {
@@ -385,6 +509,17 @@ impl GpuiNewThreadPickerWindow {
         }
         self.selected = self.selected.min(self.rows().len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// Preview hook: opens the account list of the agent at `agent_index`.
+    #[allow(dead_code)]
+    pub(crate) fn preview_enter_accounts(
+        &mut self,
+        agent_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.enter_scope(agent_index, window, cx);
     }
 
     fn normalized_query(&self) -> String {
@@ -398,15 +533,11 @@ impl GpuiNewThreadPickerWindow {
     fn provider_accounts(&self, provider: &str) -> Vec<usize> {
         self.accounts
             .as_ref()
-            .and_then(|state| state["accounts"].as_array())
             .map(|accounts| {
                 accounts
                     .iter()
                     .enumerate()
-                    .filter(|(_, account)| {
-                        account["registered"].as_bool() == Some(true)
-                            && account["provider"].as_str() == Some(provider)
-                    })
+                    .filter(|(_, account)| account.provider == provider)
                     .map(|(index, _)| index)
                     .collect()
             })
@@ -419,10 +550,9 @@ impl GpuiNewThreadPickerWindow {
             .map(|_| self.provider_accounts(provider).len())
     }
 
-    fn account(&self, index: usize) -> Option<&Value> {
+    fn account(&self, index: usize) -> Option<&NewThreadPickerAccount> {
         self.accounts
             .as_ref()
-            .and_then(|state| state["accounts"].as_array())
             .and_then(|accounts| accounts.get(index))
     }
 
@@ -430,17 +560,20 @@ impl GpuiNewThreadPickerWindow {
         let query = self.normalized_query();
         match self.scope_agent() {
             None => {
+                // A box runs only agentbox's agents, and a browser or a terminal never runs in one.
+                let in_box = self.run_on.in_box();
                 let mut rows: Vec<PickerRow> = self
                     .agents
                     .iter()
                     .enumerate()
+                    .filter(|(_, agent)| !in_box || runs_in_box(agent))
                     .filter(|(_, agent)| matches_query(&agent.name, &query))
                     .map(|(index, _)| PickerRow::Agent(index))
                     .collect();
-                if matches_query("Browser", &query) {
+                if !in_box && matches_query(ROW_BROWSER, &query) {
                     rows.push(PickerRow::Browser);
                 }
-                if matches_query("Terminal", &query) {
+                if !in_box && matches_query(ROW_TERMINAL, &query) {
                     rows.push(PickerRow::Terminal);
                 }
                 rows
@@ -464,8 +597,7 @@ impl GpuiNewThreadPickerWindow {
                     .into_iter()
                     .filter(|index| {
                         self.account(*index)
-                            .and_then(|account| account["name"].as_str())
-                            .is_some_and(|name| matches_query(name, &query))
+                            .is_some_and(|account| matches_query(&account.name, &query))
                     })
                     .map(PickerRow::Account)
                     .collect()
@@ -491,7 +623,7 @@ impl GpuiNewThreadPickerWindow {
         }
     }
 
-    fn move_selection(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
+    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let rows = self.rows();
         if rows.is_empty() {
             return;
@@ -504,38 +636,48 @@ impl GpuiNewThreadPickerWindow {
         cx.notify();
     }
 
-    fn clear_query(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn clear_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.query.clear();
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
     }
 
-    fn enter_scope(
-        &mut self,
-        agent_index: usize,
+    fn set_placeholder(
+        &self,
+        placeholder: &'static str,
         window: &mut Window,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        if self
-            .agents
-            .get(agent_index)
-            .and_then(NewThreadPickerAgent::provider)
-            .is_none()
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx);
+        });
+    }
+
+    fn enter_scope(&mut self, agent_index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // A box signs in on its own, so it has no account list.
+        if self.run_on.in_box()
+            || self
+                .agents
+                .get(agent_index)
+                .and_then(NewThreadPickerAgent::provider)
+                .is_none()
         {
             return;
         }
         self.scope = Some(agent_index);
         self.selected = 0;
         self.clear_query(window, cx);
+        self.set_placeholder(PLACEHOLDER_ACCOUNTS, window, cx);
         self.scroll.scroll_to_item(0);
         cx.notify();
     }
 
-    fn leave_scope(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn leave_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(agent_index) = self.scope.take() else {
             return;
         };
         self.clear_query(window, cx);
+        self.set_placeholder(PLACEHOLDER_AGENTS, window, cx);
         let rows = self.rows();
         self.selected = rows
             .iter()
@@ -546,95 +688,90 @@ impl GpuiNewThreadPickerWindow {
         cx.notify();
     }
 
-    fn close(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn remove_window(&mut self, window: &mut Window) {
         self.was_active = false;
-        let _ = self.main_app.update(cx, |app, cx| {
-            app.release_gpui_new_thread_picker_window(cx);
-        });
         window.remove_window();
     }
 
-    fn launch_agent(
-        &mut self,
-        agent: &NewThreadPickerAgent,
-        account_id: Option<String>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let mut message = json!({
-            "agentId": agent.agent_id,
-            "type": "runSidebarAgent",
-        });
-        if let Some(account_id) = account_id {
-            message["accountId"] = json!(account_id);
-        }
-        let agent_id = agent.agent_id.clone();
-        let _ = self.main_app.update(cx, |app, cx| {
-            app.sidebar_primary_agent_launcher_id = Some(agent_id);
-            app.dispatch_gpui_sidebar_host_message(message, cx);
-        });
-        self.close(window, cx);
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_window(window);
+        (self.host)(NewThreadPickerCommand::Closed, cx);
     }
 
-    fn dispatch_sidebar_and_close(
+    fn finish(
         &mut self,
-        message: Value,
+        command: NewThreadPickerCommand,
         window: &mut Window,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        let _ = self.main_app.update(cx, |app, cx| {
-            app.dispatch_gpui_sidebar_host_message(message, cx);
-        });
-        self.close(window, cx);
+        self.remove_window(window);
+        (self.host)(command, cx);
     }
 
-    fn activate(&mut self, row: PickerRow, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn activate(&mut self, row: PickerRow, window: &mut Window, cx: &mut Context<Self>) {
         match row {
             PickerRow::Agent(index) => {
-                if let Some(agent) = self.agents.get(index).cloned() {
-                    self.launch_agent(&agent, None, window, cx);
+                if let Some(agent) = self.agents.get(index) {
+                    let agent_id = agent.agent_id.clone();
+                    let run_location = self.run_on.run_location().map(str::to_string);
+                    self.finish(
+                        NewThreadPickerCommand::LaunchAgent {
+                            agent_id,
+                            account_id: None,
+                            run_location,
+                        },
+                        window,
+                        cx,
+                    );
                 }
             }
             PickerRow::Account(index) => {
-                let Some(agent) = self.scope_agent().cloned() else {
+                let Some(agent_id) = self.scope_agent().map(|agent| agent.agent_id.clone()) else {
                     return;
                 };
                 let Some(account) = self.account(index) else {
                     return;
                 };
-                if account["status"].as_str() != Some("ready") {
+                if !account.ready {
                     return;
                 }
-                let account_id = account["id"].as_str().map(str::to_string);
-                self.launch_agent(&agent, account_id, window, cx);
-            }
-            PickerRow::CliLogin => {
-                if let Some(agent) = self.scope_agent().cloned() {
-                    self.launch_agent(&agent, None, window, cx);
-                }
-            }
-            PickerRow::AddAccount => {
-                let _ = self.main_app.update(cx, |app, cx| {
-                    app.open_gpui_settings_accounts_from_new_thread_picker(cx);
-                });
-                self.close(window, cx);
-            }
-            PickerRow::Retry => {
-                self.accounts_error = None;
-                let _ = self.main_app.update(cx, |app, cx| {
-                    app.refresh_gpui_new_thread_picker_accounts(cx);
-                });
-                cx.notify();
-            }
-            PickerRow::Browser => {
-                self.dispatch_sidebar_and_close(
-                    json!({ "type": "openBrowserPaneInGroup" }),
+                let account_id = Some(account.id.clone());
+                self.finish(
+                    NewThreadPickerCommand::LaunchAgent {
+                        agent_id,
+                        account_id,
+                        run_location: None,
+                    },
                     window,
                     cx,
                 );
             }
+            PickerRow::CliLogin => {
+                if let Some(agent_id) = self.scope_agent().map(|agent| agent.agent_id.clone()) {
+                    self.finish(
+                        NewThreadPickerCommand::LaunchAgent {
+                            agent_id,
+                            account_id: None,
+                            run_location: None,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            PickerRow::AddAccount => {
+                self.finish(NewThreadPickerCommand::AddAccount, window, cx);
+            }
+            PickerRow::Retry => {
+                self.accounts_error = None;
+                (self.host)(NewThreadPickerCommand::RetryAccounts, cx);
+                cx.notify();
+            }
+            PickerRow::Browser => {
+                self.finish(NewThreadPickerCommand::OpenBrowser, window, cx);
+            }
             PickerRow::Terminal => {
-                self.dispatch_sidebar_and_close(json!({ "type": "createSession" }), window, cx);
+                self.finish(NewThreadPickerCommand::CreateTerminal, window, cx);
             }
         }
     }
@@ -649,21 +786,29 @@ impl GpuiNewThreadPickerWindow {
     and Backspace propagate to the field whenever the picker has no use for
     them, so cursor editing still works.
     */
-    fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut gpui::Context<Self>) {
+    /*
+    CDXC:AgentLauncher 2026-09-24 WHY:
+    A capture-phase action keeps propagating unless its listener stops it, and the single-line field registers no Up, Down, or Tab handler. An unstopped Up or Down was therefore re-dispatched through every other matching binding and the retried native keystroke (the selection jumped several rows) and finally reported unhandled, so AppKit beeped. Every key the picker uses stops propagation.
+    */
+    fn on_move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.move_selection(-1, cx);
     }
 
-    fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_move_down(&mut self, _: &MoveDown, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.move_selection(1, cx);
     }
 
-    fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         if let Some(row) = self.selected_row() {
             self.activate(row, window, cx);
         }
     }
 
-    fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         if self.scope.is_some() {
             self.leave_scope(window, cx);
         } else {
@@ -672,7 +817,8 @@ impl GpuiNewThreadPickerWindow {
     }
 
     /// Tab: open the highlighted Claude or Codex agent's account list.
-    fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         if self.scope.is_none() {
             if let Some(PickerRow::Agent(index)) = self.selected_row() {
                 self.enter_scope(index, window, cx);
@@ -680,10 +826,11 @@ impl GpuiNewThreadPickerWindow {
         }
     }
 
-    fn on_move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
         if self.scope.is_none() {
             if let Some(PickerRow::Agent(index)) = self.selected_row() {
                 if self.agents[index].provider().is_some() {
+                    cx.stop_propagation();
                     self.enter_scope(index, window, cx);
                     return;
                 }
@@ -692,27 +839,27 @@ impl GpuiNewThreadPickerWindow {
         cx.propagate();
     }
 
-    fn on_move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
         if self.scope.is_some() {
+            cx.stop_propagation();
             self.leave_scope(window, cx);
             return;
         }
         cx.propagate();
     }
 
-    fn on_backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.scope.is_some() && self.query.is_empty() {
+            cx.stop_propagation();
             self.leave_scope(window, cx);
             return;
         }
         cx.propagate();
     }
 
-    fn muted_text_color() -> Hsla {
-        rgb(0xffffff).opacity(0.50).into()
-    }
-
-    fn render_kbd(label: &'static str) -> impl IntoElement {
+    /// `.new-thread-palette-hints kbd`: 16px chips tinted from the foreground.
+    fn render_kbd(&self, label: &'static str) -> impl IntoElement {
+        let c = &self.colors;
         div()
             .flex()
             .h(px(16.0))
@@ -721,22 +868,25 @@ impl GpuiNewThreadPickerWindow {
             .items_center()
             .justify_center()
             .rounded(px(4.0))
-            .bg(rgb(0xffffff).opacity(0.08))
+            .bg(hsla(rgba_of(c.foreground, 0.08)))
             .border_1()
-            .border_color(rgb(0xffffff).opacity(0.14))
+            .border_color(hsla(rgba_of(c.foreground, 0.14)))
             .text_size(px(10.0))
             .line_height(px(14.0))
             .child(label)
     }
 
-    fn render_hint(keys: &[&'static str], label: &'static str) -> impl IntoElement {
+    fn render_hint(&self, keys: &[&'static str], label: &'static str) -> impl IntoElement {
         h_flex()
             .items_center()
             .gap(px(4.0))
-            .children(keys.iter().map(|key| Self::render_kbd(key)))
+            .children(keys.iter().map(|key| self.render_kbd(key)))
             .child(label)
     }
 
+    /// `.new-thread-palette-hints`: 11px muted at 80%, centered, 9px 16px 7px.
+    /// CDXC:AgentLauncher 2026-09-16 DECISION:
+    /// User: "center the controls please in this modal and add 3px margin from top/bottom of the controls": the key-hint chips sit centered under the search field with 3px more room above and below them than the React palette first had; the CSS twin carries the same values.
     fn render_hints(&self) -> impl IntoElement {
         let in_accounts = self.scope.is_some();
         h_flex()
@@ -746,29 +896,30 @@ impl GpuiNewThreadPickerWindow {
             .justify_center()
             .gap(px(12.0))
             .px(px(16.0))
-            .pt(px(6.0))
-            .pb(px(4.0))
+            .pt(px(9.0))
+            .pb(px(7.0))
             .text_size(px(11.0))
             .line_height(px(16.0))
-            .text_color(Self::muted_text_color())
-            .child(Self::render_hint(&["↑", "↓"], "Move"))
-            .child(Self::render_hint(&["↵"], "Start"))
-            .child(if in_accounts {
-                Self::render_hint(&["←"], "Back")
-            } else {
-                Self::render_hint(&["⇥"], "Accounts")
+            .text_color(hsla(rgba_of(self.colors.muted, 0.8)))
+            .child(self.render_hint(&["↑", "↓"], HINT_MOVE))
+            .child(self.render_hint(&["↵"], HINT_START))
+            // A box location has no account list for Tab to open.
+            .when(in_accounts || !self.run_on.in_box(), |hints| {
+                hints.child(if in_accounts {
+                    self.render_hint(&["←"], HINT_BACK)
+                } else {
+                    self.render_hint(&["⇥"], HINT_ACCOUNTS)
+                })
             })
-            .child(Self::render_hint(
-                &["esc"],
-                if in_accounts { "Back" } else { "Close" },
-            ))
+            .children(self.run_on_key_hint())
+            .child(self.render_hint(&["esc"], if in_accounts { HINT_BACK } else { HINT_CLOSE }))
     }
 
-    fn render_search(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let scope_chip = self.scope_agent().map(|agent| {
-            let icon_path = agent.icon_path();
-            let icon_size = agent.icon_svg_size();
-            let icon_color = agent.icon_color();
+    /// `.new-thread-palette-scope`: the provider chip inside the search field
+    /// while its accounts are listed; clicking it goes back.
+    fn render_scope_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let c = self.colors;
+        self.scope_agent().map(|agent| {
             h_flex()
                 .id("ghostex-gpui-new-thread-picker-scope")
                 .flex_shrink_0()
@@ -778,47 +929,38 @@ impl GpuiNewThreadPickerWindow {
                 .pl(px(4.0))
                 .pr(px(7.0))
                 .rounded(px(4.0))
-                .bg(rgb(0xffffff).opacity(0.08))
-                .hover(|this| this.bg(rgb(0xffffff).opacity(0.14)))
+                .bg(hsla(rgba_of(c.foreground, 0.08)))
+                .hover(|this| this.bg(hsla(rgba_of(c.foreground, 0.14))))
                 .text_size(px(12.0))
-                .text_color(titlebar_text_color())
-                .child(
-                    svg()
-                        .path(ICON_PATH_BACK)
-                        .size(px(12.0))
-                        .text_color(Self::muted_text_color()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .size(px(14.0))
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            svg()
-                                .path(icon_path)
-                                .size(px(icon_size))
-                                .text_color(icon_color),
-                        ),
-                )
+                .text_color(hsla(c.foreground))
+                .child(modal_icon(ICON_BACK, 12.0, c.foreground))
+                .child(self.render_agent_icon(agent, 14.0, 0.0))
                 .child(agent.name.clone())
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.leave_scope(window, cx);
                 }))
-        });
+        })
+    }
+
+    /// `CommandInput`: the 36px input group with the search glyph at the end
+    /// while empty and a clear button once something is typed.
+    fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let c = self.colors;
+        let has_query = !self.query.is_empty();
         h_flex()
             .flex_shrink_0()
             .h(px(NEW_THREAD_PICKER_SEARCH_HEIGHT))
             .mx(px(6.0))
             .mt(px(6.0))
-            .px(px(10.0))
-            .gap(px(8.0))
+            .pl(px(12.0))
+            .pr(px(12.0))
+            .gap(px(10.0))
             .items_center()
             .rounded(px(6.0))
             .border_1()
-            .border_color(rgb(0xffffff).opacity(0.10))
-            .bg(rgb(0xffffff).opacity(0.05))
-            .children(scope_chip)
+            .border_color(hsla(c.input_border))
+            .bg(hsla(c.input_background))
+            .children(self.render_scope_chip(cx))
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&self.input)
@@ -830,24 +972,66 @@ impl GpuiNewThreadPickerWindow {
                         .px(px(0.0))
                         .py(px(0.0))
                         .text_size(px(ROW_TEXT_SIZE))
-                        .text_color(titlebar_text_color()),
+                        .text_color(hsla(c.item)),
                 ),
             )
-            .child(
-                svg()
-                    .path(ICON_PATH_SEARCH)
-                    .size(px(14.0))
-                    .text_color(Self::muted_text_color()),
-            )
+            .child(if has_query {
+                div()
+                    .id("ghostex-gpui-new-thread-picker-clear")
+                    .flex()
+                    .flex_shrink_0()
+                    .size(px(24.0))
+                    .items_center()
+                    .justify_center()
+                    .text_color(hsla(c.muted))
+                    .hover(|this| this.text_color(hsla(c.foreground)))
+                    .child(modal_icon(ICON_CLEAR, 16.0, c.muted))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.clear_query(window, cx);
+                        this.selected = 0;
+                        this.input.update(cx, |input, cx| input.focus(window, cx));
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            } else {
+                modal_icon(ICON_SEARCH, 16.0, rgba_of(c.muted, 0.5)).into_any_element()
+            })
     }
 
+    /// `ProjectAgentLauncherIcon` in brand colour: the provider logo in its
+    /// 14px box, or the code glyph for agents without one.
+    fn render_agent_icon(
+        &self,
+        agent: &NewThreadPickerAgent,
+        box_size: f32,
+        grow: f32,
+    ) -> AnyElement {
+        let c = self.colors;
+        div()
+            .flex()
+            .flex_shrink_0()
+            .size(px(box_size))
+            .items_center()
+            .justify_center()
+            .child(match agent.icon_path {
+                Some(path) => {
+                    modal_icon(path, agent.icon_svg_size + grow, c.brand(agent.icon_accent))
+                }
+                None => modal_icon(ICON_CODE, 14.0, c.glyph),
+            })
+            .into_any_element()
+    }
+
+    /// `.new-thread-palette-row`: 36px, 10px inset, 5px radius; the selected row
+    /// carries the composer fill and its 1px ring.
     fn row_shell(
         &self,
         id: impl Into<ElementId>,
         row: PickerRow,
         selected: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let c = self.colors;
         h_flex()
             .id(id)
             .flex_shrink_0()
@@ -858,30 +1042,29 @@ impl GpuiNewThreadPickerWindow {
             .px(px(10.0))
             .rounded(px(5.0))
             .border_1()
-            .border_color(gpui::transparent_black())
+            .border_color(transparent())
             .text_size(px(ROW_TEXT_SIZE))
-            .text_color(titlebar_text_color())
+            .line_height(px(ROW_LINE_HEIGHT))
+            .text_color(hsla(c.label))
             .when(selected, |this| {
-                this.bg(rgb(0x141414))
-                    .border_color(rgb(0xffffff).opacity(0.05))
-                    .text_color(rgb(0xd8d8d8))
+                this.bg(hsla(c.selected_background))
+                    .border_color(hsla(c.selected_ring))
+                    .text_color(hsla(c.selected_label))
             })
             .when(!selected, |this| {
-                this.hover(|this| this.bg(rgb(0xffffff).opacity(0.05)))
+                this.hover(|this| this.bg(hsla(rgba_of(c.foreground, 0.05))))
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.activate(row, window, cx);
             }))
     }
 
-    fn render_agent_row(
-        &self,
-        index: usize,
-        selected: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
+    fn render_agent_row(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        let c = self.colors;
         let agent = &self.agents[index];
-        let provider = agent.provider();
+        // A box has no account list and opens in the terminal, so neither marker applies there.
+        let in_box = self.run_on.in_box();
+        let provider = agent.provider().filter(|_| !in_box);
         let account_count = provider.and_then(|provider| self.provider_account_count(provider));
         self.row_shell(
             ElementId::Name(format!("new-thread-agent-{}", agent.agent_id).into()),
@@ -889,20 +1072,7 @@ impl GpuiNewThreadPickerWindow {
             selected,
             cx,
         )
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .size(px(14.0))
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path(agent.icon_path())
-                        .size(px(agent.icon_svg_size()))
-                        .text_color(agent.icon_color()),
-                ),
-        )
+        .child(self.render_agent_icon(agent, 14.0, 0.0))
         .child(
             div()
                 .flex_1()
@@ -913,6 +1083,8 @@ impl GpuiNewThreadPickerWindow {
                 .child(agent.name.clone()),
         )
         .when(provider.is_some(), |this| {
+            // `.group-agent-menu-accounts` + `button.group-agent-menu-account-button`:
+            // muted at 58%, 24px tall, its own 5px hover surface and outline.
             this.child(
                 h_flex()
                     .id(ElementId::Name(
@@ -926,18 +1098,16 @@ impl GpuiNewThreadPickerWindow {
                     .gap(px(3.0))
                     .px(px(4.0))
                     .rounded(px(5.0))
+                    .border_1()
+                    .border_color(transparent())
                     .text_size(px(12.0))
-                    .text_color(rgb(0xffffff).opacity(0.5))
+                    .text_color(hsla(rgba_of(c.muted, 0.58)))
                     .hover(|this| {
-                        this.bg(rgb(0xffffff).opacity(0.10))
-                            .text_color(rgb(0xffffff).opacity(0.8))
+                        this.bg(hsla(rgba_of(c.foreground, 0.10)))
+                            .border_color(hsla(rgba_of(c.foreground, 0.18)))
+                            .text_color(hsla(rgba_of(c.muted, 0.9)))
                     })
-                    .child(
-                        svg()
-                            .path(ICON_PATH_ACCOUNTS)
-                            .size(px(14.0))
-                            .text_color(gpui::Hsla::from(rgb(0xffffff)).opacity(0.5)),
-                    )
+                    .child(modal_icon(ICON_ACCOUNTS, 14.0, rgba_of(c.muted, 0.58)))
                     .children(account_count.map(|count| count.to_string()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -945,14 +1115,15 @@ impl GpuiNewThreadPickerWindow {
                     })),
             )
         })
-        .when(agent.supports_chat(), |this| {
+        .when(!in_box && agent.supports_chat(), |this| {
+            // `.group-agent-menu-chat-support`: muted at 58%, 6px before and 5px after.
             this.child(
-                div().flex().flex_shrink_0().ml(px(6.0)).mr(px(5.0)).child(
-                    svg()
-                        .path(ICON_PATH_CHAT)
-                        .size(px(14.0))
-                        .text_color(gpui::Hsla::from(rgb(0xffffff)).opacity(0.5)),
-                ),
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .ml(px(6.0))
+                    .mr(px(5.0))
+                    .child(modal_icon(ICON_CHAT, 14.0, rgba_of(c.muted, 0.58))),
             )
         })
         .into_any_element()
@@ -965,8 +1136,9 @@ impl GpuiNewThreadPickerWindow {
         icon_path: &'static str,
         label: &'static str,
         selected: bool,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let c = self.colors;
         self.row_shell(id, row, selected, cx)
             .child(
                 div()
@@ -975,37 +1147,28 @@ impl GpuiNewThreadPickerWindow {
                     .size(px(14.0))
                     .items_center()
                     .justify_center()
-                    .child(
-                        svg()
-                            .path(icon_path)
-                            .size(px(14.0))
-                            .text_color(gpui::Hsla::from(rgb(0xffffff)).opacity(0.62)),
-                    ),
+                    .child(modal_icon(icon_path, 14.0, c.glyph)),
             )
             .child(div().flex_1().min_w_0().child(label))
             .into_any_element()
     }
 
+    /// `.new-thread-palette-account-row`: the 16px provider logo, the name with
+    /// its Default marker, and the usage figures underneath.
     fn render_account_row(
         &self,
         index: usize,
         selected: bool,
-        cx: &mut gpui::Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(account) = self.account(index) else {
+        let c = self.colors;
+        let (Some(agent), Some(account)) = (self.scope_agent(), self.account(index)) else {
             return div().into_any_element();
         };
-        let provider = account["provider"].as_str().unwrap_or("claude");
-        let ready = account["status"].as_str() == Some("ready");
-        let is_default = self
-            .accounts
-            .as_ref()
-            .and_then(|state| state["defaultAccounts"][provider].as_str())
-            .is_some_and(|default_id| Some(default_id) == account["id"].as_str());
-        let display_name = account_display_name(account);
-        let usage = account_usage_line(account);
-        let icon_path = workspace_tab_agent_icon_path(provider).unwrap_or(ICON_PATH_AGENT_FALLBACK);
-        let icon_color: Hsla = rgb(workspace_tab_agent_icon_accent_color(provider)).into();
+        let display_name = account.name.clone();
+        let usage = account.usage.clone();
+        let is_default = account.is_default;
+        let ready = account.ready;
         self.row_shell(
             ElementId::Name(format!("new-thread-account-{index}").into()),
             PickerRow::Account(index),
@@ -1013,21 +1176,8 @@ impl GpuiNewThreadPickerWindow {
             cx,
         )
         .py(px(6.0))
-        .when(!ready, |this| this.opacity(0.42))
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .size(px(16.0))
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path(icon_path)
-                        .size(px(workspace_tab_agent_svg_size(provider) + 1.5))
-                        .text_color(icon_color),
-                ),
-        )
+        .when(!ready, |this| this.opacity(0.5))
+        .child(self.render_agent_icon(agent, 16.0, 1.5))
         .child(
             v_flex()
                 .flex_1()
@@ -1051,17 +1201,17 @@ impl GpuiNewThreadPickerWindow {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(11.0))
-                                    .text_color(Self::muted_text_color())
-                                    .child("· Default"),
+                                    .text_color(hsla(c.muted))
+                                    .child(DEFAULT_SUFFIX),
                             )
                         }),
                 )
                 .children(usage.map(|usage| {
                     div()
-                        .font_family(ACCOUNT_INDICATOR_FONT_FAMILY)
+                        .font_family(MODAL_MONO_FONT)
                         .text_size(px(10.5))
                         .line_height(px(13.0))
-                        .text_color(Self::muted_text_color())
+                        .text_color(hsla(c.muted))
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
@@ -1071,28 +1221,42 @@ impl GpuiNewThreadPickerWindow {
         .into_any_element()
     }
 
-    fn render_hint_text(text: impl Into<SharedString>) -> AnyElement {
+    /// `.gx-account-launcher-hint` inside the palette: 11px muted, 6px 10px.
+    fn render_hint_text(&self, text: impl Into<SharedString>) -> AnyElement {
         div()
             .px(px(10.0))
             .py(px(6.0))
             .text_size(px(11.0))
-            .line_height(px(16.0))
-            .text_color(Self::muted_text_color())
+            .line_height(px(16.5))
+            .text_color(hsla(self.colors.muted))
             .child(text.into())
             .into_any_element()
     }
 
-    fn render_divider() -> AnyElement {
+    /// `CommandEmpty`: centered 14px text with 24px above and below.
+    fn render_empty(&self, text: &'static str) -> AnyElement {
+        div()
+            .w_full()
+            .py(px(24.0))
+            .text_center()
+            .text_size(px(ROW_TEXT_SIZE))
+            .line_height(px(ROW_LINE_HEIGHT))
+            .text_color(hsla(self.colors.item))
+            .child(text)
+            .into_any_element()
+    }
+
+    fn render_divider(&self) -> AnyElement {
         div()
             .flex_shrink_0()
             .h(px(1.0))
             .mx(px(4.0))
             .my(px(4.0))
-            .bg(rgb(0xffffff).opacity(0.10))
+            .bg(hsla(self.colors.divider))
             .into_any_element()
     }
 
-    fn render_list(&self, cx: &mut gpui::Context<Self>) -> Vec<AnyElement> {
+    fn render_list(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let rows = self.rows();
         let mut children: Vec<AnyElement> = Vec::new();
         match self.scope_agent() {
@@ -1104,23 +1268,23 @@ impl GpuiNewThreadPickerWindow {
                 for (position, row) in rows.iter().enumerate() {
                     let selected = position == self.selected;
                     if agent_rows > 0 && position == agent_rows {
-                        children.push(Self::render_divider());
+                        children.push(self.render_divider());
                     }
                     children.push(match *row {
                         PickerRow::Agent(index) => self.render_agent_row(index, selected, cx),
                         PickerRow::Browser => self.render_plain_row(
                             "new-thread-browser",
                             PickerRow::Browser,
-                            ICON_PATH_BROWSER,
-                            "Browser",
+                            ICON_BROWSER,
+                            ROW_BROWSER,
                             selected,
                             cx,
                         ),
                         PickerRow::Terminal => self.render_plain_row(
                             "new-thread-terminal",
                             PickerRow::Terminal,
-                            ICON_PATH_TERMINAL,
-                            "Terminal",
+                            ICON_TERMINAL,
+                            ROW_TERMINAL,
                             selected,
                             cx,
                         ),
@@ -1128,21 +1292,21 @@ impl GpuiNewThreadPickerWindow {
                     });
                 }
                 if rows.is_empty() {
-                    children.push(Self::render_hint_text(if self.agents_loaded {
-                        "Nothing matches."
+                    children.push(if self.agents_loaded {
+                        self.render_empty(EMPTY_AGENTS)
                     } else {
-                        "Loading agents…"
-                    }));
+                        self.render_hint_text(LOADING_AGENTS)
+                    });
                 }
             }
             Some(agent) => {
                 let agent = agent.clone();
                 if self.accounts.is_none() && self.accounts_error.is_none() {
-                    children.push(Self::render_hint_text("Reading accounts…"));
+                    children.push(self.render_hint_text(READING_ACCOUNTS));
                 }
                 if let Some(error) = &self.accounts_error {
                     if self.accounts.is_none() {
-                        children.push(Self::render_hint_text(account_display_text(error)));
+                        children.push(self.render_hint_text(error.clone()));
                     }
                 }
                 for (position, row) in rows.iter().enumerate() {
@@ -1159,30 +1323,13 @@ impl GpuiNewThreadPickerWindow {
                                     selected,
                                     cx,
                                 )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_shrink_0()
-                                        .size(px(14.0))
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            svg()
-                                                .path(agent.icon_path())
-                                                .size(px(agent.icon_svg_size()))
-                                                .text_color(agent.icon_color()),
-                                        ),
-                                )
-                                .child(div().flex_1().min_w_0().child("Current CLI login"))
+                                .child(self.render_agent_icon(&agent, 14.0, 0.0))
+                                .child(div().flex_1().min_w_0().child(ROW_CLI_LOGIN))
                                 .into_any_element(),
                             );
-                            children.push(Self::render_hint_text(
-                                "Uses your existing CLI sign-in. No account switcher needed.",
-                            ));
-                            children.push(Self::render_divider());
-                            children.push(Self::render_hint_text(
-                                "Add your account to see usage and reset times in Ghostex.",
-                            ));
+                            children.push(self.render_hint_text(CLI_LOGIN_HINT));
+                            children.push(self.render_divider());
+                            children.push(self.render_hint_text(ADD_ACCOUNT_HINT));
                         }
                         PickerRow::AddAccount => {
                             children.push(
@@ -1192,7 +1339,7 @@ impl GpuiNewThreadPickerWindow {
                                     selected,
                                     cx,
                                 )
-                                .child(div().flex_1().min_w_0().child("Add account"))
+                                .child(div().flex_1().min_w_0().child(ROW_ADD_ACCOUNT))
                                 .into_any_element(),
                             );
                         }
@@ -1204,7 +1351,7 @@ impl GpuiNewThreadPickerWindow {
                                     selected,
                                     cx,
                                 )
-                                .child(div().flex_1().min_w_0().child("Try again"))
+                                .child(div().flex_1().min_w_0().child(ROW_TRY_AGAIN))
                                 .into_any_element(),
                             );
                         }
@@ -1217,7 +1364,7 @@ impl GpuiNewThreadPickerWindow {
                         .provider()
                         .is_some_and(|provider| !self.provider_accounts(provider).is_empty())
                 {
-                    children.push(Self::render_hint_text("No accounts found."));
+                    children.push(self.render_empty(EMPTY_ACCOUNTS));
                 }
             }
         }
@@ -1226,7 +1373,8 @@ impl GpuiNewThreadPickerWindow {
 }
 
 impl Render for GpuiNewThreadPickerWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let c = self.colors;
         let list_children = self.render_list(cx);
         v_flex()
             .id("ghostex-gpui-new-thread-picker")
@@ -1234,10 +1382,15 @@ impl Render for GpuiNewThreadPickerWindow {
             .overflow_hidden()
             .rounded(px(10.0))
             .border_1()
-            .border_color(titlebar_popup_menu_border_color())
-            .bg(titlebar_popup_menu_background())
-            .font_family("Inter Variable")
-            .text_color(titlebar_text_color())
+            .border_color(hsla(c.frame_border))
+            // Under window glass the picker's window blurs what is behind it, so its fill thins.
+            // Under glass it takes the app's frosted dialog fill, passed in by the app because this
+            // file also builds into the demo binary (`frosted_modal_fill` in helpers/window_glass.rs).
+            .bg(self.frosted_fill.unwrap_or_else(|| hsla(c.surface)))
+            .font_family(PICKER_FONT)
+            .text_size(px(ROW_TEXT_SIZE))
+            .line_height(px(ROW_LINE_HEIGHT))
+            .text_color(hsla(c.item))
             .capture_action(cx.listener(Self::on_move_up))
             .capture_action(cx.listener(Self::on_move_down))
             .capture_action(cx.listener(Self::on_enter))
@@ -1246,14 +1399,13 @@ impl Render for GpuiNewThreadPickerWindow {
             .capture_action(cx.listener(Self::on_move_right))
             .capture_action(cx.listener(Self::on_move_left))
             .capture_action(cx.listener(Self::on_backspace))
-            .on_action(
-                cx.listener(|this, action: &RunConfiguredGhostexHotkey, window, cx| {
-                    if action.action_id == "openNewThreadPalette" {
-                        this.close(window, cx);
-                    }
-                }),
-            )
+            .capture_action(cx.listener(Self::on_move_home))
+            .capture_action(cx.listener(Self::on_move_end))
+            .capture_key_down(cx.listener(Self::on_run_on_key_down))
             .child(self.render_search(cx))
+            .when(self.run_on.shown(), |root| {
+                root.child(self.render_run_on(cx))
+            })
             .child(self.render_hints())
             .child(
                 div()
@@ -1272,10 +1424,7 @@ impl Render for GpuiNewThreadPickerWindow {
                             .pb(px(6.0))
                             .children(list_children),
                     )
-                    .child(
-                        Scrollbar::vertical(&self.scroll)
-                            .thickness(px(TITLEBAR_DROPDOWN_SCROLLBAR_WIDTH)),
-                    ),
+                    .child(Scrollbar::vertical(&self.scroll).thickness(px(SCROLLBAR_WIDTH))),
             )
     }
 }

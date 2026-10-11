@@ -1,16 +1,25 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
-const gxserverProtocolSource = readFileSync(
-  new URL('../../../packages/shared/gxserver-protocol.ts', import.meta.url),
-  'utf8'
-);
-const nativeHostProtocolSource = readFileSync(
-  new URL('../../../packages/shared/native-ghostty-host-protocol.ts', import.meta.url),
-  'utf8'
-);
-const sidebarContractSource = readFileSync(
-  new URL('../../../packages/shared/session-grid-contract-sidebar.ts', import.meta.url),
+// packages/shared/gxserver-protocol.ts is a barrel over per-concern
+// gxserver-protocol-*.ts modules; check the whole contract as one text.
+const gxserverProtocolSource = [
+  'gxserver-protocol.ts',
+  'gxserver-protocol-core.ts',
+  'gxserver-protocol-health.ts',
+  'gxserver-protocol-agents.ts',
+  'gxserver-protocol-prompts.ts',
+  'gxserver-protocol-projects.ts',
+  'gxserver-protocol-domain.ts',
+  'gxserver-protocol-sessions.ts',
+  'gxserver-protocol-presentation.ts',
+  'gxserver-protocol-session-runtime.ts',
+  'gxserver-protocol-events.ts',
+]
+  .map((file) => readFileSync(new URL(`../../../packages/shared/${file}`, import.meta.url), 'utf8'))
+  .join('\n');
+const gxserverProtocolHealthSource = readFileSync(
+  new URL('../../../packages/shared/gxserver-protocol-health.ts', import.meta.url),
   'utf8'
 );
 // server/src/portless.rs was split into server/src/portless/{mod,types,status,
@@ -34,12 +43,14 @@ const presentationRustSource = [
 ].join('\n');
 const protocolRustSource = readFileSync(new URL('../../../server/src/protocol.rs', import.meta.url), 'utf8');
 // server/src/server.rs was split into server/src/server/{mod,http_endpoints,
-// http_infra,...}.rs. The assertions below cover the dispatch match and the
-// health payload (mod.rs, http_infra.rs) plus the Portless state handler
-// (http_endpoints.rs), so concatenate just those three to keep checking the
-// same content.
+// http_infra,...}.rs, and the dispatch match later moved from mod.rs into
+// route_http.rs, which was then split per route area into route_http/; the
+// Portless arm lives in route_http/control.rs. The assertions below cover that
+// dispatch arm and the health payload (route_http/control.rs, http_infra.rs)
+// plus the Portless state handler (http_endpoints.rs), so concatenate just
+// those three to keep checking the same content.
 const serverRustSource = [
-  readFileSync(new URL('../../../server/src/server/mod.rs', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../server/src/server/route_http/control.rs', import.meta.url), 'utf8'),
   readFileSync(new URL('../../../server/src/server/http_endpoints.rs', import.meta.url), 'utf8'),
   readFileSync(new URL('../../../server/src/server/http_infra.rs', import.meta.url), 'utf8'),
 ].join('\n');
@@ -64,11 +75,11 @@ describe('Portless Phase 12 protocol plumbing source contract', () => {
     expect(presentationRustSource).toContain('"portless".to_string()');
 
     const sharedStatusSource = sourceBetween(
-      gxserverProtocolSource,
+      gxserverProtocolHealthSource,
       'export type GxserverPortlessProtocol',
       'export interface GxserverRuntimeMetadata'
     );
-    expect(sharedStatusSource).toContain("export type GxserverPortlessProtocol = 'https' | 'http'");
+    expect(sharedStatusSource).toContain('export type GxserverPortlessProtocol = "https" | "http"');
     expect(sharedStatusSource).toContain('export interface GxserverPortlessStatus');
     expect(sharedStatusSource).toContain('export interface GxserverPortlessPresentation');
     expect(sharedStatusSource).toContain('export interface GxserverPortlessAssignedDomain');
@@ -132,34 +143,6 @@ describe('Portless Phase 12 protocol plumbing source contract', () => {
     expect(presentationPayload).not.toContain('url');
   });
 
-  test('native sidebar exposes local-only action availability and sanitized admin results through HUD', () => {
-    /*
-    CDXC:Portless 2026-06-23-00:25:
-    Native-sidebar is the first local-Mac action boundary. Its HUD projection may make recommended setup actions available only when the native bridge exists, while remote/non-native gxserver metadata remains localMacOnly.
-    */
-    const sidebarPortlessStateSource = sourceBetween(
-      sidebarContractSource,
-      'export type SidebarPortlessState =',
-      'export type SidebarHudState ='
-    );
-    expect(sidebarPortlessStateSource).toContain('health: GxserverPortlessStatus');
-    expect(sidebarPortlessStateSource).toContain('presentation?: GxserverPortlessPresentation');
-    expect(sidebarPortlessStateSource).toContain('lastResult?: NativePortlessAdminResult');
-    expect(sidebarPortlessStateSource).not.toContain('stdout');
-    expect(sidebarPortlessStateSource).not.toContain('stderr');
-
-    expect(nativeHostProtocolSource).toContain('export type NativePortlessAdminResult = Extract<');
-    const sharedNativeResult = sourceBetween(
-      nativeHostProtocolSource,
-      'Native Portless admin results are structured and sanitized.',
-      'protocolVersion: typeof NATIVE_GHOSTTY_HOST_PROTOCOL_VERSION;'
-    );
-    expect(sharedNativeResult).toContain('requestId: string');
-    expect(sharedNativeResult).toContain('status: string');
-    expect(sharedNativeResult).not.toContain('stdout');
-    expect(sharedNativeResult).not.toContain('stderr');
-  });
-
   test('Phase 16 state update contract covers protocol change, failure, retry, disable, and remove', () => {
     /*
     CDXC:Portless 2026-06-23-04:28:
@@ -169,11 +152,11 @@ describe('Portless Phase 12 protocol plumbing source contract', () => {
     sanitized enum/boolean/protocol updates.
     */
     const sharedStatusSource = sourceBetween(
-      gxserverProtocolSource,
+      gxserverProtocolHealthSource,
       'export type GxserverPortlessProtocol',
       'export interface GxserverPortlessAdminActionAvailability'
     );
-    expect(gxserverProtocolSource).toContain("| '/api/updatePortlessState'");
+    expect(gxserverProtocolSource).toContain('| "/api/updatePortlessState"');
     expect(protocolRustSource).toContain('| "/api/updatePortlessState"');
     expect(serverRustSource).toContain('"/api/updatePortlessState"');
     expect(serverRustSource).toContain('handle_portless_state_http');
@@ -182,9 +165,9 @@ describe('Portless Phase 12 protocol plumbing source contract', () => {
     expect(portlessRustSource).toContain('RecordAdminResult');
     expect(portlessRustSource).toContain('sync_portless_routes(paths, &[])');
     expect(sharedStatusSource).toContain('export type GxserverPortlessStateUpdateParams');
-    expect(sharedStatusSource).toContain("kind: 'setProtocol'");
-    expect(sharedStatusSource).toContain("kind: 'recordAdminResult'");
-    expect(sharedStatusSource).toContain("kind: 'setEnabled'");
+    expect(sharedStatusSource).toContain('kind: "setProtocol"');
+    expect(sharedStatusSource).toContain('kind: "recordAdminResult"');
+    expect(sharedStatusSource).toContain('kind: "setEnabled"');
     expect(sharedStatusSource).not.toContain('stdout');
     expect(sharedStatusSource).not.toContain('stderr');
     expect(sharedStatusSource).not.toContain('command');

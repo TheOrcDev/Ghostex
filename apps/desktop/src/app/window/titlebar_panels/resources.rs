@@ -8,7 +8,6 @@ impl GpuiTitlebarReadingPanel {
         v_flex()
             .size_full()
             .overflow_hidden()
-            .bg(titlebar_popup_menu_background())
             .child(self.render_resources_header(snapshot, cx))
             .when(snapshot.session_inventory_error.is_some(), |this| {
                 this.child(div().p(px(10.0)).text_size(px(12.0)).child(
@@ -84,6 +83,7 @@ impl GpuiTitlebarReadingPanel {
                 "gpui-resources-sleep-inactive",
                 COMMAND_ICON_MOON,
                 "Sleep Inactive",
+                "Sleep Inactive",
                 snapshot.inactive_terminal_sleep_count > 0,
                 cx.listener(|this, _event: &MouseDownEvent, window, cx| {
                     window.prevent_default();
@@ -94,11 +94,9 @@ impl GpuiTitlebarReadingPanel {
                 }),
             ))
             /*
-            CDXC:Resources 2026-09-04 DECISION:
-            User: drop the expand/collapse-all button and Sleep All ("who would
-            sleep running terminals"); in Sleep All's place put Clean RAM, a
-            wrench button that copies a prompt asking an agent to diagnose the
-            RAM this panel shows and how to bring it down.
+            CDXC:Resources 2026-09-16 DECISION:
+            User: keep Clean RAM, and on click "show a toast telling the user that they need to paste this into an agent session to reduce ram use".
+            This keeps the 2026-09-04 wrench button in Sleep All's place that copies a diagnosis prompt, and adds the toast so the clipboard copy is not silent.
             */
             .child(self.render_resource_text_button(
                 "gpui-resources-clean-ram",
@@ -108,6 +106,7 @@ impl GpuiTitlebarReadingPanel {
                 } else {
                     "Clean RAM"
                 },
+                "Clean RAM",
                 true,
                 cx.listener(|this, _event: &MouseDownEvent, window, cx| {
                     window.prevent_default();
@@ -153,19 +152,38 @@ impl GpuiTitlebarReadingPanel {
     }
 
     fn copy_clean_ram_prompt(&mut self, cx: &mut gpui::Context<Self>) {
-        let GpuiTitlebarReadingPanelState::Resources {
-            clean_ram_copied,
-            snapshot,
-            ..
-        } = &mut self.state
-        else {
-            return;
+        let prompt = {
+            let GpuiTitlebarReadingPanelState::Resources { snapshot, .. } = &self.state else {
+                return;
+            };
+            gpui_resources_clean_ram_prompt(snapshot)
         };
-        let prompt = gpui_resources_clean_ram_prompt(snapshot);
-        cx.write_to_clipboard(ClipboardItem::new_string(prompt));
-        gpui_play_copy_sound();
-        *clean_ram_copied = true;
+        gpui_copy_to_clipboard(ClipboardItem::new_string(prompt), cx);
+        if let GpuiTitlebarReadingPanelState::Resources {
+            clean_ram_copied, ..
+        } = &mut self.state
+        {
+            *clean_ram_copied = true;
+        }
         cx.notify();
+        let _ = self.main_app.update_in(cx, |app, _window, cx| {
+            app.upsert_gpui_app_toast(
+                GpuiAppToast {
+                    id: "gpui-resources-clean-ram-copied".to_string(),
+                    level: GpuiAppToastLevel::Info,
+                    title: "Clean RAM prompt copied".to_string(),
+                    description: Some(
+                        "Paste it into an agent session to reduce RAM use.".to_string(),
+                    ),
+                    copy_text: None,
+                    loading: false,
+                    persistent: false,
+                    duration_ms: GPUI_APP_TOAST_DEFAULT_DURATION_MS,
+                    epoch: 0,
+                },
+                cx,
+            );
+        });
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(2))
@@ -220,6 +238,7 @@ impl GpuiTitlebarReadingPanel {
         id: &'static str,
         icon: &'static str,
         label: &'static str,
+        width_label: &'static str,
         enabled: bool,
         listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
@@ -249,7 +268,29 @@ impl GpuiTitlebarReadingPanel {
                     .opacity(if enabled { 0.78 } else { 0.30 })
                     .into(),
             ))
-            .child(label)
+            .child(
+                div()
+                    .relative()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .when(label != width_label, |this| this.opacity(0.0))
+                            .child(width_label),
+                    )
+                    .when(label != width_label, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .whitespace_nowrap()
+                                .child(label),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
@@ -264,9 +305,14 @@ impl GpuiTitlebarReadingPanel {
             v_flex()
                 .absolute()
                 .top(px(TITLEBAR_POPUP_READING_HEADER_HEIGHT + 9.0))
+                // Hosted in the view panel this page can be as narrow as
+                // `WORKAREA_VIEW_PANEL_MIN_WIDTH`, where a fixed 620px note started off the left
+                // edge of the frame and had its first characters clipped away.
+                .left(px(12.0))
                 .right(px(12.0))
-                .w(px(620.0))
+                .max_w(px(620.0))
                 .gap(px(10.0))
+                .rounded(px(RESOURCE_CARD_RADIUS))
                 .border_1()
                 .border_color(chrome_ink().opacity(0.14))
                 .bg(chrome_color(0x3a3a3a, 0xe5e5e5))
@@ -363,14 +409,21 @@ impl GpuiTitlebarReadingPanel {
                 .h(px(22.0))
                 .items_center()
                 .justify_center()
+                .rounded(px(RESOURCE_CONTROL_RADIUS))
                 .border_1()
                 .border_color(if action_label == "Quit" {
-                    rgb(0xf87171).opacity(0.28)
+                    chrome_color(0xf87171, 0xc23b3b).opacity(0.40)
                 } else {
                     chrome_ink().opacity(0.13)
                 })
+                // The destructive chip has to read as destructive on white too, where the
+                // dark-mode reds flattened into pale pink.
                 .bg(if action_label == "Quit" {
-                    rgb(0xdc2626).opacity(0.18)
+                    chrome_color(0xdc2626, 0xdc2626).opacity(if chrome_uses_light_appearance() {
+                        0.10
+                    } else {
+                        0.18
+                    })
                 } else {
                     chrome_ink().opacity(0.08)
                 })
@@ -380,7 +433,11 @@ impl GpuiTitlebarReadingPanel {
                 .cursor_pointer()
                 .hover(move |this| {
                     this.bg(if action_label == "Quit" {
-                        rgb(0xdc2626).opacity(0.28)
+                        rgb(0xdc2626).opacity(if chrome_uses_light_appearance() {
+                            0.18
+                        } else {
+                            0.28
+                        })
                     } else {
                         chrome_ink().opacity(0.14)
                     })
@@ -596,7 +653,9 @@ impl GpuiTitlebarReadingPanel {
             svg()
                 .path(icon_path)
                 .size(px(15.0))
-                .text_color(rgb(workspace_tab_agent_icon_accent_color(agent_icon)))
+                // The page's surface is white in light mode, where several agents' white accent
+                // would leave a blank square; `chrome_agent_icon_color` turns those two to ink.
+                .text_color(chrome_agent_icon_color(agent_icon))
                 .into_any_element()
         } else {
             titlebar_svg_icon(row.icon_path, 15.0, chrome_ink().opacity(0.82).into())

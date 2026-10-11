@@ -11,7 +11,7 @@ export function normalizeContentThemeSetting(value: unknown): ContentThemeSettin
  * CDXC:Theming 2026-09-13 DECISION:
  * User: chat and terminal follow the app theme by default, with optional overrides in one Theme section at the top of Settings.
  * This supersedes separate System chat and Dark terminal defaults; explicit saved overrides and the existing dark palettes remain unchanged.
- * SEE-ALSO: apps/desktop/src/shared_settings.rs resolves the same settings for native hosts.
+ * SEE-ALSO: apps/desktop/src/shared_settings/ resolves the same settings for native hosts.
  */
 export function resolveContentThemeSetting(
   setting: ContentThemeSetting,

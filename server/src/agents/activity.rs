@@ -133,41 +133,7 @@ pub(crate) fn ingest_agent_hook_event(
             "session": current,
         }));
     }
-    let mut hook_activity = if normalize_agent_id(params.get("agentName").and_then(Value::as_str))
-        .as_deref()
-        == Some("mastra")
-    {
-        crate::agent_hooks::event_mapping::mastra_hook_activity(
-            params
-                .get("eventName")
-                .or_else(|| params.get("rawEventName"))
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            &Value::Object(params.clone()),
-        )
-    } else {
-        normalize_agent_hook_activity(
-            params.get("status"),
-            params
-                .get("eventName")
-                .or_else(|| params.get("rawEventName")),
-            params.get("agentName"),
-        )
-    };
-    /*
-    CDXC:SessionChat 2026-08-24:
-    The notify hook tags Claude's 60s "waiting for your input" reminder with
-    notificationKind=idleInput. That reminder is proof the CLI is idle at its
-    prompt, not a completion or request for user action, so it must never enter
-    attention. Genuine permission notifications are not tagged idleInput and
-    retain their attention transition. Older notify binaries omit the tag and
-    keep their existing behavior.
-    */
-    if hook_activity.as_deref() == Some("attention")
-        && params.get("notificationKind").and_then(Value::as_str) == Some("idleInput")
-    {
-        hook_activity = Some("idle".to_string());
-    }
+    let hook_activity = normalize_agent_hook_event_activity(params);
     let observed_identity = resolve_session_identity(&IdentityInput {
         agent_id: None,
         agent_name: read_text(params, "agentName"),
@@ -449,8 +415,70 @@ pub(crate) fn ingest_agent_hook_event(
         "sessionChatActivityChanged".to_string(),
         Value::Bool(session_chat_activity_changed),
     );
+    let agent_session_id = |session: &Value| {
+        session
+            .pointer("/runtimeSettings/agentSessionId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let agent_session_id_changed = agent_session_id(&session).is_some()
+        && agent_session_id(&session) != agent_session_id(&current);
+    result.insert(
+        "agentSessionIdChanged".to_string(),
+        Value::Bool(agent_session_id_changed),
+    );
     result.insert("session".to_string(), session);
+    if let Some(context) = coordinator_session_start_context(repository, lifecycle, params)? {
+        result.insert("additionalContext".to_string(), Value::String(context));
+    }
     Ok(Value::Object(result))
+}
+
+/*
+CDXC:Coordinators 2026-10-03 WHY:
+ZCode has no system-prompt or config flag its launch command could carry, so a ZCode coordinator's
+guide pointer rides the SessionStart hook: this endpoint answers the ingest with `additionalContext`
+and the hook prints it for zcode to fold into context. Only a ZCode SessionStart on a session with
+a coordinators row, of a thread, or any ZCode SessionStart while Marked handovers is on (its note
+follows the pointer; agents/marked_handovers.rs), is answered, so every other hook response stays
+unchanged.
+*/
+fn coordinator_session_start_context(
+    repository: &DomainRepository<'_>,
+    lifecycle: &LifecycleParams,
+    params: &Map<String, Value>,
+) -> Result<Option<String>, DomainStateError> {
+    let agent = crate::agent_hooks::event_mapping::normalized_hook_agent_key(
+        read_text(params, "agentName")
+            .as_deref()
+            .unwrap_or_default(),
+    );
+    let is_session_start = read_text(params, "eventName")
+        .is_some_and(|event| event.eq_ignore_ascii_case("SessionStart"));
+    if !(agent == "zcode" && is_session_start) {
+        return Ok(None);
+    }
+    let coordinator = crate::coordinators::read_coordinator(
+        repository.connection(),
+        &lifecycle.project_id,
+        &lifecycle.session_id,
+    )?
+    .is_some();
+    let thread = crate::coordinators::read_thread(
+        repository.connection(),
+        &lifecycle.project_id,
+        &lifecycle.session_id,
+    )?
+    .is_some();
+    let marked = coordinator
+        || thread
+        || super::marked_handovers_enabled(&crate::paths::get_gxserver_paths(None));
+    let parts = [
+        coordinator.then_some(crate::coordinators::GUIDE_POINTER_COORDINATOR_INSTRUCTIONS),
+        marked.then_some(super::MARKED_HANDOVERS_NOTE),
+    ];
+    let context = parts.into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    Ok((!context.is_empty()).then_some(context))
 }
 
 /// A working↔not-working flip is the only activity change the chat channel
@@ -519,14 +547,32 @@ pub(crate) fn next_session_chat_prompt_setting(
         .or_else(|| params.get("tool_use_id"))
         .and_then(Value::as_str);
     let tool_input = params.get("toolInput").or_else(|| params.get("tool_input"));
+    let stored = previous.and_then(crate::session_chat::parse_stored_session_chat_prompt);
     if let Some(prompt) =
         crate::session_chat::derive_session_chat_prompt(tool_name, tool_input, event_name)
     {
-        return serde_json::to_string(&prompt.with_tool_use_id(tool_use_id.map(str::to_string)))
+        let prompt = prompt.with_tool_use_id(tool_use_id.map(str::to_string));
+        /*
+        CDXC:SessionChat 2026-10-06 WHY:
+        Claude Code follows an AskUserQuestion's PreToolUse (which carries the call's
+        tool_use_id) with a PermissionRequest for the same call that carries none. Storing that
+        one dropped the id, so every client saw the same question flip between two identities,
+        which reset its card mid-answer and left nothing to tell a re-asked question from the
+        answered one. The same prompt from an event without an id keeps the stored id.
+        */
+        let prompt = match stored.as_ref() {
+            Some(stored)
+                if prompt.tool_use_id().is_none()
+                    && stored.clone().with_tool_use_id(None) == prompt =>
+            {
+                prompt.with_tool_use_id(stored.tool_use_id().map(str::to_string))
+            }
+            _ => prompt,
+        };
+        return serde_json::to_string(&prompt)
             .ok()
             .or_else(|| previous.map(str::to_string));
     }
-    let stored = previous.and_then(crate::session_chat::parse_stored_session_chat_prompt);
     let clear = match stored.as_ref() {
         Some(stored) => crate::session_chat::session_chat_prompt_clear_decision(
             Some(stored),
@@ -756,7 +802,7 @@ pub(crate) fn first_prompt_claim_agent_name(
 pub(crate) fn first_prompt_claim_strategy(agent_name: Option<&str>) -> Option<&'static str> {
     match normalize_first_prompt_claim_agent_name(agent_name).as_deref() {
         // CDXC:SessionTitles 2026-09-11 SEE-ALSO:
-        // Keep Claude and Codex claim eligibility aligned with first_prompt_auto_title_strategy in server/title_generation.rs so no running title job blocks terminal input.
+        // Keep Claude and Codex claim eligibility aligned with first_prompt_auto_title_strategy in server/title_generation/first_prompt_decision.rs so no running title job blocks terminal input.
         Some("claude" | "codex") => Some("agentAutoTitle"),
         // See first_prompt_auto_title_strategy: this agent names its own
         // sessions and the metadata sync adopts those names.
@@ -830,7 +876,10 @@ pub(crate) fn is_first_prompt_claim_generic_title(
 }
 
 pub(crate) fn normalize_first_prompt_title_claim_prompt(prompt: Option<&str>) -> Option<String> {
-    let normalized = prompt?.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = crate::coordinators::strip_agent_message_header(prompt?)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let normalized = normalized.trim();
     if normalized.is_empty() {
         return None;
@@ -1000,6 +1049,50 @@ pub(crate) fn persistable_agent_activity_snapshot(value: Option<&Value>) -> Valu
     Value::Object(snapshot)
 }
 
+/// CDXC:Notifications 2026-09-15 SEE-ALSO:
+/// Claude Stop must use the full background_tasks payload before activity is persisted or attention is emitted, matching the notify helper in server/src/agent_hooks/event_mapping.rs.
+pub(crate) fn normalize_agent_hook_event_activity(params: &Map<String, Value>) -> Option<String> {
+    let agent = normalize_agent_id(params.get("agentName").and_then(Value::as_str));
+    let event = params
+        .get("eventName")
+        .or_else(|| params.get("rawEventName"));
+    let mut hook_activity = if matches!(agent.as_deref(), Some("claude" | "openclaude" | "empryo"))
+        && event
+            .and_then(Value::as_str)
+            .is_some_and(|event| event.trim().eq_ignore_ascii_case("stop"))
+    {
+        crate::agent_hooks::event_mapping::activity_for_hook_event(
+            agent.as_deref().unwrap(),
+            "Stop",
+            &Value::Object(params.clone()),
+        )
+    } else if let Some(agent @ ("mastra" | "hermes-agent")) = agent.as_deref() {
+        // Both decide from the payload; Hermes needs the tool name.
+        crate::agent_hooks::event_mapping::activity_for_hook_event(
+            agent,
+            event.and_then(Value::as_str).unwrap_or_default(),
+            &Value::Object(params.clone()),
+        )
+    } else {
+        normalize_agent_hook_activity(params.get("status"), event, params.get("agentName"))
+    };
+    /*
+    CDXC:SessionChat 2026-08-24:
+    The notify hook tags Claude's 60s "waiting for your input" reminder with
+    notificationKind=idleInput. That reminder is proof the CLI is idle at its
+    prompt, not a completion or request for user action, so it must never enter
+    attention. Genuine permission notifications are not tagged idleInput and
+    retain their attention transition. Older notify binaries omit the tag and
+    keep their existing behavior.
+    */
+    if hook_activity.as_deref() == Some("attention")
+        && params.get("notificationKind").and_then(Value::as_str) == Some("idleInput")
+    {
+        hook_activity = Some("idle".to_string());
+    }
+    hook_activity
+}
+
 pub(crate) fn normalize_agent_hook_activity(
     status: Option<&Value>,
     event_name: Option<&Value>,
@@ -1041,7 +1134,9 @@ pub(crate) fn normalize_agent_hook_activity(
     the event mapping here aligned with the hook helper prevents a later
     sidecar sync from erasing the attention transition.
     */
-    if normalized_agent.as_deref() == Some("codex") {
+    // Freebuff's events come from its saved chat (server/src/freebuff_activity.rs) and finish turns
+    // the way Codex's Stop does.
+    if matches!(normalized_agent.as_deref(), Some("codex" | "freebuff")) {
         if lower == "stop" {
             return Some("attention".to_string());
         }
@@ -1049,31 +1144,31 @@ pub(crate) fn normalize_agent_hook_activity(
             return Some("idle".to_string());
         }
     }
-    // OpenClaude ships Claude's hook contract verbatim, so it shares every
-    // Claude rule here exactly as it does in the notify hook's mapping.
-    if matches!(normalized_agent.as_deref(), Some("claude" | "openclaude")) {
+    // Pi's, OMP's and Amp's Stop is a completed turn (CDXC:Notifications in
+    // agent_hooks/event_mapping.rs); their dialogs need the user, and an Esc ends the run without
+    // finishing it.
+    if matches!(normalized_agent.as_deref(), Some("pi" | "omp" | "amp")) {
+        match lower.as_str() {
+            "stop" | "notification" => return Some("attention".to_string()),
+            "interrupt" => return Some("idle".to_string()),
+            _ => {}
+        }
+    }
+    // OpenClaude ships Claude's hook contract verbatim and Empryo runs Claude-format hooks, so
+    // both share every Claude rule here exactly as they do in the notify hook's mapping.
+    if matches!(
+        normalized_agent.as_deref(),
+        Some("claude" | "openclaude" | "empryo")
+    ) {
         /*
-        CDXC:Notifications 2026-09-04 DECISION:
-        User: a finished Claude turn must show the blue dot and play the attention sound, like Codex.
-        Stop is Claude's completed-turn boundary and enters attention; it used to settle to idle, which left Claude with no end-of-turn attention once the 60-second reminder Notification was reclassified as idle (SessionChat 2026-08-24).
-        Mirrors activity_for_hook_event in server/src/agent_hooks/event_mapping.rs.
+        CDXC:Notifications 2026-09-15 SEE-ALSO:
+        The background-aware completion decision lives in server/src/agent_hooks/event_mapping.rs.
+        normalize_agent_hook_event_activity handles Claude Stop with its full payload before reaching this payload-free mapping.
         */
         if lower == "stop" {
             return Some("attention".to_string());
         }
         if lower == "idle" {
-            return Some("idle".to_string());
-        }
-        /*
-        CDXC:SessionChat 2026-08-24:
-        SessionStart is the only hook Claude Code fires when /compact or /clear
-        finishes; the UserPromptSubmit that submitted the command set "working"
-        and no Stop follows, which left the session — and the prompt-queue
-        scheduler gating on it — stuck working after every manual compaction.
-        Every SessionStart source means the CLI is at its input prompt, so it
-        settles to idle (mirrors the notify hook's mapping).
-        */
-        if matches!(lower.as_str(), "sessionstart" | "session-start") {
             return Some("idle".to_string());
         }
         if matches!(
@@ -1159,9 +1254,10 @@ pub(crate) fn normalize_agent_hook_activity(
     the posted-status fallback because gxserver's own event semantics outrank a
     sidecar status.
 
-    Two of that table's rules are deliberately NOT mirrored here: Copilot's
-    ErrorOccurred (idle unless the payload says `recoverable`) and Claude's
-    PostCompact (idle only when `trigger` is manual) both need the hook payload,
+    Three of that table's rules are deliberately NOT mirrored here: Copilot's
+    ErrorOccurred (idle unless the payload says `recoverable`), Claude's
+    PostCompact (idle only when `trigger` is manual) and SessionStart (idle
+    unless it is Claude's compaction) all need the hook payload,
     which this function never receives. Leaving them unmapped lets the posted
     status — already derived from the full payload by the notify hook — decide.
     */
@@ -1203,7 +1299,6 @@ pub(crate) fn normalize_agent_hook_activity(
             "UserPromptSubmit",
             "agent.start",
             "agent_start",
-            "agentSpawn",
             "beforeShellExecution",
             "beforeSubmitPrompt",
             "on_session_reset",
@@ -1293,7 +1388,8 @@ pub(crate) fn default_activity(agent_id: Option<&str>, override_activity: Option
     had happened, and the chat surface — empty transcript, known agent session
     — read that as "turn in flight, transcript not flushed" and replaced its
     welcome with the blank "Loading conversation…" hold until the spinner
-    settled. A creation that starts "working" (launch startup text) keeps the
+    settled. A creation that starts "working" (a launch that submits a first
+    prompt, see CDXC:SessionStatus in `launch_plan.rs`) keeps the
     expired stamp: its own titles must stay able to settle it back to idle.
     */
     activity.insert(

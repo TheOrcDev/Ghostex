@@ -6,7 +6,24 @@
     "npmPackage": "@openai/codex",
     "brewFormula": "codex",
     "brewCask": true,
-    "miseTool": "codex"
+    "miseTool": "codex",
+    "native": {
+      "install": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      "update": "codex update",
+      "windowsInstall": "irm https://chatgpt.com/codex/install.ps1 | iex",
+      "env": {
+        "CODEX_NON_INTERACTIVE": "1"
+      },
+      "pathMarkers": ["/packages/standalone/", "/programs/openai/codex/"]
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/Programs/OpenAI/Codex/bin"],
+      "unix": ["~/.local/bin"]
+    },
+    "latestVersion": {
+      "url": "https://releases.openai.com/codex/channels/latest",
+      "jsonField": "tag_name"
+    }
   },
   {
     "agentId": "claude",
@@ -18,10 +35,20 @@
     "native": {
       "install": "curl -fsSL https://claude.ai/install.sh | bash",
       "update": "claude update",
-      "windowsInstall": "irm https://claude.ai/install.ps1 | iex"
+      "windowsInstall": "irm https://claude.ai/install.ps1 | iex",
+      "requires": {
+        "windows": ["git"]
+      }
     },
     "wingetId": "Anthropic.ClaudeCode",
-    "miseTool": "claude"
+    "miseTool": "claude",
+    "installDirs": {
+      "windows": ["~/.local/bin"],
+      "unix": ["~/.local/bin"]
+    },
+    "latestVersion": {
+      "url": "https://downloads.claude.ai/claude-code-releases/latest"
+    }
   },
   {
     "agentId": "cursor",
@@ -30,9 +57,15 @@
     "native": {
       "install": "curl -fsSL https://cursor.com/install | bash",
       "update": "cursor-agent update",
-      "windowsInstall": "irm 'https://cursor.com/install?win32=true' | iex"
+      "windowsInstall": "irm 'https://cursor.com/install?win32=true' | iex",
+      "pathMarkers": ["/cursor-agent/"]
     },
-    "miseTool": "cursor-agent"
+    "miseTool": "cursor-agent",
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/cursor-agent"],
+      "unix": ["~/.local/bin"]
+    },
+    "installNote": "Grok and Cursor both install a command named agent; the one installed last is the one that runs."
   },
   {
     "agentId": "pi",
@@ -52,14 +85,16 @@
       "install": "curl -fsSL https://opencode.ai/install | bash",
       "update": "opencode upgrade"
     },
-    "miseTool": "opencode"
+    "miseTool": "opencode",
+    "installDirs": {
+      "unix": ["~/.opencode/bin"]
+    }
   },
   {
     "agentId": "gemini",
     "binary": "gemini",
     "docsUrl": "https://github.com/google-gemini/gemini-cli#installation",
     "npmPackage": "@google/gemini-cli",
-    "brewFormula": "gemini-cli",
     "miseTool": "gemini"
   },
   {
@@ -80,7 +115,11 @@
     "native": {
       "install": "curl -fsSL https://app.factory.ai/cli | sh",
       "update": "droid update"
-    }
+    },
+    "installDirs": {
+      "unix": ["~/.local/bin"]
+    },
+    "updateStopsSessions": true
   },
   {
     "agentId": "grok",
@@ -89,9 +128,19 @@
     "versionArgs": ["version"],
     "native": {
       "install": "curl -fsSL https://x.ai/cli/install.sh | bash",
-      "update": "grok update"
+      "update": "grok update",
+      "windowsInstall": "irm https://x.ai/cli/install.ps1 | iex"
     },
-    "miseTool": "grok"
+    "miseTool": "grok",
+    "npmPackage": "@xai-official/grok",
+    "installDirs": {
+      "windows": ["~/.grok/bin"],
+      "unix": ["~/.grok/bin", "~/.local/bin"]
+    },
+    "latestVersion": {
+      "url": "https://x.ai/cli/stable"
+    },
+    "installNote": "Grok and Cursor both install a command named agent; the one installed last is the one that runs."
   },
   {
     "agentId": "antigravity",
@@ -101,7 +150,11 @@
       "install": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
       "windowsInstall": "irm https://antigravity.google/cli/install.ps1 | iex"
     },
-    "miseTool": "agy"
+    "miseTool": "agy",
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/agy/bin"],
+      "unix": ["~/.local/bin"]
+    }
   },
   {
     "agentId": "amp",
@@ -109,18 +162,25 @@
     "docsUrl": "https://ampcode.com/docs/cli",
     "native": {
       "install": "curl -fsSL https://ampcode.com/install.sh | bash",
-      "update": "amp update"
+      "update": "amp update",
+      "windowsInstall": "irm https://ampcode.com/install.ps1 | iex"
     },
-    "miseTool": "amp"
+    "installDirs": {
+      "windows": ["~/.amp/bin"],
+      "unix": ["~/.local/bin", "~/.amp/bin"]
+    }
   },
   {
     "agentId": "hermes-agent",
     "binary": "hermes",
     "docsUrl": "https://hermes-agent.nousresearch.com/docs/getting-started/installation/",
     "native": {
-      "install": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+      "install": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive",
       "update": "hermes update --yes",
-      "windowsInstall": "irm https://hermes-agent.nousresearch.com/install.ps1 | iex"
+      "windowsInstall": "& ([scriptblock]::Create((irm https://hermes-agent.nousresearch.com/install.ps1))) -NonInteractive",
+      "requires": {
+        "unix": ["git"]
+      }
     }
   },
   {
@@ -128,7 +188,20 @@
     "binary": "acli",
     "docsUrl": "https://developer.atlassian.com/cloud/acli/guides/install/",
     "brewFormula": "atlassian/acli/acli",
-    "miseTool": "acli"
+    "miseTool": "acli",
+    "native": {
+      "install": "os=$(uname -s | tr '[:upper:]' '[:lower:]'); case \"$(uname -m)\" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac; mkdir -p \"$HOME/.local/bin\" && curl -fsSL -o \"$HOME/.local/bin/acli.download\" \"https://acli.atlassian.com/$os/latest/acli_${os}_$arch/acli\" && chmod 755 \"$HOME/.local/bin/acli.download\" && mv -f \"$HOME/.local/bin/acli.download\" \"$HOME/.local/bin/acli\"",
+      "windowsInstall": "$dir = Join-Path $env:LOCALAPPDATA 'Programs\\acli'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }; Invoke-WebRequest -UseBasicParsing -Uri \"https://acli.atlassian.com/windows/latest/acli_windows_$arch/acli.exe\" -OutFile (Join-Path $dir 'acli.exe')",
+      "plan": "Downloads Atlassian's acli from acli.atlassian.com into your user folder. No password needed.",
+      "requires": {
+        "unix": ["curl"]
+      },
+      "pathMarkers": ["/programs/acli/"]
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/Programs/acli"],
+      "unix": ["~/.local/bin"]
+    }
   },
   {
     "agentId": "codebuddy",
@@ -147,7 +220,18 @@
     "binary": "kiro-cli",
     "docsUrl": "https://kiro.dev/downloads/",
     "native": {
-      "install": "curl -fsSL https://cli.kiro.dev/install | bash"
+      "install": "curl -fsSL https://cli.kiro.dev/install | bash",
+      "update": "kiro-cli update --non-interactive",
+      "windowsInstall": "irm https://cli.kiro.dev/install.ps1 | iex",
+      "requires": {
+        "unix": ["unzip"]
+      },
+      "needsApplicationsFolder": true,
+      "pathMarkers": ["/kiro-cli/"]
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/Kiro-Cli"],
+      "unix": ["~/.local/bin"]
     }
   },
   {
@@ -156,7 +240,16 @@
     "docsUrl": "https://github.com/can1357/oh-my-pi#install",
     "npmPackage": "@oh-my-pi/pi-coding-agent",
     "packageManagers": ["bun"],
-    "brewFormula": "can1357/tap/omp"
+    "brewFormula": "can1357/tap/omp",
+    "native": {
+      "install": "curl -fsSL https://omp.sh/install | sh",
+      "windowsInstall": "irm https://omp.sh/install.ps1 | iex",
+      "pathMarkers": ["/appdata/local/omp/"]
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/omp"],
+      "unix": ["~/.local/bin"]
+    }
   },
   {
     "agentId": "kimi",
@@ -183,6 +276,10 @@
     "native": {
       "install": "curl -fsSL https://cli.devin.ai/install.sh | bash",
       "windowsInstall": "irm https://static.devin.ai/cli/setup.ps1 | iex"
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/devin/cli"],
+      "unix": ["~/.local/bin"]
     }
   },
   {
@@ -198,5 +295,30 @@
     "npmPackage": "zcode-app-cli",
     "packageManagers": ["npm"],
     "miseTool": "npm:zcode-app-cli[prerelease=true]"
+  },
+  {
+    "agentId": "freebuff",
+    "binary": "freebuff",
+    "docsUrl": "https://github.com/CodebuffAI/codebuff/tree/main/freebuff",
+    "npmPackage": "freebuff",
+    "packageManagers": ["npm"]
+  },
+  {
+    "agentId": "empryo",
+    "binary": "empryo",
+    "docsUrl": "https://empryo.com/docs/installation",
+    "native": {
+      "install": "curl -fsSL https://empryo.com/install.sh | bash",
+      "windowsInstall": "irm https://empryo.com/install.ps1 | iex",
+      "pathMarkers": ["/.empryo/", "/appdata/local/empryo/"]
+    },
+    "installDirs": {
+      "windows": ["%LOCALAPPDATA%/Empryo/bin"],
+      "unix": ["~/.empryo/bin"]
+    },
+    "latestVersion": {
+      "url": "https://empryo.com/releases.json",
+      "jsonField": "latest"
+    }
   }
 ]

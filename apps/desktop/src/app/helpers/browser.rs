@@ -23,7 +23,7 @@ use gpui::http_client::HttpRequestExt as _;
 use gpui::{
     AnyElement, App, AppContext as _, Asset, FontWeight, Hsla, Image, ImageCacheError, ImageFormat,
     IntoElement, ParentElement as _, RenderImage, Styled as _, StyledImage as _, Window, div, img,
-    prelude::FluentBuilder as _, px, rgb,
+    prelude::FluentBuilder as _, px, svg,
 };
 
 use crate::app::helpers::*;
@@ -66,7 +66,7 @@ pub(crate) fn browser_tab_action_cluster_color() -> Hsla {
 }
 
 pub(crate) fn browser_tab_separator_color() -> Hsla {
-    chrome_color(0x252525, 0xd4d4d4).into()
+    glass_divider(chrome_color(0x252525, 0xd4d4d4).into())
 }
 
 pub(crate) fn browser_tab_text_color(state: BrowserTabState, is_active: bool) -> Hsla {
@@ -98,6 +98,46 @@ pub(crate) fn browser_runtime_favicon_from_url(
     (Some(marker), None, Some(source))
 }
 
+/// The favicon's content type and bytes, capped at `BROWSER_FAVICON_IMAGE_MAX_BYTES`. Blocking: call
+/// it off the main thread.
+fn browser_favicon_fetch_bytes(
+    url: &str,
+) -> std::result::Result<(Option<String>, Vec<u8>), BrowserFaviconFetchError> {
+    let tls_config = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .max_redirects(BROWSER_FAVICON_HTTP_REDIRECT_LIMIT)
+        .http_status_as_error(false)
+        .tls_config(tls_config)
+        .build();
+    let mut response = ureq::Agent::new_with_config(config)
+        .get(url)
+        .call()
+        .map_err(|_| BrowserFaviconFetchError::Network)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(BrowserFaviconFetchError::BadStatus(status.as_u16()));
+    }
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(BROWSER_FAVICON_IMAGE_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| BrowserFaviconFetchError::BodyRead)?;
+    if body.is_empty() || body.len() > BROWSER_FAVICON_IMAGE_MAX_BYTES {
+        return Err(BrowserFaviconFetchError::TooLarge);
+    }
+    Ok((content_type, body))
+}
+
 #[derive(Clone)]
 pub(crate) enum BrowserFaviconHttpImageAsset {}
 
@@ -109,59 +149,36 @@ impl Asset for BrowserFaviconHttpImageAsset {
         source: Self::Source,
         cx: &mut App,
     ) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
-        let client = cx.http_client();
+        /*
+        CDXC:Browser 2026-09-21 WHY:
+        The app never installs a GPUI HTTP client, so `cx.http_client()` is GPUI's null client and
+        every favicon request failed before it left the process: tabs only ever showed the "F"
+        marker. The fetch runs on the in-process HTTPS client the component store already uses, on
+        a background thread, with the same redirect, byte and decode limits as before.
+        */
+        let executor = cx.background_executor().clone();
         let svg_renderer = cx.svg_renderer();
         async move {
-            use futures::AsyncReadExt as _;
-
-            let request = gpui::http_client::Request::get(source.url.as_str())
-                .follow_redirects(gpui::http_client::RedirectPolicy::FollowLimit(
-                    BROWSER_FAVICON_HTTP_REDIRECT_LIMIT,
-                ))
-                .body(gpui::http_client::AsyncBody::default())
-                .map_err(|_| {
-                    browser_favicon_fetch_error(BrowserFaviconFetchError::InvalidRequest)
-                })?;
-
-            let mut response = client
-                .send(request)
+            let url = source.url.clone();
+            let (content_type, body) = executor
+                .spawn(async move { browser_favicon_fetch_bytes(url.as_str()) })
                 .await
-                .map_err(|_| browser_favicon_fetch_error(BrowserFaviconFetchError::Network))?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(browser_favicon_fetch_error(
-                    BrowserFaviconFetchError::BadStatus(status.as_u16()),
-                ));
-            }
-
-            let content_type = response
-                .headers()
-                .get(gpui::http_client::http::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string);
-            let mut body = Vec::new();
-            response
-                .body_mut()
-                .take(BROWSER_FAVICON_IMAGE_MAX_BYTES as u64 + 1)
-                .read_to_end(&mut body)
-                .await
-                .map_err(|_| browser_favicon_fetch_error(BrowserFaviconFetchError::BodyRead))?;
-            if body.is_empty() || body.len() > BROWSER_FAVICON_IMAGE_MAX_BYTES {
-                return Err(browser_favicon_fetch_error(
-                    BrowserFaviconFetchError::TooLarge,
-                ));
-            }
+                .map_err(browser_favicon_fetch_error)?;
 
             let format = browser_favicon_http_image_format(content_type.as_deref(), &body)
                 .map_err(browser_favicon_fetch_error)?;
             browser_favicon_validate_encoded_dimensions(format, &body)
                 .map_err(browser_favicon_fetch_error)?;
 
+            let cached_body = body.clone();
             let render_image = Image::from_bytes(format, body)
                 .to_image_data(svg_renderer)
                 .map_err(|_| browser_favicon_fetch_error(BrowserFaviconFetchError::Decode))?;
             browser_favicon_validate_render_image(&render_image)
                 .map_err(browser_favicon_fetch_error)?;
+            if let Some(cache_key) = source.cache_key.as_deref() {
+                browser_favicon_cache_store(cache_key, format, &cached_body);
+            }
             Ok(render_image)
         }
     }
@@ -583,6 +600,7 @@ pub(crate) fn browser_safe_http_favicon_parts(
         marker,
         BrowserFaviconFetchSource {
             url: url.to_string(),
+            cache_key: None,
         },
     ))
 }
@@ -717,22 +735,12 @@ pub(crate) fn browser_hex_value(byte: u8) -> Option<u8> {
 pub(crate) fn browser_tab_icon_element(
     profile_id: BrowserProfileId,
     chrome_status: BrowserTabChromeStatus,
-    runtime_favicon_url: Option<&str>,
     runtime_favicon_image: Option<&BrowserFaviconImage>,
     runtime_favicon_fetch: Option<&BrowserFaviconFetchSource>,
 ) -> AnyElement {
     /*
-    CDXC:Browser 2026-06-22-09:11:
-    GPUI Browser tabs must visibly distinguish address-only placeholders, generic loaded pages, and loaded pages that reported favicon metadata. Use a deterministic native shell glyph/color derived from the runtime-only safe favicon marker whenever an actual favicon image is unavailable.
-
-    CDXC:Browser 2026-06-22-10:41:
-    Render decoded runtime favicon images when CEF provides a safe capped data:image URL, but keep tab chrome as normal in-layout GPUI elements and fall back to the deterministic URL marker or generic dot when decoding is unavailable.
-
-    CDXC:Browser 2026-06-22-11:05:
-    HTTP(S) favicon images must render through a favicon-only non-AssetLogger asset loader inside the existing tab icon slot. Loading, failed status, unsupported MIME/format, oversized bodies, oversized decode dimensions, and decode failures all show the safe marker or generic icon without logging raw URLs, response bodies, headers, cookies, tokens, paths, titles, command text, stdout/stderr, or user content.
-
-    CDXC:Browser 2026-06-22-16:48:
-    Restored loaded Browser placeholders have loaded shell state but no materialized CEF surface, so their tab chrome uses a restored teal status dot and suppresses runtime favicon image/fetch rendering until a live surface exists. Address-only tabs keep the neutral placeholder dot and cannot borrow stale page or favicon state.
+    CDXC:Browser 2026-09-21 DECISION:
+    User: "please stop putting a bg behind the favicon. I want the default icon if we don't have a favicon to be the default browser icon and then we replace it with the actual site's favicon". The slot is a bare image with no tile, border or tint. Supersedes the 2026-06-22 status dots and coloured "F" marker: loading, failed, unsupported or oversized favicons, restored tabs and address-only tabs all show the globe (or the icon cached for the site) instead. HTTP(S) favicons still load through the favicon-only asset loader with its byte, redirect, format and dimension caps, and nothing about a failed fetch is logged.
 
     Non-default profiles replace the favicon slot with their stable generated profile number in a circular badge. The badge is tab-owned chrome, so mixed-profile tabs remain visible without adding overlays or another interactive hit region.
     */
@@ -754,207 +762,77 @@ pub(crate) fn browser_tab_icon_element(
             .into_any_element();
     }
 
-    let runtime_favicon_url =
-        runtime_favicon_url.filter(|_| chrome_status.allows_runtime_favicon());
     let runtime_favicon_image =
         runtime_favicon_image.filter(|_| chrome_status.allows_runtime_favicon());
     let runtime_favicon_fetch =
         runtime_favicon_fetch.filter(|_| chrome_status.allows_runtime_favicon());
+    browser_favicon_element(
+        BROWSER_TAB_ICON_SIZE,
+        runtime_favicon_image,
+        runtime_favicon_fetch,
+    )
+}
+
+/// A page's favicon at `size`: the live fetch when there is one, else the icon cached for the site, else the default browser icon.
+pub(crate) fn browser_favicon_element(
+    size: f32,
+    runtime_favicon_image: Option<&BrowserFaviconImage>,
+    runtime_favicon_fetch: Option<&BrowserFaviconFetchSource>,
+) -> AnyElement {
     let base = div()
-        .relative()
         .flex()
         .flex_shrink_0()
-        .size(px(BROWSER_TAB_ICON_SIZE))
+        .size(px(size))
         .items_center()
-        .justify_center()
-        .rounded(px(3.0))
-        .border_1();
-
-    if let Some(favicon_image) = runtime_favicon_image {
-        let fallback_favicon_url = runtime_favicon_url.map(str::to_string);
-        return base
-            .overflow_hidden()
-            .border_color(browser_tab_favicon_bitmap_border_color(runtime_favicon_url))
-            .bg(browser_tab_favicon_bitmap_background_color(
-                runtime_favicon_url,
-            ))
-            .child(
-                img(favicon_image.image.clone())
-                    .size(px(BROWSER_TAB_ICON_SIZE - 2.0))
-                    .rounded(px(2.0))
-                    .with_fallback(move || {
-                        browser_tab_favicon_fallback_inner_element(
-                            BrowserTabChromeStatus::LoadedSurface,
-                            fallback_favicon_url.as_deref(),
-                        )
-                    }),
-            )
-            .into_any_element();
-    }
+        .justify_center();
 
     if let Some(favicon_fetch_source) = runtime_favicon_fetch {
         let favicon_fetch_source = favicon_fetch_source.clone();
-        let fallback_favicon_url = runtime_favicon_url.map(str::to_string);
-        let loading_fallback_favicon_url = fallback_favicon_url.clone();
+        let loading_favicon_image = runtime_favicon_image.cloned();
+        let fallback_favicon_image = loading_favicon_image.clone();
         return base
-            .overflow_hidden()
-            .border_color(browser_tab_favicon_bitmap_border_color(runtime_favicon_url))
-            .bg(browser_tab_favicon_bitmap_background_color(
-                runtime_favicon_url,
-            ))
             .child(
                 img(move |window: &mut Window, cx: &mut App| {
                     window.use_asset::<BrowserFaviconHttpImageAsset>(&favicon_fetch_source, cx)
                 })
-                .size(px(BROWSER_TAB_ICON_SIZE - 2.0))
-                .rounded(px(2.0))
+                .size(px(size))
                 .with_loading(move || {
-                    browser_tab_favicon_fallback_inner_element(
-                        BrowserTabChromeStatus::LoadedSurface,
-                        loading_fallback_favicon_url.as_deref(),
-                    )
+                    browser_tab_favicon_pending_element(size, loading_favicon_image.as_ref())
                 })
                 .with_fallback(move || {
-                    browser_tab_favicon_fallback_inner_element(
-                        BrowserTabChromeStatus::LoadedSurface,
-                        fallback_favicon_url.as_deref(),
-                    )
+                    browser_tab_favicon_pending_element(size, fallback_favicon_image.as_ref())
                 }),
             )
             .into_any_element();
     }
 
-    if let Some(favicon_url) = runtime_favicon_url {
-        return base
-            .border_color(browser_tab_favicon_icon_border_color(favicon_url))
-            .bg(browser_tab_favicon_icon_background_color(favicon_url))
-            .child(browser_tab_favicon_marker_inner_element(favicon_url))
-            .into_any_element();
-    }
-
-    base.border_color(browser_tab_icon_border_color(chrome_status))
-        .bg(browser_tab_icon_background_color(chrome_status))
-        .child(browser_tab_generic_icon_inner_element(chrome_status))
-        .into_any_element()
+    base.child(browser_tab_favicon_pending_element(
+        size,
+        runtime_favicon_image,
+    ))
+    .into_any_element()
 }
 
-pub(crate) fn browser_tab_favicon_fallback_inner_element(
-    chrome_status: BrowserTabChromeStatus,
-    runtime_favicon_url: Option<&str>,
+/// What the icon slot shows while the page's own favicon is not drawable: the icon cached for the site, else the default browser icon.
+pub(crate) fn browser_tab_favicon_pending_element(
+    size: f32,
+    cached_favicon_image: Option<&BrowserFaviconImage>,
 ) -> AnyElement {
-    if let Some(favicon_url) = runtime_favicon_url {
-        return browser_tab_favicon_marker_inner_element(favicon_url);
-    }
-    browser_tab_generic_icon_inner_element(chrome_status)
-}
-
-pub(crate) fn browser_tab_favicon_marker_inner_element(favicon_url: &str) -> AnyElement {
-    div()
-        .flex()
-        .size(px(9.0))
-        .items_center()
-        .justify_center()
-        .rounded(px(2.0))
-        .bg(browser_tab_favicon_icon_color(favicon_url))
-        .text_size(px(7.0))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(browser_tab_favicon_glyph_color())
-        .child("F")
+    let Some(favicon_image) = cached_favicon_image else {
+        return browser_tab_default_icon_element(size);
+    };
+    img(favicon_image.image.clone())
+        .size(px(size))
+        .with_fallback(move || browser_tab_default_icon_element(size))
         .into_any_element()
 }
 
-pub(crate) fn browser_tab_generic_icon_inner_element(
-    chrome_status: BrowserTabChromeStatus,
-) -> AnyElement {
-    let is_placeholder = chrome_status == BrowserTabChromeStatus::AddressOnly;
-    div()
-        .size(px(if is_placeholder { 5.0 } else { 6.0 }))
-        .rounded_full()
-        .bg(browser_tab_icon_dot_color(chrome_status))
+pub(crate) fn browser_tab_default_icon_element(size: f32) -> AnyElement {
+    svg()
+        .path(BROWSER_ICON_WORLD)
+        .size(px(size))
+        .text_color(chrome_color(0xc7c7c7, 0x525252))
         .into_any_element()
-}
-
-pub(crate) fn browser_tab_favicon_bitmap_border_color(runtime_favicon_url: Option<&str>) -> Hsla {
-    runtime_favicon_url
-        .map(browser_tab_favicon_icon_border_color)
-        .unwrap_or_else(|| chrome_ink().opacity(0.24).into())
-}
-
-pub(crate) fn browser_tab_favicon_bitmap_background_color(
-    runtime_favicon_url: Option<&str>,
-) -> Hsla {
-    runtime_favicon_url
-        .map(browser_tab_favicon_icon_background_color)
-        .unwrap_or_else(|| chrome_ink().opacity(0.08).into())
-}
-
-pub(crate) fn browser_tab_icon_border_color(chrome_status: BrowserTabChromeStatus) -> Hsla {
-    match chrome_status {
-        BrowserTabChromeStatus::LoadedSurface | BrowserTabChromeStatus::RestoredPlaceholder => {
-            rgb(browser_tab_chrome_status_color(chrome_status))
-                .opacity(0.48)
-                .into()
-        }
-        BrowserTabChromeStatus::AddressOnly => chrome_ink().opacity(0.18).into(),
-    }
-}
-
-pub(crate) fn browser_tab_icon_background_color(chrome_status: BrowserTabChromeStatus) -> Hsla {
-    match chrome_status {
-        BrowserTabChromeStatus::LoadedSurface | BrowserTabChromeStatus::RestoredPlaceholder => {
-            rgb(browser_tab_chrome_status_color(chrome_status))
-                .opacity(0.14)
-                .into()
-        }
-        BrowserTabChromeStatus::AddressOnly => chrome_ink().opacity(0.055).into(),
-    }
-}
-
-pub(crate) fn browser_tab_icon_dot_color(chrome_status: BrowserTabChromeStatus) -> Hsla {
-    rgb(browser_tab_chrome_status_color(chrome_status))
-        .opacity(match chrome_status {
-            BrowserTabChromeStatus::LoadedSurface => 0.82,
-            BrowserTabChromeStatus::RestoredPlaceholder => 0.82,
-            BrowserTabChromeStatus::AddressOnly => 0.36,
-        })
-        .into()
-}
-
-pub(crate) fn browser_tab_chrome_status_color(chrome_status: BrowserTabChromeStatus) -> u32 {
-    match chrome_status {
-        BrowserTabChromeStatus::LoadedSurface => 0x58b7ff,
-        BrowserTabChromeStatus::RestoredPlaceholder => 0x41d7b5,
-        BrowserTabChromeStatus::AddressOnly => 0xffffff,
-    }
-}
-
-pub(crate) fn browser_tab_favicon_icon_color(url: &str) -> Hsla {
-    rgb(browser_tab_favicon_palette_color(url))
-        .opacity(0.92)
-        .into()
-}
-
-pub(crate) fn browser_tab_favicon_icon_border_color(url: &str) -> Hsla {
-    rgb(browser_tab_favicon_palette_color(url))
-        .opacity(0.62)
-        .into()
-}
-
-pub(crate) fn browser_tab_favicon_icon_background_color(url: &str) -> Hsla {
-    rgb(browser_tab_favicon_palette_color(url))
-        .opacity(0.16)
-        .into()
-}
-
-pub(crate) fn browser_tab_favicon_glyph_color() -> Hsla {
-    rgb(0x061014).opacity(0.86).into()
-}
-
-pub(crate) fn browser_tab_favicon_palette_color(url: &str) -> u32 {
-    let hash = url.bytes().fold(0_u64, |hash, byte| {
-        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
-    });
-    BROWSER_TAB_FAVICON_COLORS[hash as usize % BROWSER_TAB_FAVICON_COLORS.len()]
 }
 
 pub(crate) fn browser_tab_close_color() -> Hsla {
@@ -1016,148 +894,225 @@ pub(crate) fn browser_feedback_js_string_literal(value: &str) -> String {
 
 pub(crate) fn browser_agentation_feedback_injection_script() -> String {
     /*
-    CDXC:Browser 2026-06-23-11:04:
-    Browser feedback toolbar parity now injects the Settings-selected Agentation tool into the active GPUI CEF main frame instead of showing a placeholder notification. Keep the script bounded to pinned module URLs, auto-start feedback mode, and avoid persistent logs, console page metadata, raw URLs, titles, page content, cookies, tokens, paths, command text, terminal content, or JS error payloads.
+    CDXC:Browser 2026-09-16 DECISION:
+    User: Annotate must land in the frame that owns the page content. Agentation picks elements with elementFromPoint on its own document, so a toolbar mounted in the Storybook manager could only select the sidebar and header while the story sat in the preview iframe. The script therefore runs itself, via Function.prototype.toString, inside the largest same-origin iframe that covers at least a third of the viewport, toggles whichever realm already hosts it, and stays in the host page when there is no such frame or the frame's document cannot run an injected script. Supersedes the 2026-06-23 main-frame-only injection. Keep the script bounded to pinned module URLs, auto-start feedback mode, and avoid persistent logs, console page metadata, raw URLs, titles, page content, cookies, tokens, paths, command text, terminal content, or JS error payloads.
+    User: "i want clearing when i click copy to be enabled by default in agentation". Agentation's "Clear on copy/send" setting is turned on once per origin through its stored settings; a user who turns it off afterwards is not overridden.
+    SEE-ALSO: packages/client-storage/catalog.ts (agentationToolbar, agentationAnnotations), apps/desktop/views/manage/preview/html-viewer.tsx (same default for Docs HTML files), tooling/client-storage/check.mjs (externalStoreScripts).
     */
     const TEMPLATE: &str = r##"
 (function() {
-  const packageModuleUrl = __AGENTATION_PACKAGE_MODULE_URL__;
-  const reactModuleUrl = __AGENTATION_REACT_MODULE_URL__;
-  const reactDOMClientModuleUrl = __AGENTATION_REACT_DOM_CLIENT_MODULE_URL__;
   const stateKey = '__GHOSTEX_AGENTATION__';
-  const rootId = 'ghostex-agentation-root';
-  const directionStyleId = 'ghostex-agentation-direction-style';
+  const mount = function() {
+    const packageModuleUrl = __AGENTATION_PACKAGE_MODULE_URL__;
+    const reactModuleUrl = __AGENTATION_REACT_MODULE_URL__;
+    const reactDOMClientModuleUrl = __AGENTATION_REACT_DOM_CLIENT_MODULE_URL__;
+    const stateKey = '__GHOSTEX_AGENTATION__';
+    const rootId = 'ghostex-agentation-root';
+    const directionStyleId = 'ghostex-agentation-direction-style';
+    const settingsKey = 'feedback-toolbar-settings';
+    const settingsStampKey = 'ghostexDefaults';
+    const settingsStamp = 1;
+    const existing = window[stateKey];
+    if (existing && typeof existing.unmount === 'function') {
+      existing.unmount();
+      return;
+    }
+
+    const state = {
+      canceled: false,
+      container: null,
+      directionStyle: null,
+      root: null,
+      activated: false,
+      failed: false,
+      unmount: function() {
+        this.canceled = true;
+        if (this.root && typeof this.root.unmount === 'function') {
+          try {
+            this.root.unmount();
+          } catch (_) {}
+        }
+        if (this.container && this.container.parentNode) {
+          this.container.parentNode.removeChild(this.container);
+        }
+        if (this.directionStyle && this.directionStyle.parentNode) {
+          this.directionStyle.parentNode.removeChild(this.directionStyle);
+        }
+        if (window[stateKey] === this) {
+          delete window[stateKey];
+        }
+      }
+    };
+    window[stateKey] = state;
+
+    const findStartButton = function() {
+      const root = state.container || document.getElementById(rootId);
+      return document.querySelector('[data-agentation-toolbar] [title="Start feedback mode"][role="button"]')
+        || document.querySelector('[data-agentation-toolbar][title="Start feedback mode"][role="button"]')
+        || document.querySelector('[title="Start feedback mode"][role="button"]')
+        || (root && root.querySelector('[title="Start feedback mode"][role="button"]'))
+        || document.querySelector('[data-agentation-toolbar][title="Start feedback mode"]')
+        || document.querySelector('[title="Start feedback mode"]')
+        || (root && root.querySelector('[title="Start feedback mode"]'));
+    };
+
+    const autoActivate = function(attempt) {
+      if (state.canceled) {
+        return;
+      }
+      const startButton = findStartButton();
+      if (startButton && typeof startButton.click === 'function') {
+        startButton.click();
+        state.activated = true;
+        return;
+      }
+      if (attempt < 20) {
+        window.setTimeout(function() {
+          autoActivate(attempt + 1);
+        }, 50);
+      }
+    };
+
+    const scheduleAutoActivate = function() {
+      const run = function() {
+        autoActivate(0);
+      };
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(function() {
+          window.requestAnimationFrame(run);
+        });
+      } else {
+        window.setTimeout(run, 0);
+      }
+    };
+
+    const mount = async function() {
+      const modules = await Promise.all([
+        import(reactModuleUrl),
+        import(reactDOMClientModuleUrl),
+        import(packageModuleUrl)
+      ]);
+      if (state.canceled) {
+        return;
+      }
+      const React = modules[0].default || modules[0];
+      const ReactDOMClient = modules[1];
+      const Agentation = modules[2].Agentation;
+      if (!React || typeof React.createElement !== 'function' || !ReactDOMClient.createRoot || !Agentation) {
+        state.failed = true;
+        state.unmount();
+        return;
+      }
+
+      const staleContainer = document.getElementById(rootId);
+      if (staleContainer && staleContainer.parentNode) {
+        staleContainer.parentNode.removeChild(staleContainer);
+      }
+      const staleDirectionStyle = document.getElementById(directionStyleId);
+      if (staleDirectionStyle && staleDirectionStyle.parentNode) {
+        staleDirectionStyle.parentNode.removeChild(staleDirectionStyle);
+      }
+      // Agentation portals its visible UI into document.body, outside this
+      // mount container. Give that portal an explicit writing-mode boundary so
+      // RTL page content cannot reverse Agentation's own controls.
+      const directionStyle = document.createElement('style');
+      directionStyle.id = directionStyleId;
+      directionStyle.textContent = '[data-agentation-root][data-agentation-theme] { direction: ltr !important; text-align: left !important; }';
+      (document.head || document.documentElement).appendChild(directionStyle);
+      const container = document.createElement('div');
+      container.id = rootId;
+      container.setAttribute('data-agentation-root', 'true');
+      (document.body || document.documentElement).appendChild(container);
+
+      state.container = container;
+      state.directionStyle = directionStyle;
+      // Agentation reads its settings from this key once, on mount, and merges
+      // them over its own defaults; it exposes no prop for them. Ghostex turns
+      // "Clear on copy/send" on once per origin and keeps the stamp inside the
+      // stored object, which Agentation preserves, so a later manual toggle
+      // stays in force.
+      let settings = null;
+      try {
+        settings = JSON.parse(localStorage.getItem(settingsKey) || 'null');
+      } catch (_) {
+        settings = null;
+      }
+      if (!settings || typeof settings !== 'object') {
+        settings = {};
+      }
+      if (settings[settingsStampKey] !== settingsStamp) {
+        settings.autoClearAfterCopy = true;
+        settings[settingsStampKey] = settingsStamp;
+        localStorage.setItem(settingsKey, JSON.stringify(settings));
+      }
+      state.root = ReactDOMClient.createRoot(container);
+      state.root.render(React.createElement(Agentation));
+      scheduleAutoActivate();
+    };
+
+    const start = function() {
+      mount().catch(function() {
+        state.failed = true;
+        state.unmount();
+      });
+    };
+
+    if (document.body || document.readyState !== 'loading') {
+      start();
+    } else {
+      window.addEventListener('DOMContentLoaded', start, { once: true });
+    }
+  };
   const existing = window[stateKey];
   if (existing && typeof existing.unmount === 'function') {
     existing.unmount();
     return;
   }
-
-  const state = {
-    canceled: false,
-    container: null,
-    directionStyle: null,
-    root: null,
-    activated: false,
-    failed: false,
-    unmount: function() {
-      this.canceled = true;
-      if (this.root && typeof this.root.unmount === 'function') {
-        try {
-          this.root.unmount();
-        } catch (_) {}
+  const contentFrame = function() {
+    const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+    const frames = document.querySelectorAll('iframe');
+    let best = null;
+    let bestArea = 0;
+    for (let index = 0; index < frames.length; index++) {
+      const frame = frames[index];
+      let frameDocument = null;
+      try {
+        frameDocument = frame.contentDocument;
+      } catch (_) {
+        frameDocument = null;
       }
-      if (this.container && this.container.parentNode) {
-        this.container.parentNode.removeChild(this.container);
+      if (!frameDocument || !frameDocument.body) {
+        continue;
       }
-      if (this.directionStyle && this.directionStyle.parentNode) {
-        this.directionStyle.parentNode.removeChild(this.directionStyle);
-      }
-      if (window[stateKey] === this) {
-        delete window[stateKey];
+      const rect = frame.getBoundingClientRect();
+      const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+      if (area > bestArea) {
+        best = frame;
+        bestArea = area;
       }
     }
+    return best && bestArea * 3 >= viewportArea ? best : null;
   };
-  window[stateKey] = state;
-
-  const findStartButton = function() {
-    const root = state.container || document.getElementById(rootId);
-    return document.querySelector('[data-agentation-toolbar] [title="Start feedback mode"][role="button"]')
-      || document.querySelector('[data-agentation-toolbar][title="Start feedback mode"][role="button"]')
-      || document.querySelector('[title="Start feedback mode"][role="button"]')
-      || (root && root.querySelector('[title="Start feedback mode"][role="button"]'))
-      || document.querySelector('[data-agentation-toolbar][title="Start feedback mode"]')
-      || document.querySelector('[title="Start feedback mode"]')
-      || (root && root.querySelector('[title="Start feedback mode"]'));
-  };
-
-  const autoActivate = function(attempt) {
-    if (state.canceled) {
+  const frame = contentFrame();
+  if (frame) {
+    const frameWindow = frame.contentWindow;
+    const frameDocument = frame.contentDocument;
+    const framed = frameWindow && frameWindow[stateKey];
+    if (framed && typeof framed.unmount === 'function') {
+      framed.unmount();
       return;
     }
-    const startButton = findStartButton();
-    if (startButton && typeof startButton.click === 'function') {
-      startButton.click();
-      state.activated = true;
+    const script = frameDocument.createElement('script');
+    script.textContent = '(' + mount.toString() + ')();';
+    (frameDocument.head || frameDocument.documentElement).appendChild(script);
+    if (script.parentNode) {
+      script.parentNode.removeChild(script);
+    }
+    if (frameWindow && frameWindow[stateKey]) {
       return;
     }
-    if (attempt < 20) {
-      window.setTimeout(function() {
-        autoActivate(attempt + 1);
-      }, 50);
-    }
-  };
-
-  const scheduleAutoActivate = function() {
-    const run = function() {
-      autoActivate(0);
-    };
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(function() {
-        window.requestAnimationFrame(run);
-      });
-    } else {
-      window.setTimeout(run, 0);
-    }
-  };
-
-  const mount = async function() {
-    const modules = await Promise.all([
-      import(reactModuleUrl),
-      import(reactDOMClientModuleUrl),
-      import(packageModuleUrl)
-    ]);
-    if (state.canceled) {
-      return;
-    }
-    const React = modules[0].default || modules[0];
-    const ReactDOMClient = modules[1];
-    const Agentation = modules[2].Agentation;
-    if (!React || typeof React.createElement !== 'function' || !ReactDOMClient.createRoot || !Agentation) {
-      state.failed = true;
-      state.unmount();
-      return;
-    }
-
-    const staleContainer = document.getElementById(rootId);
-    if (staleContainer && staleContainer.parentNode) {
-      staleContainer.parentNode.removeChild(staleContainer);
-    }
-    const staleDirectionStyle = document.getElementById(directionStyleId);
-    if (staleDirectionStyle && staleDirectionStyle.parentNode) {
-      staleDirectionStyle.parentNode.removeChild(staleDirectionStyle);
-    }
-    // Agentation portals its visible UI into document.body, outside this
-    // mount container. Give that portal an explicit writing-mode boundary so
-    // RTL page content cannot reverse Agentation's own controls.
-    const directionStyle = document.createElement('style');
-    directionStyle.id = directionStyleId;
-    directionStyle.textContent = '[data-agentation-root][data-agentation-theme] { direction: ltr !important; text-align: left !important; }';
-    (document.head || document.documentElement).appendChild(directionStyle);
-    const container = document.createElement('div');
-    container.id = rootId;
-    container.setAttribute('data-agentation-root', 'true');
-    (document.body || document.documentElement).appendChild(container);
-
-    state.container = container;
-    state.directionStyle = directionStyle;
-    state.root = ReactDOMClient.createRoot(container);
-    state.root.render(React.createElement(Agentation));
-    scheduleAutoActivate();
-  };
-
-  const start = function() {
-    mount().catch(function() {
-      state.failed = true;
-      state.unmount();
-    });
-  };
-
-  if (document.body || document.readyState !== 'loading') {
-    start();
-  } else {
-    window.addEventListener('DOMContentLoaded', start, { once: true });
   }
+  mount();
 })();
 "##;
 

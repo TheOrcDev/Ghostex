@@ -15,43 +15,27 @@ build_cef_sidebar_bundle_if_needed() {
 	# Generated CSS is an output, so hashing it as an input invalidates the cache after Tailwind changes it.
 	# Hash the CEF entries, their shared imports and toolchain inputs so Rust-only edits reuse the web bundle.
 	bundle_digest="$(fingerprint_inputs \
-		--value "cef-sidebar-bundle-v2" \
+		--value "cef-sidebar-bundle-v3" \
 		--exclude-path "$REPO_ROOT/packages/core-ui/styles/shadcn.generated.css" \
 		--value "bun=$(bun --version 2>/dev/null || true)" \
 		--path "$SCRIPT_DIR/build-macos-sidebar.sh" \
 		--path "$GPUI_DIR/vite.config.ts" \
 		--path "$GPUI_DIR/tsconfig.json" \
-		--path "$GPUI_DIR/index.html" \
-		--path "$GPUI_DIR/chat.html" \
-		--path "$GPUI_DIR/find.html" \
-		--path "$GPUI_DIR/kanban.html" \
 		--path "$GPUI_DIR/manage.html" \
-		--path "$GPUI_DIR/modal-host.html" \
-		--path "$GPUI_DIR/model-picker.html" \
-		--path "$GPUI_DIR/titlebar-host.html" \
+		--path "$GPUI_DIR/work.html" \
 		--path "$GPUI_DIR/sidebar" \
 		--path "$GPUI_DIR/views" \
 		--path "$REPO_ROOT/packages/core-ui" \
 		--path "$REPO_ROOT/packages/components" \
 		--path "$REPO_ROOT/packages/shared" \
-		--path "$REPO_ROOT/apps/web/src" \
-		--path "$REPO_ROOT/tooling/shiki-classic-assets.mjs" \
-		--path "$REPO_ROOT/tooling/mermaid-classic-assets.mjs" \
+		--path "$REPO_ROOT/tooling/docs-classic-assets.ts" \
 		--path "$REPO_ROOT/package.json" \
 		--path "$REPO_ROOT/bun.lock" \
 		--path "$REPO_ROOT/tsconfig.json")"
 	bundle_outputs=(
 		"$REPO_ROOT/packages/core-ui/styles/shadcn.generated.css"
-		"$GPUI_DIR/dist/sidebar/index.html"
-		"$GPUI_DIR/dist/sidebar/chat.html"
-		"$GPUI_DIR/dist/sidebar/find.html"
-		"$GPUI_DIR/dist/sidebar/kanban.html"
 		"$GPUI_DIR/dist/sidebar/manage.html"
-		"$GPUI_DIR/dist/sidebar/modal-host.html"
-		"$GPUI_DIR/dist/sidebar/model-picker.html"
-		"$GPUI_DIR/dist/sidebar/titlebar-host.html"
-		"$GPUI_DIR/dist/sidebar/monaco/vs/loader.js"
-		"$GPUI_DIR/dist/sidebar/mermaid/runtime.js"
+		"$GPUI_DIR/dist/sidebar/work.html"
 	)
 	if cache_matches "cef-sidebar-bundle" "$bundle_digest" "${bundle_outputs[@]}"; then
 		echo "CEF sidebar bundle is current; skipping web build."
@@ -59,7 +43,7 @@ build_cef_sidebar_bundle_if_needed() {
 	fi
 	(
 		cd "$REPO_ROOT"
-		bun run build:sidebar-css
+		bunx tailwindcss -i packages/core-ui/styles/shadcn.css -o packages/core-ui/styles/shadcn.generated.css --minify
 		bunx vite build --config "$GPUI_DIR/vite.config.ts"
 	)
 	write_cache_stamp "cef-sidebar-bundle" "$bundle_digest"

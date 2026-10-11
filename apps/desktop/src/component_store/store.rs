@@ -1,0 +1,565 @@
+use std::{
+    collections::HashMap,
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+use super::*;
+
+pub struct ComponentStore {
+    manifest: OnDemandManifest,
+    root: PathBuf,
+}
+
+struct ScopedPathCleanup {
+    paths: Vec<PathBuf>,
+}
+
+impl ScopedPathCleanup {
+    fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: paths.into_iter().collect(),
+        }
+    }
+}
+
+impl Drop for ScopedPathCleanup {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = remove_component_store_path(path);
+        }
+    }
+}
+
+struct AtomicPathReplacement {
+    backup: PathBuf,
+    destination: PathBuf,
+    previous_moved: bool,
+    replacement_installed: bool,
+    committed: bool,
+}
+
+impl AtomicPathReplacement {
+    fn prepare(destination: &Path, backup: &Path) -> Result<Self, String> {
+        let mut replacement = Self {
+            backup: backup.to_path_buf(),
+            destination: destination.to_path_buf(),
+            previous_moved: false,
+            replacement_installed: false,
+            committed: false,
+        };
+        match destination.symlink_metadata() {
+            Ok(_) => {
+                fs::rename(destination, backup).map_err(|error| {
+                    format!(
+                        "Could not preserve existing component store path {}: {error}",
+                        destination.display()
+                    )
+                })?;
+                replacement.previous_moved = true;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Could not inspect existing component store path {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+        Ok(replacement)
+    }
+
+    fn install(&mut self, staged: &Path) -> Result<(), String> {
+        fs::rename(staged, &self.destination).map_err(|error| {
+            format!(
+                "Could not atomically install component store path {}: {error}",
+                self.destination.display()
+            )
+        })?;
+        self.replacement_installed = true;
+        Ok(())
+    }
+
+    fn commit(mut self) -> Result<(), String> {
+        if self.previous_moved {
+            remove_component_store_path(&self.backup).map_err(|error| {
+                format!(
+                    "Could not remove replaced component store path {}: {error}",
+                    self.backup.display()
+                )
+            })?;
+            self.previous_moved = false;
+        }
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for AtomicPathReplacement {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if self.replacement_installed {
+            let _ = remove_component_store_path(&self.destination);
+        }
+        if self.previous_moved {
+            let _ = fs::rename(&self.backup, &self.destination);
+        }
+    }
+}
+
+fn remove_component_store_path(path: &Path) -> io::Result<()> {
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn path_size_bytes(path: &Path) -> Result<u64, String> {
+    if path.is_file() {
+        return path
+            .metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|error| format!("Could not read component file size: {error}"));
+    }
+    directory_size(path)
+}
+
+impl ComponentStore {
+    pub fn from_manifest(manifest: OnDemandManifest) -> Result<Self, String> {
+        let root = component_store_root()?;
+        prune_other_versions(&legacy_asset_cache_root()?, &manifest.version)?;
+        Ok(Self { manifest, root })
+    }
+
+    #[allow(dead_code)] // component-store query builder API kept complete
+    pub fn with_root(manifest: OnDemandManifest, root: PathBuf) -> Self {
+        Self { manifest, root }
+    }
+
+    pub fn release_version(&self) -> &str {
+        &self.manifest.version
+    }
+
+    pub fn component(&self, name: &str) -> Option<&ComponentDefinition> {
+        self.manifest.components.get(name)
+    }
+
+    #[allow(dead_code)] // component-store query builder API kept complete
+    pub fn query(&self, name: &str, version: &str) -> Result<InstalledComponent, String> {
+        let platform = current_platform()?;
+        self.query_for_platform(name, version, &platform)
+    }
+
+    pub fn query_for_platform(
+        &self,
+        name: &str,
+        version: &str,
+        platform: &str,
+    ) -> Result<InstalledComponent, String> {
+        require_identifier(name, "component name")?;
+        require_identifier(version, "component version")?;
+        require_identifier(platform, "component platform")?;
+        let path = self.root.join(name).join(version).join(platform);
+        let expected_sha256 = self
+            .manifest
+            .components
+            .get(name)
+            .filter(|component| component.component_version == version)
+            .and_then(|component| component.platforms.get(platform))
+            .map(|asset| asset.sha256.as_str());
+        let installed = installed_marker_matches(&path, name, version, platform, expected_sha256)?;
+        if installed && name == CODE_SERVER_COMPONENT_NAME && platform.starts_with("windows-") {
+            verify_installed_windows_code_server_component(&path, version, platform)?;
+        }
+        let size_bytes = if installed { directory_size(&path)? } else { 0 };
+        Ok(InstalledComponent {
+            installed,
+            name: name.to_string(),
+            version: version.to_string(),
+            platform: platform.to_string(),
+            path,
+            size_bytes,
+        })
+    }
+
+    pub fn query_current(&self, name: &str) -> Result<InstalledComponent, String> {
+        let platform = current_platform()?;
+        self.query_current_for_platform(name, &platform)
+    }
+
+    pub fn query_current_for_platform(
+        &self,
+        name: &str,
+        platform: &str,
+    ) -> Result<InstalledComponent, String> {
+        require_identifier(platform, "component platform")?;
+        let component = self
+            .manifest
+            .components
+            .get(name)
+            .ok_or_else(|| format!("Sealed manifest does not define component {name}"))?;
+        if !component.platforms.contains_key(platform) {
+            return Err(format!(
+                "Sealed manifest does not define {} {} for {platform}",
+                component.name, component.component_version
+            ));
+        }
+        self.query_for_platform(&component.name, &component.component_version, platform)
+    }
+
+    pub fn install(
+        &self,
+        name: &str,
+        progress: &mut dyn FnMut(ComponentStoreProgress),
+    ) -> Result<InstalledComponent, String> {
+        let platform = current_platform()?;
+        self.install_for_platform(name, &platform, progress)
+    }
+
+    pub fn install_for_platform(
+        &self,
+        name: &str,
+        platform: &str,
+        progress: &mut dyn FnMut(ComponentStoreProgress),
+    ) -> Result<InstalledComponent, String> {
+        require_identifier(platform, "component platform")?;
+        let component = self
+            .manifest
+            .components
+            .get(name)
+            .ok_or_else(|| format!("Sealed manifest does not define component {name}"))?;
+        let asset = component.platforms.get(platform).ok_or_else(|| {
+            format!(
+                "Sealed manifest does not define {} {} for {platform}",
+                component.name, component.component_version
+            )
+        })?;
+        let component_root = self.root.join(&component.name);
+        let version_root = component_root.join(&component.component_version);
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Checking,
+        );
+        let current =
+            self.query_for_platform(&component.name, &component.component_version, platform)?;
+        if current.installed {
+            prune_temporary_install_artifacts(&version_root);
+            prune_other_versions(&component_root, &component.component_version)?;
+            emit(
+                progress,
+                component,
+                platform,
+                asset.size_bytes,
+                ComponentStoreProgressPhase::Ready,
+            );
+            return Ok(current);
+        }
+
+        fs::create_dir_all(&version_root).map_err(|error| {
+            format!(
+                "Could not create component store directory {}: {error}",
+                version_root.display()
+            )
+        })?;
+        prune_temporary_install_artifacts(&version_root);
+        let unique = unique_suffix();
+        let archive_path = version_root.join(format!(".download-{}-{unique}", std::process::id()));
+        let sidecar_path =
+            version_root.join(format!(".download-{}-{unique}.sha256", std::process::id()));
+        let install_path = version_root.join(format!(".install-{}-{unique}", std::process::id()));
+        let destination = version_root.join(platform);
+        let previous_path = version_root.join(format!(".previous-{}-{unique}", std::process::id()));
+        let _cleanup = ScopedPathCleanup::new([
+            archive_path.clone(),
+            sidecar_path.clone(),
+            install_path.clone(),
+            previous_path.clone(),
+        ]);
+        let url = download_url(
+            component.download_repo(&self.manifest.github_repo),
+            &component.download_tag,
+            &asset.asset_name,
+        );
+
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Downloading,
+        );
+        download(
+            &url,
+            &archive_path,
+            asset.size_bytes,
+            &mut |downloaded_bytes| {
+                emit_download_progress(
+                    progress,
+                    component,
+                    platform,
+                    asset.size_bytes,
+                    downloaded_bytes,
+                );
+            },
+        )?;
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Verifying,
+        );
+        verify_file(&archive_path, &asset.sha256, asset.size_bytes)?;
+        if let Some(sidecar_name) = &asset.sha256_sidecar_name {
+            let sidecar_url = download_url(
+                component.download_repo(&self.manifest.github_repo),
+                &component.download_tag,
+                sidecar_name,
+            );
+            download(&sidecar_url, &sidecar_path, 0, &mut |_| {})?;
+            let sidecar = fs::read_to_string(&sidecar_path).map_err(|error| {
+                format!(
+                    "Could not read downloaded component checksum sidecar {}: {error}",
+                    sidecar_path.display()
+                )
+            })?;
+            let sidecar_sha256 = parse_code_server_checksum_sidecar(&sidecar, &asset.asset_name)?;
+            if sidecar_sha256 != asset.sha256 {
+                return Err(format!(
+                    "Component checksum sidecar digest mismatch for {}",
+                    asset.asset_name
+                ));
+            }
+        }
+        remove_macos_quarantine(&archive_path)?;
+
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Installing,
+        );
+        fs::create_dir_all(&install_path)
+            .map_err(|error| format!("Could not prepare atomic component install: {error}"))?;
+        unpack_tar_gz(&archive_path, &install_path)?;
+        remove_macos_quarantine(&install_path)?;
+        if component.name == CODE_SERVER_COMPONENT_NAME && platform.starts_with("windows-") {
+            verify_installed_windows_code_server_component(
+                &install_path,
+                &component.component_version,
+                platform,
+            )?;
+        }
+        write_install_marker(
+            &install_path,
+            &component.name,
+            &component.component_version,
+            platform,
+            &asset.sha256,
+        )?;
+        let mut replacement = AtomicPathReplacement::prepare(&destination, &previous_path)?;
+        replacement.install(&install_path)?;
+
+        let installed =
+            self.query_for_platform(&component.name, &component.component_version, platform)?;
+        replacement.commit()?;
+
+        /*
+        CDXC:Extensions 2026-08-09:
+        A process terminated after downloading or unpacking cannot run its
+        normal error cleanup. Once this version has been installed atomically,
+        every remaining .download-* or .install-* sibling is obsolete; remove
+        those artifacts so a killed first launch does not permanently retain a
+        full component archive.
+        */
+        prune_temporary_install_artifacts(&version_root);
+
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Pruning,
+        );
+        prune_other_versions(&component_root, &component.component_version)?;
+        emit(
+            progress,
+            component,
+            platform,
+            asset.size_bytes,
+            ComponentStoreProgressPhase::Ready,
+        );
+        Ok(installed)
+    }
+
+    pub fn uninstall(&self, name: &str, version: &str) -> Result<bool, String> {
+        require_identifier(name, "component name")?;
+        require_identifier(version, "component version")?;
+        let version_path = self.root.join(name).join(version);
+        if !version_path.exists() {
+            return Ok(false);
+        }
+        fs::remove_dir_all(&version_path)
+            .map_err(|error| format!("Could not uninstall component {name} {version}: {error}"))?;
+        Ok(true)
+    }
+
+    pub fn download_release_asset(
+        &self,
+        asset_key: &str,
+        progress: &mut dyn FnMut(ComponentStoreProgress),
+    ) -> Result<PathBuf, String> {
+        let asset =
+            self.manifest.assets.get(asset_key).ok_or_else(|| {
+                format!("Sealed manifest does not define release asset {asset_key}")
+            })?;
+        let cache_dir = legacy_asset_cache_root()?.join(&self.manifest.version);
+        fs::create_dir_all(&cache_dir).map_err(|error| {
+            format!(
+                "Could not create release asset cache {}: {error}",
+                cache_dir.display()
+            )
+        })?;
+        prune_temporary_install_artifacts(&cache_dir);
+        let destination = cache_dir.join(&asset.name);
+        let compatibility_component = ComponentDefinition {
+            name: asset_key.to_string(),
+            component_version: self.manifest.version.clone(),
+            download_tag: format!("v{}", self.manifest.version),
+            github_repo: None,
+            platforms: HashMap::new(),
+        };
+        let platform = current_platform()?;
+        emit(
+            progress,
+            &compatibility_component,
+            &platform,
+            asset.bytes,
+            ComponentStoreProgressPhase::Checking,
+        );
+        if destination.is_file() && verify_file(&destination, &asset.sha256, asset.bytes).is_ok() {
+            emit(
+                progress,
+                &compatibility_component,
+                &platform,
+                asset.bytes,
+                ComponentStoreProgressPhase::Ready,
+            );
+            return Ok(destination);
+        }
+        let temporary = cache_dir.join(format!(
+            ".download-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let previous = cache_dir.join(format!(
+            ".previous-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let _cleanup = ScopedPathCleanup::new([temporary.clone(), previous.clone()]);
+        emit(
+            progress,
+            &compatibility_component,
+            &platform,
+            asset.bytes,
+            ComponentStoreProgressPhase::Downloading,
+        );
+        let url = download_url(
+            &self.manifest.github_repo,
+            &compatibility_component.download_tag,
+            &asset.name,
+        );
+        download(&url, &temporary, asset.bytes, &mut |downloaded_bytes| {
+            emit_download_progress(
+                progress,
+                &compatibility_component,
+                &platform,
+                asset.bytes,
+                downloaded_bytes,
+            );
+        })?;
+        emit(
+            progress,
+            &compatibility_component,
+            &platform,
+            asset.bytes,
+            ComponentStoreProgressPhase::Verifying,
+        );
+        verify_file(&temporary, &asset.sha256, asset.bytes)?;
+        remove_macos_quarantine(&temporary)?;
+        let mut replacement = AtomicPathReplacement::prepare(&destination, &previous)?;
+        replacement.install(&temporary)?;
+        replacement.commit()?;
+        emit(
+            progress,
+            &compatibility_component,
+            &platform,
+            asset.bytes,
+            ComponentStoreProgressPhase::Ready,
+        );
+        Ok(destination)
+    }
+
+    pub fn has_release_asset(&self, asset_key: &str) -> bool {
+        self.manifest.assets.contains_key(asset_key)
+    }
+
+    pub fn query_release_asset_cache(
+        &self,
+        asset_key: &str,
+        payload: ReleaseAssetCachePayload,
+    ) -> Result<CachedReleaseAsset, String> {
+        let asset =
+            self.manifest.assets.get(asset_key).ok_or_else(|| {
+                format!("Sealed manifest does not define release asset {asset_key}")
+            })?;
+        let cache_dir = legacy_asset_cache_root()?.join(&self.manifest.version);
+        let path = match payload {
+            ReleaseAssetCachePayload::DownloadArchive => cache_dir.join(&asset.name),
+        };
+        let size_bytes = path
+            .metadata()
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let cached = match payload {
+            ReleaseAssetCachePayload::DownloadArchive => size_bytes == asset.bytes,
+        };
+        Ok(CachedReleaseAsset {
+            asset_key: asset_key.to_string(),
+            cached,
+            download_size_bytes: asset.bytes,
+            path,
+            size_bytes,
+            version: self.manifest.version.clone(),
+        })
+    }
+
+    pub fn remove_release_asset_cache(
+        &self,
+        asset_key: &str,
+        payload: ReleaseAssetCachePayload,
+    ) -> Result<bool, String> {
+        let cached = self.query_release_asset_cache(asset_key, payload)?;
+        if !cached.path.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&cached.path).map_err(|error| {
+            format!(
+                "Could not remove cached release asset {}: {error}",
+                cached.path.display()
+            )
+        })?;
+        Ok(true)
+    }
+}

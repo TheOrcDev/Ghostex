@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /*
  CDXC:Release 2026-09-02-12:40:
@@ -18,14 +18,14 @@ import { pathToFileURL } from 'node:url';
  names the workflow and shell script that invoke it on CI, so anyone changing a
  release script can audit the drift by hand. Excluded on purpose: cargo, Zig,
  Gradle, signing, notarisation, code-server packaging, component publishing, and
- anything that fetches large artifacts or needs release secrets. `bun run
+ anything that fetches large artifacts or needs release secrets. `cargo xtask
  typecheck` and `bun run release:test` are separate preflight stages already.
- `build:mobile-find`, `web:build`, and the editor build are not run by any
- release workflow, so they are not here either.
+ `cargo xtask web-build` and the editor build are not run by any release workflow, so
+ they are not here either.
 
- Two of the steps write TRACKED files: build:sidebar-css regenerates
- packages/core-ui/styles/shadcn.generated.css and build:mobile-chat regenerates
- the committed WebView assets inside the apps/mobile/app submodule. Both builds
+ Two of the steps write TRACKED files: the sidebar CSS build regenerates
+ packages/core-ui/styles/shadcn.generated.css and generate-chat-agents.mjs
+ regenerates the committed chat agent list inside the apps/mobile/app submodule. Both builds
  are deterministic (verified by rebuilding twice), so on a release-ready tree they
  are no-ops on disk. Every tracked output is snapshotted before its command runs;
  if the rebuild changes any of them, the previous bytes are put back so the
@@ -34,36 +34,31 @@ import { pathToFileURL } from 'node:url';
  output no longer matches its sources - not a side effect to hide.
 */
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 export const RELEASE_BUILD_SCRIPTS = Object.freeze([
   {
-    // CI: release-gpui-android.yml / release-build-android.yml
+    // CI: release-gpui-android.yml
     //   -> tooling/release-gpui/android.sh -> tooling/release-mobile/android.sh
     //   (also release-mobile-ios-testflight.yml -> tooling/release-mobile/ios-testflight.sh)
     caller: 'release-gpui-android.yml -> tooling/release-mobile/android.sh',
-    command: 'bun run build:mobile-chat',
+    command: 'node apps/mobile/app/scripts/generate-chat-agents.mjs',
     timeoutMs: 5 * 60 * 1000,
-    trackedOutputs: [
-      'apps/mobile/app/assets/webview/session-chat',
-      'apps/mobile/app/src/chat/session-chat-agents.generated.ts',
-      'apps/mobile/app/src/chat/session-chat-html.generated.ts',
-    ],
+    trackedOutputs: ['apps/mobile/app/src/chat/session-chat-agents.generated.ts'],
   },
   {
     // CI: release-gpui-macos.yml -> tooling/release-gpui/macos.sh -> apps/desktop/scripts/build-macos-app.sh
     //     release-gpui-linux.yml -> tooling/release-gpui/linux-stage.sh -> apps/desktop/scripts/build-linux-app.sh
     //     release-gpui-windows.yml -> tooling/release-gpui/windows.ps1 -> apps/desktop/scripts/build-windows-app.ps1
     caller: 'release-gpui-{macos,linux,windows} -> apps/desktop/scripts/build-*-app',
-    command: 'bun run build:sidebar-css',
+    command: 'bunx tailwindcss -i packages/core-ui/styles/shadcn.css -o packages/core-ui/styles/shadcn.generated.css --minify',
     timeoutMs: 5 * 60 * 1000,
     trackedOutputs: ['packages/core-ui/styles/shadcn.generated.css'],
   },
   {
-    // CI: same three desktop build scripts as build:sidebar-css, immediately after
+    // CI: same three desktop build scripts as the sidebar CSS build, immediately after
     // it (Windows runs node_modules/.bin/vite.exe with the same arguments).
-    // Writes apps/desktop/dist/sidebar, which is gitignored. Also exercises
-    // tooling/shiki-classic-assets.mjs through the stageShikiChatRuntime plugin.
+    // Writes apps/desktop/dist/sidebar, which is gitignored.
     caller: 'release-gpui-{macos,linux,windows} -> apps/desktop/scripts/build-*-app',
     command: 'bunx vite build --config apps/desktop/vite.config.ts',
     timeoutMs: 10 * 60 * 1000,
@@ -71,6 +66,10 @@ export const RELEASE_BUILD_SCRIPTS = Object.freeze([
   },
 ]);
 
+/**
+ * @param {string} command
+ * @param {{ timeoutMs?: number, cwd?: string }} [options]
+ */
 function runCommand(command, { timeoutMs, cwd = repoRoot } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, {
@@ -208,6 +207,10 @@ export function formatDuration(durationMs) {
  result (or null). `onResult` is called after each command so callers can stream
  per-command timings; `scripts` defaults to the full RELEASE_BUILD_SCRIPTS list.
 */
+/**
+ * @param {{ keepOutputs?: boolean, onResult?: (result: any) => void, scripts?: readonly any[] }} [options]
+ * @returns {Promise<{ failure: any, results: any[] }>}
+ */
 export async function runReleaseBuildScripts({ keepOutputs = false, onResult, scripts = RELEASE_BUILD_SCRIPTS } = {}) {
   const results = [];
   for (const entry of scripts) {

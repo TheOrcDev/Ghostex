@@ -36,7 +36,7 @@ export const TOOLCHAIN = Object.freeze({
    * apps/mobile/tailcat-bridge before Gradle compiles against it. Both pins are
    * asserted against that module's go.mod and against the workflow file below.
    */
-  tailcatBridgeGo: '1.27.0',
+  tailcatBridgeGo: '1.27.1',
   tailcatBridgeGomobile: 'v0.0.0-20260821190718-4776eadac327',
   vpk: '1.2.0',
   /*
@@ -60,6 +60,7 @@ export const SPARKLE_FEED_URL = 'https://raw.githubusercontent.com/maddada/Ghost
 export const IGNORED_FOR_RELEASE = Object.freeze([
   { path: '.beads', why: 'Project board database; never compiled into an artifact.' },
   { path: '.cargo', why: 'Local dev profile settings; release builds use their own profiles.' },
+  { path: '.claude', why: 'Agent skills for repo maintainers (the release procedure); dev tooling only.' },
   { path: '.editorconfig', why: 'Editor configuration only.' },
   { path: '.gitattributes', why: 'Git checkout behavior only; release jobs use fresh clones.' },
   { path: '.gitignore', why: 'Ignore rules only; tracked inputs are enumerated explicitly.' },
@@ -72,6 +73,7 @@ export const IGNORED_FOR_RELEASE = Object.freeze([
   { path: 'docs', why: 'Design and implementation documentation; never compiled into a release artifact.' },
   { path: 'LICENSE', why: 'Metadata only.' },
   { path: 'README.md', why: 'Metadata only.' },
+  { path: 'TERMS.md', why: 'Project glossary for agents and contributors; metadata only.' },
   { path: 'appcast.xml', why: 'Sparkle feed output written by the publisher, not a build input.' },
   { path: 'claude-code-codex-keybindings.json', why: 'Developer keybindings; not packaged.' },
   { path: 'favicon.png', why: 'Web asset for local tooling; not packaged by any release job.' },
@@ -80,14 +82,9 @@ export const IGNORED_FOR_RELEASE = Object.freeze([
     path: '.dependencies/ghostty-patches',
     why: 'Source-sync overlay only; release jobs compile the already-patched tracked ghostty tree.',
   },
-  { path: 'apps/web', why: 'Web app; released separately, never part of a GPUI release artifact.' },
   {
-    path: 'apps/mobile/views/chat',
-    why: 'Mobile chat bundle source; consumed by the mobile submodule build, not by release jobs.',
-  },
-  {
-    path: 'apps/mobile/views/find',
-    why: 'Mobile Find Prompts bundle source; consumed by the mobile submodule build, not by release jobs.',
+    path: 'apps/gpui-web',
+    why: 'GPUI web build; built from a checkout with `cargo xtask web-build`, never part of a GPUI release artifact.',
   },
   {
     path: 'vitest.config.ts',
@@ -131,6 +128,9 @@ const DESKTOP_APP_PATHSPECS = Object.freeze([
   { pathspec: 'packages/paths/**' },
   { pathspec: 'packages/find/**' },
   { pathspec: ':(exclude)packages/find/target' },
+  /* The Settings rows, defaults and hotkeys, compiled into the desktop app and gxserver. */
+  { pathspec: 'packages/settings-catalog/**' },
+  { pathspec: ':(exclude)packages/settings-catalog/target' },
   { pathspec: 'server/**' },
   { pathspec: ':(exclude)server/target' },
   { pathspec: 'packages/shared/**' },
@@ -138,9 +138,10 @@ const DESKTOP_APP_PATHSPECS = Object.freeze([
   { pathspec: 'packages/components/**' },
   { pathspec: 'components.json' },
   /*
-   * Imported at build time by packages/shared/agent-model-catalog-store.ts, so
-   * the snapshot is baked into every CEF sidebar bundle. The runtime refresh
-   * from raw.githubusercontent.com does not remove it as a build input.
+   * Compiled in with include_str! by server/src/agent_model_catalog.rs and
+   * packages/gx-chat-core/src/menus/picker/settle.rs, so the snapshot is baked
+   * into gxserver and every chat. The runtime refresh from
+   * raw.githubusercontent.com does not remove it as a build input.
    */
   { pathspec: 'agent-model-catalog.json' },
   { pathspec: '.dependencies/ghostty/**' },
@@ -164,11 +165,13 @@ const GXSERVER_PATHSPECS = Object.freeze([
   { pathspec: 'packages/paths/**' },
   { pathspec: 'packages/find/**' },
   { pathspec: ':(exclude)packages/find/target' },
+  { pathspec: 'packages/settings-catalog/**' },
+  { pathspec: ':(exclude)packages/settings-catalog/target' },
   { pathspec: '.dependencies/zmx' },
   /* server/package-remote-linux.mjs stages the bundled skills catalog into the package. */
   { pathspec: 'skills/**' },
   { pathspec: 'tooling/build-remote-gxserver-linux-release.sh' },
-  { pathspec: 'tooling/release-ghostex.mjs' },
+  { pathspec: 'tooling/release-shared.mjs' },
   { pathspec: 'tooling/release-gpui/prepare-references.sh' },
   /*
    * release-gpui-runtime.yml was split into the gxserver package workflow and
@@ -259,6 +262,7 @@ function windowsProduct(arch) {
     pathspecs: [
       ...DESKTOP_APP_PATHSPECS,
       { pathspec: 'tooling/release-gpui/windows.ps1' },
+      { pathspec: 'tooling/release-gpui/windows-build-watchdog.ps1' },
       { pathspec: 'tooling/release-gpui/prepare-zig.ps1' },
       { pathspec: 'tooling/release-gpui/windows-update-feed.mjs' },
       { pathspec: 'tooling/release-gpui/verify-code-server-archive.mjs' },
@@ -332,24 +336,29 @@ const COMPOSED_NODES = {
      * `<12-hex code-server HEAD>-p2-<payload fingerprint>`. Both halves are
      * determined by the code-server gitlink and the identity revision, so the
      * gitlink plus the identity-revision inputs is an exact, offline stand-in.
-     * The three identity-revision inputs below change the produced archive
-     * without changing the upstream payload, so they must invalidate the build.
+     * The identity-revision inputs below change the produced archive without
+     * changing the upstream payload, so they must invalidate the build.
      */
     composedFrom: [],
     id: 'code-server',
     identityRevisionPathspecs: [
       { pathspec: 'tooling/release-gpui/patches/code-server-ripgrep-target-validation.patch' },
       { pathspec: '.github/workflows/release-gpui-code-server.yml' },
+      { pathspec: '.github/workflows/release-gpui-code-server-windows.yml' },
       /* Lives inside the code-server gitlink, so it never appears in this tree. */
       { pathspec: '.dependencies/code-server/.node-version', allowMissing: true },
     ],
     kind: 'component',
     pathspecs: [
       { pathspec: '.dependencies/code-server' },
+      /* The native Windows editor recipe is part of the component identity (CODE_SERVER_RECIPE_INPUTS). */
+      { pathspec: 'apps/desktop/scripts/build-windows-code-server.ps1' },
       { pathspec: 'tooling/release-gpui/code-server-component-identity.mjs' },
       { pathspec: 'tooling/release-gpui/patches/code-server-ripgrep-target-validation.patch' },
       { pathspec: 'tooling/release-gpui/verify-code-server-archive.mjs' },
+      { pathspec: 'tooling/release-gpui/verify-windows-native-code-server-archive.mjs' },
       { pathspec: '.github/workflows/release-gpui-code-server.yml' },
+      { pathspec: '.github/workflows/release-gpui-code-server-windows.yml' },
     ],
     values: { identityRevision: CODE_SERVER_IDENTITY_REVISION, node: TOOLCHAIN.node },
     versionStamped: false,
@@ -370,6 +379,12 @@ const PRODUCT_LIST = [
      * gomobile output that is never committed. The Android job regenerates it from
      * that Go source on every build, so the Go source is a real input to the APK.
      *
+     * The Rust chat core is the second exception, on the same terms: the submodule's
+     * modules/gx-chat-core loads libgx_chat_mobile.so and its UniFFI Kotlin bindings,
+     * which the Android job builds from packages/gx-chat-mobile (and the gx-chat-core and
+     * gx-protocol crates it compiles in) and never commits. Without these pathspecs a
+     * release that changed only the chat core would reuse the previous APK.
+     *
      * FINGERPRINT_ALGORITHM_REVISION is deliberately NOT bumped for this purely
      * additive change. The header rule exists so a stale record can never be
      * compared against a different input set; here every product already hashes
@@ -386,6 +401,9 @@ const PRODUCT_LIST = [
       { pathspec: 'apps/mobile/app' },
       { pathspec: 'apps/mobile/tailcat-bridge/**' },
       { pathspec: ':(exclude)apps/mobile/tailcat-bridge/build' },
+      { pathspec: 'packages/gx-chat-mobile/**' },
+      { pathspec: 'packages/gx-chat-core/**' },
+      { pathspec: 'packages/gx-protocol/**' },
       { pathspec: 'tooling/release-mobile/android.sh' },
       { pathspec: 'tooling/release-gpui/android.sh' },
       { pathspec: '.github/workflows/release-gpui-android.yml' },
@@ -577,7 +595,11 @@ export function componentPlatformRequirements(productId) {
   }
   if (productId === 'windows-x64' || productId === 'windows-arm64') {
     const arch = productId.slice('windows-'.length);
-    return { cef: [`windows-${arch}`], 'code-server': [`linux-${arch}`, `windows-${arch}`] };
+    /* windows-<arch> is the WSL wrapper the app installs on demand; windows-native-<arch> is the bundled editor. */
+    return {
+      cef: [`windows-${arch}`],
+      'code-server': [`linux-${arch}`, `windows-${arch}`, `windows-native-${arch}`],
+    };
   }
   return {};
 }

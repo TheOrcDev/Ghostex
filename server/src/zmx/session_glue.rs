@@ -261,11 +261,21 @@ fn get_agent_launch_startup_text_for_session(session: &Value) -> Option<String> 
         .filter(|value| !value.trim().is_empty())
 }
 
+/// CDXC:Cli 2026-09-27 WHY:
+/// A terminal made by `ghostex create-session --input` has no agent launch plan; its queued text is the session's own `launchSettings.startupText`, which the first provider start runs and then marks consumed like an agent launch.
 pub(crate) fn get_queued_agent_launch_startup_text_for_session(session: &Value) -> Option<String> {
-    if !has_queued_agent_launch_startup_text(session) {
+    if !has_queued_agent_launch_startup_text(session)
+        || crate::agentbox::pending_session_agentbox(session).is_some()
+    {
         return None;
     }
-    get_agent_launch_startup_text_for_session(session)
+    get_agent_launch_startup_text_for_session(session).or_else(|| {
+        session
+            .pointer("/launchSettings/startupText")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|value| !value.trim().is_empty())
+    })
 }
 
 pub(crate) fn get_persisted_provider_startup_text_for_session(
@@ -292,15 +302,47 @@ no agent in it. Relaunch it from its stored launch plan instead, which is exactl
 the command it was created with, so waking or reopening a draft is byte-identical
 to opening it the first time.
 */
+/// CDXC:SessionSleep 2026-09-23 WHY:
+/// Sessions created before the draft marker can lose their provider at an upgrade or login screen before recording a conversation. If neither resume metadata nor prior prompt activity exists, their explicit saved launch is still the only command they were created to run.
 pub(crate) fn get_provider_restart_startup_text_for_session(
     project: &Value,
     session: &Value,
     agent_settings: &Map<String, Value>,
 ) -> Option<String> {
+    // A box session, draft or not, always comes back by reattaching to its box (agentbox/restore.rs).
+    if crate::agentbox::is_agentbox_session(session) {
+        return get_agent_startup_text_for_session(project, session, agent_settings);
+    }
+    // A draft whose Run on row picked a box runs nothing until its first message creates the box
+    // (agents/draft_run_location.rs); its stored plan is that box's create command.
+    if crate::agentbox::pending_session_agentbox(session).is_some() {
+        return None;
+    }
     if crate::agents::session_is_draft(session) {
         return get_agent_launch_startup_text_for_session(session);
     }
-    get_agent_startup_text_for_session(project, session, agent_settings)
+    let resume_startup_text = get_agent_startup_text_for_session(project, session, agent_settings);
+    if resume_startup_text.is_some()
+        || session.get("kind").and_then(Value::as_str) != Some("agent")
+        || session_has_ever_been_active(session)
+        || [
+            "/runtimeSettings/agentSessionId",
+            "/runtimeSettings/agentSessionPath",
+            "/runtimeSettings/firstUserMessage",
+            "/launchSettings/firstUserMessage",
+            "/launchSettings/agentLaunchPlan/firstUserMessage",
+        ]
+        .iter()
+        .any(|pointer| {
+            session
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    {
+        return resume_startup_text;
+    }
+    get_agent_launch_startup_text_for_session(session)
 }
 
 pub(crate) fn has_queued_agent_launch_startup_text(session: &Value) -> bool {

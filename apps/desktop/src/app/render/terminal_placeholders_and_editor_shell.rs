@@ -10,13 +10,9 @@ use gpui::MouseButton;
 use gpui::MouseDownEvent;
 use gpui::ParentElement as _;
 use gpui::Styled as _;
-use gpui::Window;
 use gpui::div;
-use gpui::prelude::FluentBuilder as _;
 use gpui::px;
-use gpui::relative;
 use gpui::rgb;
-use gpui_component::h_flex;
 use gpui_component::v_flex;
 
 use crate::app::consts::*;
@@ -52,7 +48,7 @@ impl GhostexGpuiApp {
                     .rounded(px(6.0))
                     .border_1()
                     .border_color(rgb(0x7f8a99).opacity(0.22))
-                    .bg(chrome_color(0x11151b, 0xf5f6f8))
+                    .bg(glass_card(chrome_color(0x11151b, 0xf5f6f8).into(), 1.0))
                     .px(px(28.0))
                     .py(px(24.0))
                     .child(
@@ -218,130 +214,5 @@ impl GhostexGpuiApp {
                     ),
             )
             .into_any_element()
-    }
-
-    pub(crate) fn render_project_editor_shell(
-        &mut self,
-        mode: TitlebarMode,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        /*
-        CDXC:CodeEditor 2026-06-22-05:49:
-        Project-editor modes replace the main workspace area while active, but they still flow through the same command-pane wrapper as Agents mode. Browser keeps the existing CEF toolbar/body inside this shell, while Source, Kanban, Automate, and Docs render distinct GPUI-colored placeholders until their direct runtime CEF gates can replace them.
-
-        CDXC:CodeEditor 2026-06-22-17:18:
-        Source, Browser, Kanban, and Manage share this horizontal shell, and gpui-component h_flex centers children by default. Override that alignment and make the editor surface slot full-height so placeholders and Browser CEF bodies fill the available workspace height instead of rendering as a centered band with black space above and below.
-        */
-        let mode_slug = mode.element_slug();
-        let surface_border_state = self.project_editor_surface_border_state(mode, window);
-        if self.project_editor_shell.left_companion_visible {
-            let companion_ratio = project_editor_companion_width_ratio(
-                self.project_editor_shell.left_companion_width_ratio,
-            );
-            let view = cx.entity().clone();
-            let surface_view = cx.entity().clone();
-            h_flex()
-                .on_children_prepainted(move |child_bounds, _window, cx| {
-                    let _ = view.update(cx, |this, _cx| {
-                        this.record_project_editor_companion_layout_metrics(&child_bounds);
-                    });
-                })
-                .id(format!("ghostex-gpui-project-editor-shell-{}", mode_slug))
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .items_start()
-                .overflow_hidden()
-                .bg(project_editor_shell_background_color())
-                .child(self.render_project_editor_companion_pane(mode, companion_ratio, window, cx))
-                .child(self.render_project_editor_companion_divider(mode, cx))
-                .child(
-                    // CDXC:Workarea 2026-09-14 WHY:
-                    // Browser owns its borders inside its leaves; other views own a surface border.
-                    // Keep those borders inside the flex allocation so switching views cannot change the companion width.
-                    v_flex()
-                        .flex_grow(1.0 - companion_ratio)
-                        .flex_shrink_1()
-                        .flex_basis(relative(0.0))
-                        .h_full()
-                        .min_w(px(WORKSPACE_MIN_WIDTH))
-                        .min_h_0()
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .on_children_prepainted(move |child_bounds, _window, cx| {
-                                    let _ = surface_view.update(cx, |this, _cx| {
-                                        this.record_project_editor_surface_layout_bounds(
-                                            mode,
-                                            &child_bounds,
-                                        );
-                                    });
-                                })
-                                .id(format!(
-                                    "ghostex-gpui-project-editor-surface-slot-{}",
-                                    mode_slug
-                                ))
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .w_full()
-                                .h_full()
-                                .min_w_0()
-                                .min_h_0()
-                                .overflow_hidden()
-                                .when(mode != TitlebarMode::Browser, |this| {
-                                    this.border_1().border_color(
-                                        workspace_pane_border_color_for_state(surface_border_state),
-                                    )
-                                })
-                                .child(self.render_project_editor_surface(mode, window, cx))
-                                .window_corner_pane(),
-                        ),
-                )
-                .into_any_element()
-        } else {
-            let surface_view = cx.entity().clone();
-            h_flex()
-                .id(format!("ghostex-gpui-project-editor-shell-{}", mode_slug))
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .items_start()
-                .overflow_hidden()
-                .bg(project_editor_shell_background_color())
-                .child(
-                    div()
-                        .on_children_prepainted(move |child_bounds, _window, cx| {
-                            let _ = surface_view.update(cx, |this, _cx| {
-                                this.record_project_editor_surface_layout_bounds(
-                                    mode,
-                                    &child_bounds,
-                                );
-                            });
-                        })
-                        .id(format!(
-                            "ghostex-gpui-project-editor-surface-slot-{}",
-                            mode_slug
-                        ))
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .h_full()
-                        .min_w(px(WORKSPACE_MIN_WIDTH))
-                        .min_h_0()
-                        .overflow_hidden()
-                        .when(mode != TitlebarMode::Browser, |this| {
-                            this.border_1()
-                                .border_color(workspace_pane_border_color_for_state(
-                                    surface_border_state,
-                                ))
-                        })
-                        .child(self.render_project_editor_surface(mode, window, cx))
-                        .window_corner_pane(),
-                )
-                .into_any_element()
-        }
     }
 }

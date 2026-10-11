@@ -17,7 +17,9 @@ use super::probing::{
     push_unique_path, read_file_text,
 };
 use super::resolution::{normalize_agent_ids, provider_hook_paths};
-use super::statusline::{install_statusline_hook, is_statusline_hook_current};
+use super::statusline::{
+    are_statusline_hooks_current, install_statusline_hook, is_statusline_hook_current,
+};
 
 /*
 CDXC:AgentHooks 2026-06-16-10:00:
@@ -30,20 +32,31 @@ pub fn read_agent_hook_status(
     let hook_paths = HookPaths::from_paths(paths);
     let agent_ids = normalize_agent_ids(params.get("agentIds"));
     let auto_upgrade = params.get("autoUpgradeInstalled").and_then(Value::as_bool) != Some(false);
-    let auto_upgraded_paths = if auto_upgrade {
-        repair_installed_agent_hook_paths(paths)?
-    } else {
-        Vec::new()
-    };
-    let mut rows = Vec::new();
-    for agent_id in agent_ids {
-        if let Some(definition) = HOOK_DEFINITIONS
-            .iter()
-            .find(|definition| definition.agent_id == agent_id)
-        {
-            rows.push(read_hook_status(definition, &hook_paths)?);
+    let read_rows = || -> Result<Vec<Value>, DomainStateError> {
+        let mut rows = Vec::new();
+        for agent_id in &agent_ids {
+            if let Some(definition) = HOOK_DEFINITIONS
+                .iter()
+                .find(|definition| definition.agent_id == agent_id.as_str())
+            {
+                rows.push(read_hook_status(definition, &hook_paths)?);
+            }
         }
-    }
+        Ok(rows)
+    };
+    let mut rows = read_rows()?;
+    /*
+    CDXC:AgentHooks 2026-10-04 WHY:
+    The desktop awaits this read before every agent launch, and the full repair scan (every agent's config files) took 170–600 ms on Windows while the status read takes about 3 ms, all of it in front of the agent starting. A repair can only turn a present-but-stale Ghostex hook (`updateRequired`) into a current one, so it runs, and the rows are read again, only when a requested agent reports that; daemon startup still repairs every installed hook.
+    */
+    let auto_upgraded_paths =
+        if auto_upgrade && rows.iter().any(|row| row["status"] == "updateRequired") {
+            let upgraded = repair_installed_agent_hook_paths(paths)?;
+            rows = read_rows()?;
+            upgraded
+        } else {
+            Vec::new()
+        };
     let mut result = Map::new();
     result.insert("agents".to_string(), Value::Array(rows));
     if !auto_upgraded_paths.is_empty() {
@@ -73,6 +86,7 @@ pub fn install_agent_hooks(
     installed_paths.push(path_string(&hook_paths.notify_hook_path));
     install_statusline_hook(&hook_paths)?;
     installed_paths.push(path_string(&hook_paths.statusline_hook_path));
+    installed_paths.push(path_string(&hook_paths.cursor_statusline_hook_path));
     for agent_id in agent_ids {
         let Some(definition) = HOOK_DEFINITIONS
             .iter()
@@ -142,14 +156,31 @@ pub fn repair_installed_agent_hook_paths(
             continue;
         }
 
+        /*
+        CDXC:AgentHooks 2026-09-27 WHY:
+        A marked-block install writes every file its provider lists (each Hermes profile's config), so hooks in any of them are consent for all: a profile without them (created later, or never copied) is repaired like a stale one.
+        JSON providers' profile candidates stay opt-in per file.
+        */
+        let inspections = provider_paths
+            .into_iter()
+            .map(|provider_path| {
+                let inspection = inspect_agent_hook_installation(
+                    definition,
+                    &hook_paths,
+                    std::slice::from_ref(&provider_path),
+                );
+                (provider_path, inspection)
+            })
+            .collect::<Vec<_>>();
+        let installed_for_every_path = matches!(
+            hook_format(definition.agent_id),
+            HookFormat::MarkedYaml | HookFormat::TomlMarked
+        ) && inspections
+            .iter()
+            .any(|(_, inspection)| inspection.ghostex_hook_present);
         let mut stale_paths = Vec::new();
-        for provider_path in provider_paths {
-            let inspection = inspect_agent_hook_installation(
-                definition,
-                &hook_paths,
-                std::slice::from_ref(&provider_path),
-            );
-            if !inspection.ghostex_hook_present {
+        for (provider_path, inspection) in inspections {
+            if !inspection.ghostex_hook_present && !installed_for_every_path {
                 continue;
             }
             has_installed_ghostex_hook = true;
@@ -168,10 +199,7 @@ pub fn repair_installed_agent_hook_paths(
 
     let notify_hook_contents = read_file_text(&hook_paths.notify_hook_path);
     let notify_stale = !is_notify_hook_current(&hook_paths, &notify_hook_contents);
-    let statusline_stale = !is_statusline_hook_current(
-        &hook_paths,
-        &read_file_text(&hook_paths.statusline_hook_path),
-    );
+    let statusline_stale = !are_statusline_hooks_current(&hook_paths);
     if !notify_stale && !statusline_stale && stale_targets.is_empty() {
         return Ok(Vec::new());
     }
@@ -182,6 +210,10 @@ pub fn repair_installed_agent_hook_paths(
         push_unique_path(
             &mut repaired_paths,
             path_string(&hook_paths.statusline_hook_path),
+        );
+        push_unique_path(
+            &mut repaired_paths,
+            path_string(&hook_paths.cursor_statusline_hook_path),
         );
     }
     if notify_stale {
@@ -238,6 +270,7 @@ pub fn uninstall_agent_hooks(
         for shared_path in [
             &hook_paths.notify_hook_path,
             &hook_paths.statusline_hook_path,
+            &hook_paths.cursor_statusline_hook_path,
         ] {
             match fs::remove_file(shared_path) {
                 Ok(()) => push_unique_path(&mut removed_paths, path_string(shared_path)),
@@ -274,13 +307,19 @@ fn read_hook_status(
         .collect::<Vec<_>>();
     let notify_hook_contents = read_file_text(&hook_paths.notify_hook_path);
     let notify_current = is_notify_hook_current(hook_paths, &notify_hook_contents)
-        // CDXC:AgentHooks 2026-09-03 WHY: Claude also depends on the shared
-        // statusline script being current; every other provider ignores it.
-        && (definition.agent_id != "claude"
-            || is_statusline_hook_current(
+        // CDXC:AgentHooks 2026-09-03 WHY: Claude and Cursor also depend on
+        // their statusline script being current; every other provider ignores it.
+        && match definition.agent_id {
+            "claude" => is_statusline_hook_current(
                 hook_paths,
                 &read_file_text(&hook_paths.statusline_hook_path),
-            ));
+            ),
+            "cursor" => is_statusline_hook_current(
+                hook_paths,
+                &read_file_text(&hook_paths.cursor_statusline_hook_path),
+            ),
+            _ => true,
+        };
     let inspection = inspect_agent_hook_installation(definition, hook_paths, &provider_paths);
     let provider_current = inspection.current_hook_installed;
     let ghostex_hook_present = inspection.ghostex_hook_present;

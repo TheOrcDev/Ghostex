@@ -21,29 +21,6 @@ pub(crate) struct CommandTerminalBodyMountSlotId {
     pub(crate) session_id: CommandSessionId,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ProjectEditorCompanionTerminalBodyMountSlotId {
-    pub(crate) mode: TitlebarMode,
-    pub(crate) session_id: TerminalSessionId,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ProjectEditorCompanionTerminalSlot {
-    #[default]
-    Top,
-    Bottom,
-}
-
-/// Runtime-only route back to the project view whose companion terminal asked
-/// to be maximized in Agents. It remembers only stable shell identities and is
-/// consumed when the same bar's minimize action restores that view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TerminalAgentBarCompanionFocusReturn {
-    pub(crate) mode: TitlebarMode,
-    pub(crate) session_id: TerminalSessionId,
-    pub(crate) slot: ProjectEditorCompanionTerminalSlot,
-}
-
 /*
 CDXC:Zmx 2026-07-06:
 Runtime-only identity of the terminal slot that currently owns shell focus,
@@ -55,7 +32,6 @@ never persisted or logged with titles, paths, or terminal content.
 pub(crate) enum ZmxPersistenceFocusedTerminalSlot {
     Agents(AgentsTerminalBodyMountSlotId),
     Command(CommandTerminalBodyMountSlotId),
-    Companion(ProjectEditorCompanionTerminalBodyMountSlotId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,11 +63,5 @@ impl TerminalSurfaceMountSlotKey for AgentsTerminalBodyMountSlotId {
 impl TerminalSurfaceMountSlotKey for CommandTerminalBodyMountSlotId {
     fn terminal_surface_sort_key(self) -> (u8, u64, u64) {
         (1, self.group_id.0, self.session_id.0)
-    }
-}
-
-impl TerminalSurfaceMountSlotKey for ProjectEditorCompanionTerminalBodyMountSlotId {
-    fn terminal_surface_sort_key(self) -> (u8, u64, u64) {
-        (2, self.mode.switcher_index(), self.session_id.0)
     }
 }

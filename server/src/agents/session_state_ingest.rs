@@ -138,6 +138,47 @@ pub(crate) fn apply_live_process_session_identity(
     Ok(result.get("changed").and_then(Value::as_bool) == Some(true))
 }
 
+/// CDXC:SessionIdentity 2026-09-21 WHY:
+/// A conversation id read from a process's argv (`claude --resume <id>`) is a launch fact that never changes while the process lives, but the conversation does: `/clear`, `/resume`, and a Claude session that forks itself into a background session all move on, and only a hook reports the new id. Re-applying the argv id on every poll fought those hooks, so the stored id flipped between the two conversations every few seconds and the chat kept reloading the other transcript (observed live 2026-09-21). An argv id is therefore applied once per process; a newly launched process has a new pid and can still resume an ancestor.
+pub(crate) fn launch_argv_identity_already_applied(
+    session: &Value,
+    process_id: i64,
+    agent_session_id: &str,
+) -> bool {
+    session
+        .pointer("/runtimeSettings/launchArgvIdentity")
+        .is_some_and(|applied| {
+            applied.get("processId").and_then(Value::as_i64) == Some(process_id)
+                && applied.get("agentSessionId").and_then(Value::as_str) == Some(agent_session_id)
+        })
+}
+
+pub(crate) fn record_applied_launch_argv_identity(
+    repository: &DomainRepository<'_>,
+    project_id: &str,
+    session_id: &str,
+    process_id: i64,
+    agent_session_id: &str,
+) -> Result<(), DomainStateError> {
+    let lifecycle = LifecycleParams {
+        project_id: project_id.to_string(),
+        session_id: session_id.to_string(),
+    };
+    let session = require_session(repository, &lifecycle)?;
+    let mut runtime_settings = object_field(&session, "runtimeSettings");
+    runtime_settings.insert(
+        "launchArgvIdentity".to_string(),
+        json!({ "agentSessionId": agent_session_id, "processId": process_id }),
+    );
+    let mut update = lifecycle_update(&lifecycle);
+    update.insert(
+        "runtimeSettings".to_string(),
+        Value::Object(runtime_settings),
+    );
+    repository.update_session(&update)?;
+    Ok(())
+}
+
 /*
 CDXC:SessionIdentity 2026-08-02:
 Transcript-proven identity repair. Claude Code writes a NEW transcript on
@@ -459,6 +500,35 @@ pub(crate) fn ingest_terminal_title_event_with_home(
     home_dir: &Path,
 ) -> Result<TerminalTitleIngestOutput, DomainStateError> {
     let current = require_session(repository, lifecycle)?;
+    /*
+    CDXC:AgentBox 2026-10-01 WHY:
+    A box session's terminal title comes through the box's tmux and agentbox's attach wrapper: the box name, or Codex's raw `<spinner> <conversation id> <spinner>` (observed live 2026-10-01 as the session title). It names no conversation on this computer, carries no status a box session can use, and a local Codex session only shows its thread name because the local session index replaces that title. The box poller (agentbox/activity.rs) owns a box session's activity and title instead, so a title event changes nothing here.
+    */
+    if crate::agentbox::is_agentbox_session(&current) {
+        let activity = crate::session_status::normalize_agent_activity_value(
+            object_field(&current, "runtimeSettings").get("agentActivity"),
+            "idle",
+        );
+        let previous_activity = activity
+            .get("activity")
+            .and_then(Value::as_str)
+            .unwrap_or("idle")
+            .to_string();
+        return Ok(TerminalTitleIngestOutput {
+            result: json!({
+                "agentSessionId": Value::Null,
+                "activity": activity,
+                "changed": false,
+                "enteredAttention": false,
+                "previousActivity": previous_activity,
+                "projection": project_session_title_projection(&current),
+                "reason": "agentbox-session-title-from-box",
+                "session": current,
+                "visibleTitle": Value::Null,
+            }),
+            schedule_presentation_delta: false,
+        });
+    }
     let (current, repaired_working_directory_title) =
         repair_session_working_directory_title(repository, lifecycle, current)?;
     let raw_title = read_text(params, "rawTitle");
@@ -501,6 +571,12 @@ pub(crate) fn ingest_terminal_title_event_with_home(
         &runtime_settings,
         captured_agent_session_id.as_deref(),
     );
+    // CDXC:Coordinators 2026-10-05 SEE-ALSO: keeps_its_given_title in server/src/coordinators/title.rs (the user's no-auto-rename decisions for coordinators and their threads).
+    if reason.is_none()
+        && crate::coordinators::keeps_its_given_title(repository.connection(), &current)
+    {
+        reason = Some("keeps-its-given-title".to_string());
+    }
     let mut update = lifecycle_update(lifecycle);
     if reason.is_none() {
         if let Some(title) = visible_title.clone() {
@@ -659,6 +735,8 @@ pub(crate) fn ingest_terminal_title_event_with_home(
     })
 }
 
+/// CDXC:SessionFork 2026-09-25 WHY:
+/// A resumed fork's CLI puts the parent's name in its terminal title seconds after launch, often before its composer is ready. Taking it replaced the provisional `Fork:` name, which cancels the initial rename, and a Claude fork writes its own transcript only when that rename (or the first prompt) lands, so every chat client showed the fork empty while its terminal showed the history. Only the inherited name is refused; any other title is the fork's own and still applies.
 pub(crate) fn terminal_title_skip_reason(
     session: &Value,
     params: &Map<String, Value>,
@@ -709,6 +787,13 @@ pub(crate) fn terminal_title_skip_reason(
             }
             .to_string(),
         );
+    }
+    if provisional_fork_title(session)
+        .as_deref()
+        .and_then(|title| title.strip_prefix("Fork: "))
+        .is_some_and(|inherited| titles_match(inherited, visible_title))
+    {
+        return Some("fork-provisional-title-preserved".to_string());
     }
     None
 }

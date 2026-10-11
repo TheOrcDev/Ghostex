@@ -235,6 +235,9 @@ pub struct SessionChatSuccessorHooks {
     carries THAT id (seeded from its launch) has not reported its own yet either.
     */
     pub pending_fork_child_since_ms: Arc<dyn Fn(&str) -> Option<i64> + Send + Sync>,
+    /// The conversation (id, file) an agent that names its chat itself (Freebuff) started for this
+    /// session, read only while no id is bound yet.
+    pub unbound_agent_chat: Arc<dyn Fn() -> Option<(String, std::path::PathBuf)> + Send + Sync>,
     /// Persists the corrected identity; returns true when the registry changed.
     pub adopt_identity: Arc<dyn Fn(SessionChatIdentityAdoption) -> bool + Send + Sync>,
     pub log: Arc<dyn Fn(SessionChatSuccessorNotice) + Send + Sync>,
@@ -252,7 +255,7 @@ pub struct SessionChatFollowerConfig {
     pub protocol_version: u64,
     pub server_id: String,
     pub state_reader: Option<SessionChatStateReader>,
-    /// Detected model/effort source (see session_chat_options.rs). Snapshot and
+    /// Detected model/effort source (see session_chat_options/). Snapshot and
     /// replaced frames carry the cached value; a periodic probe re-detects and
     /// emits a state frame only when it CHANGED.
     pub options_reader: Option<crate::session_chat_options::SessionChatOptionsReader>,
@@ -262,6 +265,11 @@ pub struct SessionChatFollowerConfig {
     /// compaction instead of waiting for the idle 30s tier. Absent ⇒ the
     /// steady cadence alone.
     pub options_change_watch: Option<crate::session_chat_options::SessionChatOptionsChangeWatch>,
+    /// Answers "did the live terminal grid change since I last looked?", so an
+    /// idle session re-probes within a tick of a dialog appearing or closing
+    /// in its terminal (see session_chat_screen_watch.rs). Absent ⇒ the
+    /// steady cadence alone.
+    pub screen_change_watch: Option<crate::session_chat_screen_watch::SessionChatScreenChangeWatch>,
     /// Queue + draft source for snapshot / replaced / state frames. Absent ⇒
     /// the fields are omitted, which clients read as "this daemon has no queue"
     /// and answer by hiding every queue control.

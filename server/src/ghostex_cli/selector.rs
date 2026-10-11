@@ -75,6 +75,21 @@ pub fn resolve_cli_session_selector(selector: &str, flags: &Flags) -> CliResult<
     resolve_one_listed_session(selector, &session_list, flags)
 }
 
+/// One session among the live ones, else among the closed ones too, for a verb that can resume a
+/// closed session (a coordinator's `reopen`, `agents send`).
+///
+/// CDXC:Coordinators 2026-10-01 WHY: coordinators close finished threads and later reopen or message them, so these verbs must find a closed session. Live sessions are matched first because a title or alias selector that names one live session today must not turn ambiguous when an old closed session shares its title.
+pub fn resolve_live_or_closed_session(selector: &str, flags: &Flags) -> CliResult<Value> {
+    let live = sessions::fetch_session_list(flags, false)?;
+    if !resolve_listed_sessions(selector, &live, flags)?.is_empty() {
+        return resolve_one_listed_session(selector, &live, flags);
+    }
+    let mut with_closed = flags.clone();
+    with_closed.insert_bool("includeStopped", true);
+    let all = sessions::fetch_session_list(&with_closed, false)?;
+    resolve_one_listed_session(selector, &all, flags)
+}
+
 /// resolveOneListedSession: exactly one match or an error listing candidates.
 pub fn resolve_one_listed_session(
     selector: &str,
@@ -96,7 +111,7 @@ pub fn resolve_one_listed_session(
     )))
 }
 
-fn resolve_listed_sessions<'a>(
+pub(crate) fn resolve_listed_sessions<'a>(
     selector: &str,
     sessions: &'a [Value],
     flags: &Flags,
@@ -110,7 +125,16 @@ fn resolve_listed_sessions_with_cache<'a>(
     flags: &Flags,
     cache_loader: &dyn Fn() -> Option<Value>,
 ) -> CliResult<Vec<&'a Value>> {
-    let normalized_selector = selector.trim();
+    /*
+     * CDXC:Cli 2026-09-24 DECISION:
+     * The user asked that every id the sidebar's Copy Details block shows reads a thread, so a
+     * pasted `combined-session:<project>:<session>` Session ID, a `<project>:<session>` Routing
+     * ID and an Agent Session ID resolve like the global ref, zmx name and title already did.
+     */
+    let trimmed_selector = selector.trim();
+    let normalized_selector = trimmed_selector
+        .strip_prefix("combined-session:")
+        .unwrap_or(trimmed_selector);
     if normalized_selector.is_empty() {
         return Err(CliError::Other(
             "Provide a session alias, id, provider session name, title, or project:title selector."
@@ -170,6 +194,29 @@ fn resolve_listed_sessions_with_cache<'a>(
         session.get("globalRef").and_then(Value::as_str) == Some(normalized_selector)
     }) {
         return Ok(vec![*exact_global_ref]);
+    }
+    if let Some((project_id, session_id)) = normalized_selector.split_once(':') {
+        let routed: Vec<&Value> = scoped_sessions
+            .iter()
+            .filter(|session| {
+                session_project_id(session) == project_id
+                    && session.get("sessionId").and_then(Value::as_str) == Some(session_id)
+            })
+            .copied()
+            .collect();
+        if !routed.is_empty() {
+            return Ok(routed);
+        }
+    }
+    let agent_session_matches: Vec<&Value> = scoped_sessions
+        .iter()
+        .filter(|session| {
+            session.get("agentSessionId").and_then(Value::as_str) == Some(normalized_selector)
+        })
+        .copied()
+        .collect();
+    if !agent_session_matches.is_empty() {
+        return Ok(agent_session_matches);
     }
     /*
      * CDXC:Cli 2026-05-28-10:55:

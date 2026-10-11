@@ -17,12 +17,12 @@ use crate::{
     paths::get_gxserver_paths,
 };
 
-const USAGE: &str = "Usage: ghostex web [--port <port>] [--dist-dir <directory>] [--no-open]\n\nStart Ghostex Web on http://127.0.0.1:4173 and open it in the default browser.\nRuns in the foreground; Ctrl+C stops only the web server.\nRequires a separate web build (bun run web:build) and a running gxserver.";
+const USAGE: &str = "Usage: ghostex web [--port <port>] [--dist-dir <directory>] [--no-open]\n\nStart Ghostex Web on http://127.0.0.1:4173 and open it in the default browser.\nRuns in the foreground; Ctrl+C stops only the web server.\nServes the GPUI web build (cargo xtask web-build) and requires a running gxserver.";
 
 /// CDXC:ServerApi 2026-09-06 DECISION:
 /// User: `ghostex web` must run its own separate server, not be served automatically on gxserver's ports.
 /// Static files and the browser bootstrap belong to this foreground CLI process; the browser uses gxserver directly for authenticated HTTP and WebSocket APIs.
-/// SEE-ALSO: apps/desktop/src/app/helpers/os_cli/process_and_constants.rs, apps/web/vite.config.ts.
+/// SEE-ALSO: apps/desktop/src/app/helpers/os_cli/process_and_constants.rs, apps/gpui-web/www/vite.config.js.
 pub fn web_command(args: &[String]) -> CliResult<()> {
     let mut port = 4173_u16;
     let mut dist_dir = None;
@@ -62,7 +62,7 @@ pub fn web_command(args: &[String]) -> CliResult<()> {
     }
     let dist_dir = static_files::resolve_web_dist_dir(&config);
     if !dist_dir.join("index.html").is_file() {
-        return Err(CliError::Other(format!("Ghostex Web is not built at {}. Run `bun run web:build` from the checkout or pass --dist-dir <directory>.", dist_dir.display())));
+        return Err(CliError::Other(format!("Ghostex Web is not built at {}. Run `cargo xtask web-build` from the checkout or pass --dist-dir <directory>.", dist_dir.display())));
     }
     config.web.dist_dir = Some(dist_dir.canonicalize()?);
     let runtime = tokio::runtime::Builder::new_multi_thread()

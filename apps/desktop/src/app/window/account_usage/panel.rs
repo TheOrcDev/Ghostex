@@ -2,9 +2,14 @@ use super::{data::*, style::*};
 use crate::app::titlebar::account_usage::popup_account;
 use crate::*;
 use gpui::img;
-use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use crate::app::window::native_modal_kit::with_modal_edge_gap;
+use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 pub(crate) struct AccountUsagePanel {
     pub(super) main_app: gpui::WeakEntity<GhostexGpuiApp>,
@@ -13,10 +18,18 @@ pub(crate) struct AccountUsagePanel {
     pub(super) palette: Palette,
     pub(super) models_open: bool,
     pub(super) resets_open: bool,
-    pub(super) redeem_pending: bool,
+    /// The reset awaiting the inline "Use this reset?" confirmation, by `credit_keys` key.
+    pub(super) confirming: Option<String>,
+    pub(super) claiming: Option<String>,
+    /// Resets claimed from this panel, hidden until the post-claim account refresh arrives.
+    pub(super) claimed: HashSet<String>,
+    /// The last claim's `(outcome, message)`, shown above the reset list.
+    pub(super) banner: Option<(String, String)>,
+    /// One idempotency key per reset, minted when it first enters confirmation and reused for every retry, so a retried claim can never spend a second reset.
+    request_ids: HashMap<String, String>,
     pub(super) model_focus: FocusHandle,
     pub(super) reset_focus: FocusHandle,
-    pub(super) redeem_focus: FocusHandle,
+    pub(super) confirm_focus: FocusHandle,
     focus: FocusHandle,
     scroll: ScrollHandle,
     background: Option<(Size<Pixels>, Arc<gpui::Image>)>,
@@ -61,10 +74,14 @@ impl AccountUsagePanel {
             palette: Palette::new(codex),
             models_open: false,
             resets_open: false,
-            redeem_pending: false,
+            confirming: None,
+            claiming: None,
+            claimed: HashSet::new(),
+            banner: None,
+            request_ids: HashMap::new(),
             model_focus: cx.focus_handle().tab_index(0),
             reset_focus: cx.focus_handle().tab_index(0),
-            redeem_focus: cx.focus_handle().tab_index(0),
+            confirm_focus: cx.focus_handle().tab_index(0),
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             background: None,
@@ -83,6 +100,14 @@ impl AccountUsagePanel {
     pub(crate) fn update_account(&mut self, account: Value, cx: &mut gpui::Context<Self>) {
         self.account = popup_account(&account);
         self.now = now();
+        if self.claiming.is_none() {
+            self.claimed.clear();
+        }
+        if let Some(key) = &self.confirming {
+            if !credit_keys(&self.account).iter().any(|(k, _)| k == key) {
+                self.confirming = None;
+            }
+        }
         cx.notify();
     }
 
@@ -93,6 +118,13 @@ impl AccountUsagePanel {
     ) -> bool {
         if !self.resets_open {
             return false;
+        }
+        if self.claiming.is_some() {
+            return true;
+        }
+        if self.confirming.take().is_some() {
+            cx.notify();
+            return true;
         }
         self.resets_open = false;
         self.reset_focus.focus(window, cx);
@@ -111,33 +143,72 @@ impl AccountUsagePanel {
         cx.notify();
     }
 
-    pub(super) fn redeem(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.redeem_pending
-            || reset_credits(&self.account).is_empty()
-            || self.account["status"] != "ready"
-        {
+    pub(super) fn confirm_reset(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.claiming.is_some() || self.account["status"] != "ready" {
             return;
         }
-        self.redeem_pending = true;
+        self.request_ids
+            .entry(key.clone())
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string());
+        self.confirming = Some(key);
+        self.banner = None;
+        self.confirm_focus.focus(window, cx);
         cx.notify();
-        let id = self.id;
-        let app = self.main_app.clone();
-        // Leave the panel's render/event borrow before the action closes its window.
+    }
+
+    pub(super) fn cancel_reset(&mut self, cx: &mut gpui::Context<Self>) {
+        self.confirming = None;
+        cx.notify();
+    }
+
+    pub(super) fn claim_reset(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(key) = self.confirming.take() else {
+            return;
+        };
+        let (Some(credit_id), Some(request_id)) = (
+            credit_keys(&self.account)
+                .into_iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, credit)| text(credit, "id").to_string()),
+            self.request_ids.get(&key).cloned(),
+        ) else {
+            cx.notify();
+            return;
+        };
+        self.claiming = Some(key);
+        cx.notify();
+        let (id, app, panel) = (self.id, self.main_app.clone(), cx.entity().downgrade());
         cx.defer(move |cx| {
-            let _ = app.update_in(cx, |app, window, cx| {
-                if !app.titlebar_popup_menu_open(GpuiTitlebarPopupKind::AccountUsage(id)) {
-                    return;
-                }
-                if let Some(account) = app
-                    .titlebar_accounts
-                    .iter()
-                    .find(|a| a["titlebarKey"] == id.as_str())
-                    .cloned()
-                {
-                    app.start_account_reset(&account, window, cx);
-                }
+            let _ = app.update(cx, |app, cx| {
+                app.redeem_account_reset(id.as_str(), credit_id, request_id, panel, cx);
             });
         });
+    }
+
+    pub(crate) fn finish_claim(
+        &mut self,
+        outcome: &str,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(key) = self.claiming.take() {
+            if matches!(outcome, "success" | "noCredit") {
+                self.request_ids.remove(&key);
+                self.claimed.insert(key);
+            }
+        }
+        let message = if message.is_empty() {
+            "Couldn't use the reset. Please try again.".to_string()
+        } else {
+            message
+        };
+        self.banner = Some((outcome.to_string(), message));
+        cx.notify();
     }
 
     fn render_header(&self) -> AnyElement {
@@ -392,7 +463,7 @@ impl Render for AccountUsagePanel {
                 }
             }))
             .on_click(cx.listener(|this, _, _, cx| {
-                if this.resets_open {
+                if this.resets_open && this.confirming.is_none() && this.claiming.is_none() {
                     this.resets_open = false;
                     cx.notify();
                 }
@@ -412,9 +483,8 @@ impl Render for AccountUsagePanel {
                     .child(main),
             )
             .child(
-                Scrollbar::vertical(&self.scroll)
-                    .thickness(px(5.))
-                    .scrollbar_show(ScrollbarShow::Hover),
+                with_modal_edge_gap(Scrollbar::vertical(&self.scroll).thickness(px(5.)))
+                    .mode(ScrollbarMode::Hover),
             )
             .child(
                 gpui::canvas(

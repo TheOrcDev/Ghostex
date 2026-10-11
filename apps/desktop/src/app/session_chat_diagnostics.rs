@@ -21,7 +21,7 @@ impl GhostexGpuiApp {
     ) {
         let key = self.workspace_terminal_key_for_shell_session(session_id);
         let details = serde_json::json!({
-            "atMs": support_logs::temporary_epoch_ms(),
+            "atMs": epoch_ms(),
             "event": event,
             "reason": reason,
             "sessionId": session_id.0,
@@ -31,7 +31,7 @@ impl GhostexGpuiApp {
                 GpuiWorkspaceTerminalSessionKey::Remote(key) => key.session_id,
             }),
             "pageGeneration": self.agents_chat_page_states.get(&session_id).map(|state| state.generation),
-            "hasSurface": self.agents_chat_surfaces.contains_key(&session_id),
+            "hasView": self.native_chat_views.contains_key(&session_id),
             "composerReady": self.session_chat_composer_ready_sessions.contains(&session_id),
             "composerEmpty": self.session_chat_composer_empty_reports.get(&session_id),
         });
@@ -44,11 +44,11 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn record_session_chat_render(&self, session_id: TerminalSessionId) {
-        let has_surface = self.agents_chat_surfaces.contains_key(&session_id);
+        let has_view = self.native_chat_views.contains_key(&session_id);
         let switching = self.session_account_switch_progress(session_id).is_some();
         let snapshot = serde_json::json!({
             "projectId": self.agents_workspace_project_id,
-            "hasSurface": has_surface,
+            "hasView": has_view,
             "accountSwitching": switching,
             "bootstrapAvailable": self.sidebar_gxserver_bootstrap.is_some(),
             "pageGeneration": self.agents_chat_page_states.get(&session_id).map(|state| state.generation),
@@ -64,10 +64,10 @@ impl GhostexGpuiApp {
                 rendered.remove(&old_id);
             }
         }
-        let regression = !has_surface
+        let regression = !has_view
             && !switching
             && previous.as_ref().is_some_and(|old| {
-                old["hasSurface"] == true && old["projectId"] == snapshot["projectId"]
+                old["hasView"] == true && old["projectId"] == snapshot["projectId"]
             });
         let event = if regression {
             "sessionChat.nativeLoadingRegressionWarning"
@@ -78,7 +78,7 @@ impl GhostexGpuiApp {
             support_logs::GpuiSupportLog::SessionChat,
             event,
             serde_json::json!({
-                "atMs": support_logs::temporary_epoch_ms(),
+                "atMs": epoch_ms(),
                 "sessionId": session_id.0,
                 "previous": previous,
                 "current": snapshot,
@@ -86,4 +86,12 @@ impl GhostexGpuiApp {
             }),
         );
     }
+}
+
+/// Wall-clock milliseconds, so the in-memory lifecycle ring can be ordered against logged events after routine logs expired.
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since_epoch| since_epoch.as_millis() as u64)
+        .unwrap_or_default()
 }

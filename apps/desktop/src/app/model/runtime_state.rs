@@ -2,6 +2,7 @@
 // move, no logic changes; items made pub(crate) so main.rs and sibling
 // modules can still reach them). See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
+use crate::app::helpers::web_bridge_types::SidebarRuntimeSettingsSnapshot;
 use crate::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,7 @@ response text may be retained here.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct GpuiRemoteGxserverCapabilities {
     pub(crate) code_server_prompt_editor: bool,
+    pub(crate) browser_tcp_websocket_v1: bool,
 }
 
 pub(crate) struct GpuiRemoteGxserverConnection {
@@ -98,8 +100,11 @@ pub(crate) struct GpuiRemoteGxserverRequestTarget {
     pub(crate) token: String,
 }
 
+/// CDXC:RemoteMachines 2026-09-25 WHY:
+/// The stream's snapshots and deltas fed the app runtime's copy of the machine, which is gone (the
+/// Rust store's own client per machine draws it, gx_store/remote_clients.rs). The stream stays as
+/// the tunnel's liveness check: its failure is what tears a dead tunnel down.
 pub(crate) enum GpuiRemoteGxserverPresentationStreamMessage {
-    Event(serde_json::Value),
     Failed,
 }
 
@@ -378,7 +383,6 @@ pub(crate) enum GpuiProjectSnapshotStoreResult {
 pub(crate) struct ProjectScopedWorkareaAvailability {
     pub(crate) project_context: GpuiProjectContext,
     pub(crate) project_features: GpuiProjectScopedFeatureAvailability,
-    pub(crate) active_project_is_remote: bool,
 }
 
 impl ProjectScopedWorkareaAvailability {
@@ -392,7 +396,6 @@ impl ProjectScopedWorkareaAvailability {
             project_features: GpuiProjectScopedFeatureAvailability::for_project_context(
                 project_context,
             ),
-            active_project_is_remote: false,
         }
     }
 
@@ -401,11 +404,6 @@ impl ProjectScopedWorkareaAvailability {
         Self {
             project_context: snapshot.project_context(),
             project_features: snapshot.feature_availability,
-            active_project_is_remote: snapshot.active_project_id.as_ref().is_some_and(
-                |project_id| {
-                    gpui_remote_project_reference_from_project_id(project_id.0.as_str()).is_some()
-                },
-            ),
         }
     }
 
@@ -413,15 +411,14 @@ impl ProjectScopedWorkareaAvailability {
         /*
         CDXC:Navigation 2026-07-04-01:00:
         Titlebar availability mirrors macOS: Agents and Source are always selectable; Browser, Kanban, Automate, and Docs are visible for all contexts but selectable only for real project-scoped contexts. The old Docs/Manage debuggingMode plus showBetaFeatures visibility gate must not participate in switcher visibility, activation guards, restored active-mode coercion, or persisted active-mode fallback.
-
-        CDXC:Titlebar 2026-08-20:
-        Source is the one exception: a machine-scoped remote project has no
-        working Source runtime, so it is unavailable there.
         */
         match mode {
-            TitlebarMode::Agents => true,
+            // App-wide: the feed reads Hermes, not the project, so every context can show it.
+            // The Work view's own condition (a work-mode project in the window) is the app's:
+            // `work_view_available` in app/work_view/.
+            TitlebarMode::Agents | TitlebarMode::BotFeed | TitlebarMode::Work => true,
             TitlebarMode::Extension(_) => self.project_context.has_project_scoped_workareas(),
-            TitlebarMode::Source => self.project_features.source && !self.active_project_is_remote,
+            TitlebarMode::Source => self.project_features.source,
             TitlebarMode::Browser | TitlebarMode::Kanban | TitlebarMode::Automate => {
                 self.project_context.has_project_scoped_workareas()
                     && match mode {
@@ -431,7 +428,9 @@ impl ProjectScopedWorkareaAvailability {
                         _ => false,
                     }
             }
-            TitlebarMode::Manage => self.project_context.has_project_scoped_workareas(),
+            TitlebarMode::Manage | TitlebarMode::Terminal => {
+                self.project_context.has_project_scoped_workareas()
+            }
         }
     }
 
@@ -451,6 +450,7 @@ impl ProjectScopedWorkareaAvailability {
             TitlebarMode::Kanban,
             TitlebarMode::Automate,
             TitlebarMode::Manage,
+            TitlebarMode::Terminal,
         ];
 
         modes
@@ -459,8 +459,6 @@ impl ProjectScopedWorkareaAvailability {
                 let is_available = self.titlebar_mode_available(mode);
                 let disabled_reason = if is_available {
                     None
-                } else if mode == TitlebarMode::Source && self.active_project_is_remote {
-                    Some(TITLEBAR_REMOTE_SOURCE_DISABLED_REASON)
                 } else if matches!(self.project_context, GpuiProjectContext::QuickProjectless)
                     && matches!(
                         mode,
@@ -468,6 +466,7 @@ impl ProjectScopedWorkareaAvailability {
                             | TitlebarMode::Kanban
                             | TitlebarMode::Automate
                             | TitlebarMode::Manage
+                            | TitlebarMode::Terminal
                     )
                 {
                     Some(TITLEBAR_PROJECT_CONTEXT_DISABLED_REASON)
@@ -494,6 +493,8 @@ pub(crate) enum ProjectWorkareaCefSurfaceSlotKey {
     Kanban,
     Automate,
     Manage,
+    /// The Work page (`work.html`): app-wide, one per window.
+    Work,
     Extension(ExtensionId),
 }
 
@@ -508,8 +509,29 @@ impl ProjectWorkareaCefSurfaceSlotKey {
             Self::Kanban => "kanban",
             Self::Automate => "automate",
             Self::Manage => "manage",
+            Self::Work => "work",
             Self::Extension(id) => id.as_str(),
         }
+    }
+
+    /// The slot a view's page lives in, or nothing for the modes that own no workarea surface:
+    /// `Agents` has no page, `Browser` keeps one surface per tab instead, and a Ghostex page is
+    /// drawn by GPUI and never loads one.
+    pub(crate) fn for_titlebar_mode(mode: TitlebarMode) -> Option<Self> {
+        Some(match mode {
+            TitlebarMode::Source => Self::Source,
+            TitlebarMode::Kanban => Self::Kanban,
+            TitlebarMode::Automate => Self::Automate,
+            TitlebarMode::Manage => Self::Manage,
+            TitlebarMode::Extension(id) => Self::Extension(id),
+            TitlebarMode::Work => Self::Work,
+            TitlebarMode::Agents
+            | TitlebarMode::Browser
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed => {
+                return None;
+            }
+        })
     }
 
     pub(crate) fn titlebar_mode(self) -> TitlebarMode {
@@ -518,6 +540,7 @@ impl ProjectWorkareaCefSurfaceSlotKey {
             Self::Kanban => TitlebarMode::Kanban,
             Self::Automate => TitlebarMode::Automate,
             Self::Manage => TitlebarMode::Manage,
+            Self::Work => TitlebarMode::Work,
             Self::Extension(id) => TitlebarMode::Extension(id),
         }
     }
@@ -568,6 +591,20 @@ Project workarea CEF ownership keeps only the process-local direct runtime URL i
 pub(crate) struct ProjectWorkareaRuntimeCefSurface {
     pub(crate) runtime_url: ProjectWorkareaRealRuntimeUrl,
     pub(crate) surface: Entity<CefSurface>,
+    /// Set by the page's first main-frame load end; until then the view draws its skeleton and the child view stays hidden.
+    pub(crate) page_loaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) created_at: Instant,
+}
+
+/// How long a page may stay behind its skeleton when it never reports a load end.
+pub(crate) const PROJECT_WORKAREA_PAGE_SKELETON_MAX: Duration = Duration::from_secs(8);
+
+impl ProjectWorkareaRuntimeCefSurface {
+    /// Whether the page may be shown: its first load ended, or the skeleton hold ran out.
+    pub(crate) fn page_ready(&self) -> bool {
+        self.page_loaded.load(std::sync::atomic::Ordering::Relaxed)
+            || self.created_at.elapsed() >= PROJECT_WORKAREA_PAGE_SKELETON_MAX
+    }
 }
 
 impl ProjectWorkareaRuntimeCefSurface {
@@ -613,16 +650,27 @@ impl SourceCodeServerRuntimeTarget {
             }
             (
                 SourceCodeServerRuntimeEndpoint::Remote {
-                    connection_generation: left_generation,
+                    component_platform: left_platform,
+                    execution_target: left_execution,
+                    machine_config: left_config,
                     remote_machine_id: left_machine,
                     ..
                 },
                 SourceCodeServerRuntimeEndpoint::Remote {
-                    connection_generation: right_generation,
+                    component_platform: right_platform,
+                    execution_target: right_execution,
+                    machine_config: right_config,
                     remote_machine_id: right_machine,
                     ..
                 },
-            ) => left_generation == right_generation && left_machine == right_machine,
+            ) => {
+                // Code's independent tunnel survives API-generation changes; request
+                // delivery still validates the exact current target and generation.
+                left_machine == right_machine
+                    && left_platform == right_platform
+                    && left_execution == right_execution
+                    && left_config == right_config
+            }
             _ => false,
         }
     }
@@ -642,7 +690,6 @@ pub(crate) enum RemotePromptEditorDeliveryTarget {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PendingRemotePromptEditorRequest {
-    pub(crate) shell_session_id: TerminalSessionId,
     pub(crate) remote_key: GpuiRemoteAttachSessionKey,
     pub(crate) connection_generation: u64,
     pub(crate) source_target: SourceCodeServerRuntimeTarget,
@@ -689,9 +736,7 @@ impl SourceCodeServerRuntimeSettings {
         }
     }
 
-    pub(crate) fn from_sidebar_runtime_settings(
-        settings: &cef::SidebarRuntimeSettingsSnapshot,
-    ) -> Self {
+    pub(crate) fn from_sidebar_runtime_settings(settings: &SidebarRuntimeSettingsSnapshot) -> Self {
         let object = serde_json::from_str::<serde_json::Value>(&settings.saved_settings_json)
             .ok()
             .and_then(|value| value.as_object().cloned())
@@ -731,6 +776,9 @@ pub(crate) enum SourceCodeServerRuntimeFailure {
     InstallOther,
     #[cfg(windows)]
     NativeEditorMissing,
+    /// CDXC:CodeEditor 2026-09-30 WHY:
+    /// A Linux dev build with no sealed manifest and an unbuilt `.dependencies/code-server` has nothing to launch or install; reporting that as a launch timeout sent debugging after a startup problem that did not exist.
+    EditorMissing,
     Launch,
 }
 
@@ -748,13 +796,51 @@ impl SourceCodeServerRuntimeFailure {
             Self::NativeEditorMissing => {
                 "The native Windows editor is missing from this build. Install a build that includes the Windows editor."
             }
+            Self::EditorMissing => "This Ghostex build doesn’t include the VS Code IDE component.",
             Self::Launch => "VS Code didn’t start in time.",
         }
     }
 }
 
+/// The Code editor process (or its SSH tunnel to a remote one), shared by every workspace window
+/// whose Code view uses it; the process stops when the last of them lets go.
+///
+/// CDXC:AppWindows 2026-10-01 WHY:
+/// code-server listens on one fixed port and keeps one profile, and one process already serves every local folder (each Code view is a folder URL on it), so a second window launching its own failed with the port in use. A window whose Code view needs the editor adopts the process another window runs for the same machine and settings, or waits for the one being launched, instead of starting a second (workarea/source_code_server.rs).
+#[derive(Clone)]
+pub(crate) struct SharedSourceCodeServerChild(Rc<RefCell<OwnedSourceCodeServerChild>>);
+
+pub(crate) struct OwnedSourceCodeServerChild(Child);
+
+impl Drop for OwnedSourceCodeServerChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl SharedSourceCodeServerChild {
+    fn new(child: Child) -> Self {
+        Self(Rc::new(RefCell::new(OwnedSourceCodeServerChild(child))))
+    }
+
+    fn try_wait(&self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.0.borrow_mut().0.try_wait()
+    }
+}
+
+/// A ready process another window runs, as `SourceCodeServerRuntimeOwner::adopt_shared` takes it.
+pub(crate) struct SharedSourceCodeServerRuntime {
+    child: SharedSourceCodeServerChild,
+    started_at: Option<Instant>,
+    runtime_origin: String,
+    prompt_editor_ipc_ready: bool,
+}
+
 pub(crate) struct SourceCodeServerRuntimeOwner {
-    pub(crate) child: Option<Child>,
+    pub(crate) child: Option<SharedSourceCodeServerChild>,
+    /// Launching here means waiting for another window's launch to finish, to adopt its process.
+    pub(crate) waiting_for_shared_launch: bool,
     pub(crate) failure: Option<SourceCodeServerRuntimeFailure>,
     pub(crate) install_progress: Option<component_store::ComponentStoreProgressPhase>,
     pub(crate) started_at: Option<Instant>,
@@ -771,6 +857,7 @@ impl SourceCodeServerRuntimeOwner {
     pub(crate) fn new() -> Self {
         Self {
             child: None,
+            waiting_for_shared_launch: false,
             failure: None,
             install_progress: None,
             started_at: None,
@@ -796,14 +883,14 @@ impl SourceCodeServerRuntimeOwner {
         self.pending_remote_prompt_editor_request = Some(request);
     }
 
-    pub(crate) fn cancel_remote_prompt_editor_request_for_shell_session(
+    pub(crate) fn cancel_remote_prompt_editor_request_for_remote_session(
         &mut self,
-        shell_session_id: TerminalSessionId,
+        remote_key: &GpuiRemoteAttachSessionKey,
     ) {
         if self
             .pending_remote_prompt_editor_request
             .as_ref()
-            .is_some_and(|request| request.shell_session_id == shell_session_id)
+            .is_some_and(|request| &request.remote_key == remote_key)
         {
             self.pending_remote_prompt_editor_request = None;
         }
@@ -908,6 +995,7 @@ impl SourceCodeServerRuntimeOwner {
         started_at: Instant,
     ) {
         self.pending_remote_prompt_editor_request = None;
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::Launching;
         self.failure = None;
         self.install_progress = None;
@@ -923,6 +1011,7 @@ impl SourceCodeServerRuntimeOwner {
         target: SourceCodeServerRuntimeTarget,
         settings: SourceCodeServerRuntimeSettings,
     ) {
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::Ready;
         self.failure = None;
         self.install_progress = None;
@@ -962,6 +1051,7 @@ impl SourceCodeServerRuntimeOwner {
             self.replace_child(child);
         }
         self.started_at = started_at;
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::Failed;
         self.failure = Some(failure);
         self.install_progress = None;
@@ -977,6 +1067,7 @@ impl SourceCodeServerRuntimeOwner {
         settings: SourceCodeServerRuntimeSettings,
     ) {
         self.pending_remote_prompt_editor_request = None;
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::InstallRequired;
         self.failure = None;
         self.install_progress = None;
@@ -993,6 +1084,7 @@ impl SourceCodeServerRuntimeOwner {
         settings: Option<SourceCodeServerRuntimeSettings>,
     ) {
         self.pending_remote_prompt_editor_request = None;
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::Installing;
         self.failure = None;
         self.install_progress = Some(component_store::ComponentStoreProgressPhase::Checking);
@@ -1010,6 +1102,7 @@ impl SourceCodeServerRuntimeOwner {
         failure: SourceCodeServerRuntimeFailure,
     ) {
         self.pending_remote_prompt_editor_request = None;
+        self.waiting_for_shared_launch = false;
         self.state = SourceCodeServerRuntimeLaunchState::Failed;
         self.failure = Some(failure);
         self.install_progress = None;
@@ -1022,6 +1115,7 @@ impl SourceCodeServerRuntimeOwner {
 
     pub(crate) fn reset_after_install(&mut self) {
         self.pending_remote_prompt_editor_request = None;
+        self.waiting_for_shared_launch = false;
         self.started_at = None;
         self.state = SourceCodeServerRuntimeLaunchState::Idle;
         self.failure = None;
@@ -1032,25 +1126,82 @@ impl SourceCodeServerRuntimeOwner {
         self.prompt_editor_ipc_ready = false;
     }
 
+    /// Dropping the previous handle stops its process unless another window still uses it.
     pub(crate) fn replace_child(&mut self, child: Child) {
-        if let Some(mut previous_child) = self.child.take() {
-            let _ = previous_child.kill();
-            let _ = previous_child.wait();
+        self.child = Some(SharedSourceCodeServerChild::new(child));
+    }
+
+    /// This window's ready process, for another window to adopt: the same machine and settings.
+    pub(crate) fn shareable_ready_process(
+        &self,
+        target: &SourceCodeServerRuntimeTarget,
+        settings: &SourceCodeServerRuntimeSettings,
+    ) -> Option<SharedSourceCodeServerRuntime> {
+        if !self.can_reuse_ready_process(target, settings) {
+            return None;
         }
-        self.child = Some(child);
+        Some(SharedSourceCodeServerRuntime {
+            child: self.child.clone()?,
+            started_at: self.started_at,
+            runtime_origin: self.runtime_origin.clone()?,
+            prompt_editor_ipc_ready: self.prompt_editor_ipc_ready,
+        })
+    }
+
+    /// Whether this window is launching a process of its own (not waiting for another's).
+    pub(crate) fn owns_launch(&self) -> bool {
+        self.state == SourceCodeServerRuntimeLaunchState::Launching
+            && !self.waiting_for_shared_launch
+    }
+
+    /// Runs on another window's process, as if this window had launched it.
+    pub(crate) fn adopt_shared(
+        &mut self,
+        target: SourceCodeServerRuntimeTarget,
+        settings: SourceCodeServerRuntimeSettings,
+        shared: SharedSourceCodeServerRuntime,
+    ) {
+        self.pending_remote_prompt_editor_request = None;
+        self.child = Some(shared.child);
+        self.started_at = shared.started_at;
+        self.runtime_origin = Some(shared.runtime_origin);
+        self.prompt_editor_ipc_ready = shared.prompt_editor_ipc_ready;
+        self.set_ready_target(target, settings);
+    }
+
+    /// Shows the Code view as starting while another window launches the process it will adopt.
+    pub(crate) fn set_waiting_for_shared_launch(
+        &mut self,
+        target: SourceCodeServerRuntimeTarget,
+        settings: SourceCodeServerRuntimeSettings,
+    ) {
+        self.set_launching(target, settings, Instant::now());
+        self.waiting_for_shared_launch = true;
     }
 
     pub(crate) fn refresh_child_exit(&mut self) -> bool {
         let Some(child) = self.child.as_mut() else {
             return false;
         };
-        match child.try_wait() {
+        let result = child.try_wait();
+        match &result {
             Ok(Some(_)) | Err(_) => {
+                support_logs::append_for_scenario(
+                    support_logs::GpuiSupportLog::SidebarRefresh,
+                    "native.sidebar.refresh",
+                    "gpui.codeRuntime.childExited",
+                    serde_json::json!({
+                        "generation": self.generation,
+                        "exitCode": result.as_ref().ok().and_then(|status| status.as_ref()).and_then(|status| status.code()),
+                        "waitError": result.is_err(),
+                    }),
+                );
                 self.pending_remote_prompt_editor_request = None;
                 self.child = None;
+                self.waiting_for_shared_launch = false;
                 self.started_at = None;
-                self.state = SourceCodeServerRuntimeLaunchState::Idle;
-                self.failure = None;
+                self.state = SourceCodeServerRuntimeLaunchState::Failed;
+                self.failure = Some(SourceCodeServerRuntimeFailure::Launch);
                 self.install_progress = None;
                 self.runtime_origin = None;
                 self.prompt_editor_ipc_ready = false;
@@ -1064,10 +1215,9 @@ impl SourceCodeServerRuntimeOwner {
         let had_state = self.child.is_some()
             || self.target.is_some()
             || self.state != SourceCodeServerRuntimeLaunchState::Idle;
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        // The process stops here unless another window still uses it.
+        self.child = None;
+        self.waiting_for_shared_launch = false;
         self.generation = self.generation.saturating_add(1);
         self.pending_remote_prompt_editor_request = None;
         self.started_at = None;
@@ -1090,5 +1240,5 @@ pub(crate) struct SourceCodeServerRuntimeStartOutput {
     pub(crate) http_runtime_ready: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AgentsTerminalRuntimeSessionId(pub(crate) u64);

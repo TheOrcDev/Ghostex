@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { COMPONENTS_GITHUB_TOKEN_ENV, componentsGithubRepo } from './release-gpui/components-repo.mjs';
 import { resolvePublishRecoveryInputs } from './release-gpui/publish-provenance.mjs';
 import { PUBLISH_STAGE_NAMES } from './release-gpui/publish-stage.mjs';
 import { isAllowedReleaseWorkflowName } from './release-gpui/provenance.mjs';
@@ -370,6 +371,17 @@ function validateRequiredSecrets(options, secrets) {
     }
   }
   if (options.updateSparkle) requireSecrets(secrets, 'Sparkle', ['SPARKLE_PRIVATE_KEY']);
+  if (
+    options.macos ||
+    options.linuxDeb ||
+    options.linuxRpm ||
+    options.linuxTar ||
+    options.windowsX64 ||
+    options.windowsArm64
+  ) {
+    /* Component tags are published to a separate repository that github.token cannot write. */
+    requireSecrets(secrets, `Component publishing to ${componentsGithubRepo()}`, [COMPONENTS_GITHUB_TOKEN_ENV]);
+  }
   if (options.android) {
     requireSecrets(secrets, 'Android signing', [
       'ANDROID_RELEASE_KEYSTORE_BASE64',

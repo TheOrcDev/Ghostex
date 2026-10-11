@@ -36,11 +36,7 @@
 
 [data-app-scrollbar='thumb'] {
   border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 28%, transparent);
-}
-
-:is([data-app-scrollbar='vertical'], [data-app-scrollbar='horizontal']):hover [data-app-scrollbar='thumb'] {
-  background: color-mix(in srgb, var(--foreground) 42%, transparent);
+  background: var(--gx-scrollbar-thumb);
 }
 
 [data-app-scrollbar][data-scroll-reveal='scroll'] {

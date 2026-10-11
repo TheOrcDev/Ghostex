@@ -12,7 +12,8 @@ import {
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDirectory, '../..');
-const prepareScript = join(scriptDirectory, 'prepare-references.sh');
+// Repo-relative with cwd: repoRoot, so bash on Windows never sees a backslashed native path.
+const prepareScript = 'tooling/release-gpui/prepare-references.sh';
 const cleanOnly = process.argv.slice(2).includes('--clean');
 
 function git(cwd, args) {
@@ -31,6 +32,7 @@ function referenceMetadata() {
   return { revision, url };
 }
 
+/** @param {{ revision: string, source?: string, url: string }} metadata */
 function prepareCleanCheckout({ revision, source, url }) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'ghostex-reference-contract-'));
   const checkout = join(temporaryRoot, 'gpui-component');
@@ -54,7 +56,7 @@ function prepareCleanCheckout({ revision, source, url }) {
 }
 
 function verifyContract(checkout, revision) {
-  const librarySource = readFileSync(join(checkout, 'crates/ui/src/tooltip.rs'), 'utf8');
+  const librarySource = readFileSync(join(checkout, 'crates/base/src/tooltip.rs'), 'utf8');
   const applicationSources = rustSourcesUnder(join(repoRoot, 'apps/desktop/src'));
   const { available, missing } = missingManagedTooltipPlacements(librarySource, applicationSources);
 
@@ -71,7 +73,7 @@ function verifyContract(checkout, revision) {
     );
   }
 
-  const popupMenuSource = readFileSync(join(checkout, 'crates/ui/src/menu/popup_menu.rs'), 'utf8');
+  const popupMenuSource = readFileSync(join(checkout, 'crates/component/src/menu/popup_menu.rs'), 'utf8');
   const requiredPopupMenuMethods = ['items_padding_bottom', 'scrollbar_show', 'scrollbar_thickness'];
   const popupMenuContract = missingRequiredRustMethods(popupMenuSource, requiredPopupMenuMethods);
   if (popupMenuContract.missing.length > 0) {

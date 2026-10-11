@@ -572,6 +572,7 @@ pub mod ffi {
     unsafe extern "C" {
         pub fn ghostty_init(argc: usize, argv: *mut *mut c_char) -> c_int;
         pub fn ghostty_string_free(value: ghostty_string_s);
+        pub fn ghostty_custom_shader_load_msl(path: *const c_char) -> ghostty_string_s;
 
         pub fn ghostty_config_new() -> ghostty_config_t;
         pub fn ghostty_config_free(config: ghostty_config_t);

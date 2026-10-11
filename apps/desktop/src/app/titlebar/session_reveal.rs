@@ -12,23 +12,26 @@ impl GhostexGpuiApp {
         session_id: &str,
         cx: &mut gpui::Context<Self>,
     ) {
+        // CDXC:Sidebar 2026-09-20 DECISION:
+        // User (ruling 7B): the floating reveal is on all three platforms, so Reveal Active Session
+        // floats the sidebar everywhere and never changes its saved collapsed state. This
+        // supersedes the Windows and Linux behaviour of expanding the docked sidebar instead.
         if self.sidebar_collapsed {
-            #[cfg(target_os = "macos")]
+            self.floating_reveal.want.sidebar = true;
             self.update_sidebar_reveal(true, false, cx);
-            #[cfg(not(target_os = "macos"))]
-            self.toggle_gpui_sidebar_collapsed(cx);
         }
-        self.dispatch_gpui_sidebar_host_message(
-            serde_json::json!({
-                "type": "revealSidebarSession",
-                "sessionId": session_id,
-                "requestId": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("current time is after the Unix epoch")
-                    .as_micros() as u64,
-            }),
-            cx,
-        );
+        let request_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("current time is after the Unix epoch")
+            .as_micros() as u64;
+        // This reveal is this app's own, so it never came back on the runtime's facts channel: the
+        // store records it as the newest request (which is what the installed list carries and what
+        // scrolls the row into view) and answers it here rather than waiting for the publish that
+        // used to carry it back (gx_store/runtime_facts.rs). Those two calls are the WHOLE reveal:
+        // the `revealSidebarSession` message that went out beside them until 2026-09-21 was read by
+        // the sidebar page, which is deleted, and by nothing since.
+        self.gx_store_note_local_sidebar_reveal(session_id, request_id);
+        self.gx_store_note_sidebar_reveal(session_id, request_id, cx);
     }
 
     fn active_sidebar_session_reveal_id(&self) -> Option<String> {
@@ -43,25 +46,24 @@ impl GhostexGpuiApp {
         ))
     }
 
-    /// CDXC:Navigation 2026-09-09 DECISION:
+    /// CDXC:Navigation 2026-09-16 DECISION:
     /// User: place a circle icon between Previous and Next that reveals the currently focused/active session in the sidebar.
-    /// User: use a filled circle with the same color, reduced 30% from the original diameter and then another 20% (56% of the original).
+    /// User: match the sidebar's unfilled active-session circle; this replaces the filled dot.
     pub(crate) fn render_titlebar_session_reveal_button(
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let focus = &self.sidebar_gxserver_presentation_focus_state;
-        let enabled = self.sidebar.is_some()
-            && focus.focused_session_id.is_some()
-            && focus.active_project_id.is_some();
+        let enabled = focus.focused_session_id.is_some() && focus.active_project_id.is_some();
         div()
             .id("ghostex-gpui-titlebar-reveal-active-session")
             .flex()
             .h(px(TITLEBAR_LEADING_TALL_BUTTON_HEIGHT))
-            .w(px(TITLEBAR_LEADING_BUTTON_WIDTH))
+            .px(px(TITLEBAR_BUTTON_HORIZONTAL_PADDING))
             .flex_shrink_0()
             .items_center()
             .justify_center()
+            .rounded(px(TITLEBAR_BUTTON_RADIUS))
             .cursor_default()
             .when(enabled, |this| {
                 this.hover(|this| this.bg(titlebar_button_hover_color()))

@@ -1,0 +1,24 @@
+{
+  // Type-checks the release tooling's JavaScript (it has no TypeScript of its own).
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "target": "ES2024",
+    "types": ["node"]
+  },
+  "include": [
+    "release-*.mjs",
+    "release-globals.d.ts",
+    "release-gpui/**/*.mjs",
+    "validate-macos-app-bundle.mjs",
+    "../server/package-remote-linux.mjs"
+  ],
+  "exclude": ["**/*.test.mjs"]
+}

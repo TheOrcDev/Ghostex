@@ -9,6 +9,7 @@ pub(crate) mod api;
 pub(crate) mod body;
 pub(crate) mod producer;
 pub(crate) mod store;
+pub(crate) mod thread_read;
 
 pub(crate) use api::*;
 pub(crate) use producer::*;

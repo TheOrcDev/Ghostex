@@ -17,9 +17,12 @@ pub(crate) mod easy_connect_forward;
 pub(crate) mod editor_daemon;
 pub(crate) mod ide_open;
 pub(crate) mod install;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_credentials;
 pub(crate) mod ports;
 pub(crate) mod previous_sessions;
 pub(crate) mod sidebar_bridge;
+pub(crate) mod sidebar_bridge_writes;
 pub(crate) mod sidebar_hud;
 pub(crate) mod source_code_server;
 pub(crate) mod ssh_exec;
@@ -28,7 +31,11 @@ pub(crate) mod tunnel_and_auth;
 pub(crate) mod types;
 pub(crate) mod websocket_presentation;
 pub(crate) mod windows;
+#[cfg(windows)]
+pub(crate) mod windows_client;
 pub(crate) mod windows_code;
+#[cfg(windows)]
+pub(crate) mod windows_terminal;
 
 pub(crate) use attach::*;
 pub(crate) use attach_terminal_process::*;
@@ -41,9 +48,12 @@ pub(crate) use easy_connect_forward::*;
 pub(crate) use editor_daemon::*;
 pub(crate) use ide_open::*;
 pub(crate) use install::*;
+#[cfg(target_os = "linux")]
+pub(crate) use linux_credentials::*;
 pub(crate) use ports::*;
 pub(crate) use previous_sessions::*;
 pub(crate) use sidebar_bridge::*;
+pub(crate) use sidebar_bridge_writes::*;
 pub(crate) use sidebar_hud::*;
 pub(crate) use source_code_server::*;
 pub(crate) use ssh_exec::*;
@@ -52,4 +62,8 @@ pub(crate) use tunnel_and_auth::*;
 pub(crate) use types::*;
 pub(crate) use websocket_presentation::*;
 pub(crate) use windows::*;
+#[cfg(windows)]
+pub(crate) use windows_client::*;
 pub(crate) use windows_code::*;
+#[cfg(windows)]
+pub(crate) use windows_terminal::*;

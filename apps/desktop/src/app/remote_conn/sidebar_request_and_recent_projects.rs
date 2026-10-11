@@ -5,174 +5,6 @@ use crate::app::model::*;
 use crate::*;
 
 impl GhostexGpuiApp {
-    pub(crate) fn handle_gpui_remote_gxserver_sidebar_request_message(
-        &mut self,
-        command: &serde_json::Map<String, serde_json::Value>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:RemoteMachines 2026-06-24-16:48:
-        Sidebar-origin remote gxserver actions are allowlisted Rust-owned RPCs through the selected live SSH tunnel. Renderer commands may identify only a saved remote machine id, an allowed endpoint, and endpoint params; Rust must not accept tokens, hosts, SSH users, key paths, command text, URLs, or raw response handling authority from CEF.
-
-        CDXC:Git 2026-06-24-17:47:
-        Remote Git/GitHub/worktree parity expands this bridge to gxserver-owned project actions. Responses must be shaped at this boundary before CEF sees them: no command summaries, no PR URL launch authority, no raw delete-project bodies, and no remote tokens, hostnames, SSH details, stdout/stderr logging, or daemon body persistence.
-        */
-        let Some(remote_machine_id) = command
-            .get("remoteMachineId")
-            .and_then(serde_json::Value::as_str)
-            .and_then(gpui_normalize_remote_machine_id)
-        else {
-            return;
-        };
-        let response_request_id = gpui_remote_request_id_from_command(command);
-        let Some(path) = command
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .filter(|path| gpui_remote_sidebar_request_path_allowed(path))
-            .map(str::to_string)
-        else {
-            if let Some(request_id) = response_request_id.as_deref() {
-                self.dispatch_gpui_remote_gxserver_request_error(
-                    remote_machine_id.as_str(),
-                    request_id,
-                    cx,
-                );
-            }
-            return;
-        };
-        let Some(params) = command.get("params").cloned().filter(|params| {
-            params.is_object() && params.to_string().len() <= GPUI_REMOTE_GXSERVER_PARAMS_MAX_BYTES
-        }) else {
-            if let Some(request_id) = response_request_id.as_deref() {
-                self.dispatch_gpui_remote_gxserver_request_error(
-                    remote_machine_id.as_str(),
-                    request_id,
-                    cx,
-                );
-            } else {
-                self.dispatch_gpui_app_modal_toast(
-                    "warning",
-                    "Remote action unavailable",
-                    "GPUI rejected the remote gxserver request.",
-                    cx,
-                );
-            }
-            return;
-        };
-        let Some(params) = gpui_remote_sidebar_request_params(path.as_str(), params) else {
-            if let Some(request_id) = response_request_id.as_deref() {
-                self.dispatch_gpui_remote_gxserver_request_error(
-                    remote_machine_id.as_str(),
-                    request_id,
-                    cx,
-                );
-            } else {
-                self.dispatch_gpui_app_modal_toast(
-                    "warning",
-                    "Remote action unavailable",
-                    "GPUI rejected the remote gxserver request.",
-                    cx,
-                );
-            }
-            return;
-        };
-        let timeout = gpui_remote_sidebar_request_timeout(command);
-        let Some(target) = self.gpui_remote_gxserver_request_target(&remote_machine_id) else {
-            if let Some(request_id) = response_request_id.as_deref() {
-                self.dispatch_gpui_remote_gxserver_request_error(
-                    remote_machine_id.as_str(),
-                    request_id,
-                    cx,
-                );
-            } else {
-                self.dispatch_gpui_app_modal_toast(
-                    "warning",
-                    "Remote action unavailable",
-                    "Reconnect the remote machine before using its sessions.",
-                    cx,
-                );
-            }
-            return;
-        };
-        let background = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            let response_path = path.clone();
-            let result = background
-                .spawn(async move {
-                    gpui_remote_gxserver_rpc_result(&target, path.as_str(), &params, timeout)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(result) => {
-                        if let Some(request_id) = response_request_id.as_deref() {
-                            this.dispatch_gpui_sidebar_remote_event(
-                                serde_json::json!({
-                                    "ok": true,
-                                    "remoteMachineId": remote_machine_id.as_str(),
-                                    "requestId": request_id,
-                                    "result": gpui_remote_sidebar_response_payload(
-                                        response_path.as_str(),
-                                        result,
-                                    ),
-                                    "type": "remoteGxserverResponse",
-                                }),
-                                cx,
-                            );
-                        }
-                    }
-                    Err(_) => {
-                        if let Some(request_id) = response_request_id.as_deref() {
-                            this.dispatch_gpui_sidebar_remote_event(
-                                serde_json::json!({
-                                    "error": "Remote gxserver request failed.",
-                                    "ok": false,
-                                    "remoteMachineId": remote_machine_id.as_str(),
-                                    "requestId": request_id,
-                                    "type": "remoteGxserverResponse",
-                                }),
-                                cx,
-                            );
-                        } else {
-                            this.dispatch_gpui_app_modal_toast(
-                                "warning",
-                                "Remote action failed",
-                                "The remote gxserver action did not complete.",
-                                cx,
-                            );
-                        }
-                    }
-                }
-                if gpui_remote_sidebar_request_refreshes_presentation(response_path.as_str()) {
-                    this.refresh_gpui_remote_gxserver_presentation_in_background(
-                        remote_machine_id,
-                        false,
-                        cx,
-                    );
-                }
-            });
-        })
-        .detach();
-    }
-
-    pub(crate) fn dispatch_gpui_remote_gxserver_request_error(
-        &mut self,
-        remote_machine_id: &str,
-        request_id: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.dispatch_gpui_sidebar_remote_event(
-            serde_json::json!({
-                "error": "Remote gxserver request failed.",
-                "ok": false,
-                "remoteMachineId": remote_machine_id,
-                "requestId": request_id,
-                "type": "remoteGxserverResponse",
-            }),
-            cx,
-        );
-    }
-
     pub(crate) fn gpui_remote_gxserver_request_target(
         &self,
         remote_machine_id: &str,
@@ -214,10 +46,10 @@ impl GhostexGpuiApp {
                 GpuiSidebarNativeProjectPathActionMessage {
                     action,
                     file_path: None,
-                    placement: GpuiWorkspaceTerminalFocusPlacement::Tab,
                     preferred_interface: GpuiPreferredAgentInterface::Terminal,
                     project_id,
                     keep_view: false,
+                    target_id: None,
                 },
                 cx,
             );
@@ -236,10 +68,10 @@ impl GhostexGpuiApp {
         let message = GpuiSidebarNativeProjectPathActionMessage {
             action,
             file_path: None,
-            placement: GpuiWorkspaceTerminalFocusPlacement::Tab,
             preferred_interface: GpuiPreferredAgentInterface::Terminal,
             project_id,
             keep_view: false,
+            target_id: None,
         };
         let background = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
@@ -248,8 +80,7 @@ impl GhostexGpuiApp {
                 .await;
             let _ = this.update(cx, |this, cx| match result {
                 Ok(GpuiSidebarNativeProjectPathActionResult::Copied(path)) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(path));
-                    gpui_play_copy_sound();
+                    gpui_copy_to_clipboard(ClipboardItem::new_string(path), cx);
                 }
                 Ok(GpuiSidebarNativeProjectPathActionResult::Opened) => {}
                 Err(message) => this.dispatch_gpui_app_modal_toast(
@@ -320,9 +151,7 @@ impl GhostexGpuiApp {
                         GpuiRecentProjectMutation::Close | GpuiRecentProjectMutation::Restore
                     ) && let Some(machine_id) = machine_id
                     {
-                        this.refresh_gpui_remote_gxserver_presentation_in_background(
-                            machine_id, false, cx,
-                        );
+                        this.refresh_gpui_remote_gxserver_presentation_in_background(&machine_id);
                     }
                     return;
                 }

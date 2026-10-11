@@ -78,6 +78,9 @@ fn run_git_worktree_topology_probe(project_path: &str) -> Option<GitWorktreeTopo
     })
 }
 
+/// CDXC:Worktrees 2026-09-16 WHY:
+/// A bare repository can be the registered parent of every linked checkout. Git's first list entry identifies that parent; the first non-bare entry is already a child.
+/// SEE-ALSO: server/src/server/worktree_ops/projects.rs, packages/gx-core/src/git_menu/worktree.rs.
 pub(crate) fn detect_registered_git_worktree_metadata(
     projects: &[Value],
     project_path: &str,
@@ -88,8 +91,8 @@ pub(crate) fn detect_registered_git_worktree_metadata(
     let entries = probe.entries;
     let current_entry = entries
         .iter()
-        .find(|entry| normalize_path_for_comparison(&entry.path) == worktree_root)?;
-    let main_entry = entries.iter().find(|entry| !entry.bare)?;
+        .find(|entry| !entry.bare && normalize_path_for_comparison(&entry.path) == worktree_root)?;
+    let main_entry = entries.first()?;
     let main_path = normalize_path_for_comparison(&main_entry.path);
     if main_path.is_empty() || worktree_root == main_path {
         return None;
@@ -204,11 +207,7 @@ fn normalize_git_worktree_branch(branch: Option<&str>) -> String {
 fn run_git(cwd: &str, args: &[&str]) -> String {
     let mut command = Command::new("git");
     command.args(args).current_dir(cwd);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    crate::platform::process::NoConsoleWindow::no_console_window(&mut command);
     let Ok(output) = command.output() else {
         return String::new();
     };

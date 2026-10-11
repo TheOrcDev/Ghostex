@@ -28,7 +28,9 @@ pub fn stage(
     version: &DraftVersion,
     direction: &str,
 ) -> Result<(), DomainStateError> {
-    let transaction = db.unchecked_transaction().map_err(sql_error)?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
     crate::session_chat_draft_recovery::record(&transaction, project, session, content, version)?;
     transaction.execute("INSERT INTO session_chat_draft_handoffs(id,projectId,sessionId,content,draftId,revision,direction,updatedAt) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![id,project,session,content,version.draft_id,version.revision,direction,chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)]).map_err(sql_error)?;
     if direction == "terminal" {
@@ -37,7 +39,9 @@ pub fn stage(
     transaction.commit().map_err(sql_error)
 }
 pub fn placed(db: &Connection, id: &str) -> Result<(), DomainStateError> {
-    let transaction = db.unchecked_transaction().map_err(sql_error)?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
     transaction
         .execute(
             "UPDATE session_chat_draft_handoffs SET state='placed' WHERE id=?1",

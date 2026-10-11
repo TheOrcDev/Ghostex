@@ -727,6 +727,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "ctrlc",
+ "ghostex-editor-client",
  "interprocess",
  "mime_guess",
  "percent-encoding",
@@ -735,7 +736,16 @@ dependencies = [
  "tao",
  "tempfile",
  "uuid",
+ "windows-sys 0.61.2",
  "wry",
+]
+
+[[package]]
+name = "ghostex-editor-client"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

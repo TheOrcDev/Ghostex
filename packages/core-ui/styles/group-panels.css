@@ -1492,7 +1492,7 @@ body.native-sidebar-body
 .sidebar-fixed-tooltip-popup {
   background: var(--ghostex-tooltip-background, rgba(24, 24, 24, 0.98));
   border: 1px solid var(--ghostex-tooltip-border, rgba(255, 255, 255, 0.12));
-  border-radius: var(--ghostex-tooltip-radius, 5px);
+  border-radius: var(--ghostex-tooltip-radius, 8px);
   box-shadow: var(--ghostex-tooltip-shadow, 0 12px 30px rgba(0, 0, 0, 0.35));
   color: var(--ghostex-tooltip-foreground, rgba(255, 255, 255, 0.78));
   font: var(--ghostex-tooltip-font, 500 12px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif);
@@ -1633,6 +1633,19 @@ body[data-sidebar-tooltips-suppressed='true'] [data-slot='tooltip-content'] {
 .reference-sidebar-machine-tabs {
   min-width: 0;
   padding-bottom: 0;
+}
+
+/*
+ * CDXC:ContextMenus 2026-09-21 WHY:
+ * Compact session menus are 178px, but Configure Machines wraps onto a second line there. Size this menu to its labels and keep each row on one line.
+ */
+.reference-sidebar-machine-tab-menu {
+  width: min(200px, calc(100vw - 24px));
+}
+
+.reference-sidebar-machine-tab-menu.ghostex-menu-panel :is([role^='menuitem'], .session-context-menu-item) {
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 /*

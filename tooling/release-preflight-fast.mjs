@@ -3,12 +3,14 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  changelogNotesFormat,
+  changelogNotesItems,
   extractChangelogSectionFromText,
   releaseBuildVersion,
   validateMajorMinorReleaseNotes,
-} from './release-ghostex.mjs';
+} from './release-shared.mjs';
 import { RELEASE_BUILD_SCRIPTS, runReleaseBuildScripts } from './release-preflight-build-scripts.mjs';
 import { checkPatches } from './release-gpui/check-patches-apply.mjs';
 import { formatToolingImportViolation, scanToolingImports } from './release-preflight-tooling-imports.mjs';
@@ -23,14 +25,14 @@ import {
 
 /*
  CDXC:Release 2026-07-02-14:10:
- The 5.4.0 release spent minutes on a root `bun run test` that discovers
+ The 5.4.0 release spent minutes on a root `cargo xtask test` that discovers
  bundled code-server trees, and it discovered late source edits only after
  expensive package builds had started. This remains an optional deep local
  audit for historical/local flows. The canonical Actions release runs these
  gates once in its remote prepare job.
 */
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const githubRepo = 'maddada/Ghostex';
 const signingIdentity = 'Developer ID Application: Mohamad Youssef (KTKP595G3B)';
 const subrepoCandidates = ['apps/mobile/app', '.dependencies/zmx'];
@@ -94,7 +96,7 @@ Options:
   --release-branch <branch>  Branch being released. Defaults to main.
   --cargo                    Also run cargo check for server and gpui.
   --skip-tests               Skip bun run release:test.
-  --skip-typecheck           Skip bun run typecheck.
+  --skip-typecheck           Skip cargo xtask typecheck.
   --skip-build-scripts       Skip running the release JS build scripts locally.
   --rebuild-generated        Run the release build scripts first and keep their
                              regenerated tracked outputs (mobile chat bundle,
@@ -183,6 +185,10 @@ function parseArgs(argv) {
   return options;
 }
 
+/**
+ * @param {string} command
+ * @param {{ timeoutMs?: number, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ */
 function runCommand(command, { timeoutMs = 60_000, cwd = repoRoot, env } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, {
@@ -312,9 +318,7 @@ async function checkChangelog(options) {
   const changelog = await readFile(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
   const notes = extractChangelogSectionFromText(changelog, options.version);
   validateMajorMinorReleaseNotes(notes, options.version);
-  return pass(
-    `${notes.split(/\r?\n/).filter((line) => line.trim().startsWith('- ') || line.trim().startsWith('  - ')).length} bullets`
-  );
+  return pass(`${changelogNotesItems(notes).length} items in the ${changelogNotesFormat(notes)} format`);
 }
 
 async function checkSparkleBuildNumber(options) {
@@ -335,6 +339,10 @@ async function checkSparkleBuildNumber(options) {
     return fail(
       'STALE CHECK, not a product regression - appcast.xml contains no <sparkle:version> elements, so this check would pass for any build number. Fix the assertion, not the release.'
     );
+  }
+  if (buildVersion === maxVersion && options.allowExistingRelease) {
+    /* The macOS stage already advanced the feed for this version; the recovery amends the same release. */
+    return warn(`Sparkle already carries build ${buildVersion} (recovery redispatch of a live release).`);
   }
   if (buildVersion <= maxVersion) {
     return fail(`Build ${buildVersion} must exceed latest Sparkle build ${maxVersion}.`);
@@ -460,7 +468,7 @@ async function checkAssertionFreshness() {
   const [workflow, literals] = await Promise.all([
     evaluateWorkflowGates(),
     evaluatePreflightLiteralProbes({
-      constants: { githubRepo, signingIdentity, sparklePublicKey: await expectedSparklePublicKey() },
+      constants: { sparklePublicKey: await expectedSparklePublicKey() },
       repoRoot,
     }),
   ]);
@@ -549,7 +557,7 @@ async function checkToolingImports() {
 }
 
 async function checkTypecheck() {
-  const result = await runCommand('bun run typecheck', { timeoutMs: 8 * 60 * 1000 });
+  const result = await runCommand('cargo xtask typecheck', { timeoutMs: 8 * 60 * 1000 });
   if (result.code !== 0) {
     return fail(shortOutput(result.stderr || result.stdout, 10));
   }
@@ -620,7 +628,8 @@ is a blocking condition, not a note. Read-only inspection: this never messages,
 interrupts, sleeps, or focuses another session.
 */
 async function checkConcurrentSessions(options) {
-  const result = await runCommand('ghostex sessions --json', { timeoutMs: 30_000 });
+  // --full: the short default leaves out activity and sessionId, which this check reads.
+  const result = await runCommand('ghostex sessions --json --full', { timeoutMs: 30_000 });
   if (result.code !== 0) {
     return warn('ghostex CLI unavailable; confirm no other agent is working in this worktree before dispatching.');
   }

@@ -8,7 +8,6 @@ use std::time::Duration;
 use gpui::Bounds;
 use gpui::Pixels;
 
-use crate::app::element::*;
 use crate::app::helpers::*;
 use crate::app::model::*;
 use crate::*;
@@ -42,6 +41,8 @@ impl GhostexGpuiApp {
             let Some(surface) = self.command_terminal_ghostty_surfaces.get(&slot_id) else {
                 continue;
             };
+            // The feedback needs the app after both closures have let go of it.
+            let mut copied = false;
             surface.drain_runtime_clipboard_requests(
                 true,
                 || {
@@ -53,10 +54,13 @@ impl GhostexGpuiApp {
                 |text| {
                     terminal_runtime_clipboard_write_standard_text(text, |item| {
                         cx.write_to_clipboard(item);
-                        gpui_play_copy_sound();
+                        copied = true;
                     });
                 },
             );
+            if copied {
+                gpui_copy_feedback(cx);
+            }
             let action_events = surface.drain_runtime_action_events();
             if !action_events.is_empty() {
                 let runtime_session_id = surface.runtime_session_id();
@@ -66,7 +70,7 @@ impl GhostexGpuiApp {
                     else {
                         return None;
                     };
-                    Some((runtime_session_id, url.clone()))
+                    Some((runtime_session_id, slot_id.session_id, url.clone()))
                 }));
                 if action_events.iter().any(|event| {
                     matches!(
@@ -83,12 +87,17 @@ impl GhostexGpuiApp {
                 );
             }
         }
-        for (runtime_session_id, url) in terminal_link_requests {
+        for (runtime_session_id, session_id, url) in terminal_link_requests {
             let working_directory = self
                 .command_terminal_runtime_osc_states
                 .get(&runtime_session_id)
                 .and_then(|state| state.pwd.clone());
-            self.open_gpui_engine_terminal_action_url(&url, working_directory.as_deref(), cx);
+            self.open_gpui_engine_terminal_action_url(
+                &url,
+                working_directory.as_deref(),
+                GpuiEngineTerminalEventTarget::Command(session_id),
+                cx,
+            );
         }
         if !self.command_terminal_runtime_osc_states.is_empty() {
             let live_runtime_session_ids = self
@@ -212,23 +221,17 @@ impl GhostexGpuiApp {
         }
     }
 
-    pub(crate) fn record_project_editor_companion_layout_bounds(
-        &mut self,
-        mode: TitlebarMode,
-        child_bounds: &[Bounds<Pixels>],
-    ) {
-        if let Some(bounds) = pane_focus_bounds_from_child_bounds(child_bounds) {
-            self.project_editor_companion_layout_bounds =
-                Some(ProjectEditorFocusBounds { mode, bounds });
-        }
-    }
-
+    /// Starts CEF (`request_cef_runtime` decides when) and, once its context is up, creates the
+    /// web views that were waiting for it. A runtime that cannot start is reported on those views
+    /// (CDXC:CefRuntime 2026-09-28 in app/helpers/web_runtime.rs).
     pub(crate) fn initialize_cef(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.sidebar.is_some() {
+        if let Err(error) = cef::initialize(cx) {
+            self.fail_web_runtime_start(format!("The web runtime could not start: {error:#}"), cx);
             return;
         }
-
-        cef::initialize(cx).expect("failed to initialize CEF");
+        crate::app::helpers::web_runtime::set_web_runtime_state(
+            crate::app::helpers::web_runtime::WebRuntimeState::Running,
+        );
         if !cef::context_initialized() {
             if self.cef_context_initialization_waiting {
                 return;
@@ -251,93 +254,18 @@ impl GhostexGpuiApp {
             .detach();
             return;
         }
-        let parent_ns_view = self.parent_ns_view;
-        let sidebar_url = self.sidebar_url.clone();
-        let sidebar_bridge_event_handler = self.sidebar_bridge_event_handler(cx);
-        let app_modal_host_bridge_event_handler = self.app_modal_host_bridge_event_handler(cx);
-        let sidebar_runtime_settings = self.sidebar_runtime_settings_snapshot.clone();
-        let sidebar_gxserver_bootstrap = self.sidebar_gxserver_bootstrap.clone();
-        let sidebar_visible = gpui_sidebar_chrome_visible(self.sidebar_collapsed);
-        match CefSurface::try_new(
-            "gpui-sidebar".to_string(),
-            parent_ns_view,
-            sidebar_url,
-            "gpui-sidebar".to_string(),
-            sidebar_cef_prepaint_background_color(),
-            false,
-            titlebar_background(),
-            None,
-            sidebar_visible,
-            None,
-            None,
-            None,
-            Some(sidebar_runtime_settings),
-            sidebar_gxserver_bootstrap,
-            Some(sidebar_bridge_event_handler),
-            None,
-            None,
-            Some(cef::AppModalHostBridgeSurface::Sidebar),
-            Some(app_modal_host_bridge_event_handler),
-            None,
-            cx,
-        ) {
-            Ok(sidebar) => {
-                /*
-                CDXC:Sidebar 2026-08-02:
-                Hand the sidebar's CEF child view to the AppKit sendEvent
-                observer so pointer crossings of its frame, and mouse-downs
-                outside it, become the page's hover-suppression and
-                context-menu-dismissal signals.
-                */
-                #[cfg(target_os = "macos")]
-                if let Some(native_view) =
-                    sidebar.read(cx).native_view_for_sidebar_pointer_tracking()
-                {
-                    cef::set_sidebar_pointer_tracking_view(native_view);
-                }
-                self.sidebar = Some(sidebar);
-            }
-            Err(error) => {
-                // The sidebar profile uses the pre-initialized global app-ui
-                // context, so a creation failure here is unexpected. Retry
-                // once after CEF has had time to settle; on a second failure
-                // keep the app alive without the sidebar instead of the
-                // previous process abort
-                // (CDXC:CefRuntime 2026-07-11).
-                support_logs::append(
-                    support_logs::GpuiSupportLog::CrashReports,
-                    "gpui.cefSurface.createFailed",
-                    serde_json::json!({
-                        "surface": "sidebar",
-                        "retryScheduled": !self.cef_sidebar_creation_retried,
-                        "error": error,
-                    }),
-                );
-                if !self.cef_sidebar_creation_retried {
-                    self.cef_sidebar_creation_retried = true;
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(750))
-                            .await;
-                        let _ = this.update(cx, |this, cx| {
-                            if this.sidebar.is_none() {
-                                this.initialize_cef(cx);
-                            }
-                        });
-                    })
-                    .detach();
-                }
-                return;
-            }
+        // A Browser that is still asleep from launch gets its page on the click that wakes it (CDXC:Browser 2026-09-19).
+        if self
+            .project_editor_shell
+            .is_mode_awake(TitlebarMode::Browser)
+        {
+            self.ensure_active_browser_surface(cx);
         }
-        self.ensure_active_browser_surface(cx);
         self.ensure_project_workarea_runtime_cef_surfaces_for_current_context(cx);
         self.update_active_mode_cef_child_visibility(cx);
-        // First-run onboarding may open the CEF app-modal host. Start it only
-        // after the required runtime and initial sidebar surface are ready;
-        // macOS release first launch can spend time in the native component
-        // window before CEF is available.
-        self.start_gpui_first_run_onboarding(cx);
+        self.retry_titlebar_extension_popup_after_cef_ready(cx);
+        self.open_gpui_app_modal_deferred_for_cef(cx);
+        self.refresh_web_runtime_views(cx);
         cx.notify();
     }
 
@@ -385,15 +313,16 @@ impl GhostexGpuiApp {
         self.update_project_workarea_runtime_cef_surface_visibility(cx);
         /*
         CDXC:SessionChat 2026-08-19:
-        Session Chat is a CEF child view gated on exactly the same inputs as
-        the Browser and project-workarea surfaces: active mode, mode
-        wakefulness, companion visibility, and the tab-drag flags. Every mode
-        switch, drag, sleep, and companion mutation already re-runs this pass,
-        so the chat gate belongs here rather than being re-added by hand at
-        each call site. Sites that set `active_mode` and then only synced
-        Browser surfaces (terminal link opens through
-        `open_browser_url_from_renderer_command`, for example) used to leave
-        the Agents chat child painted over the new workarea.
+        Session Chat is a CEF child view reconciled at the same boundary as the Browser and
+        project-workarea surfaces, so every mode switch, drag and sleep re-runs one pass rather than
+        each call site re-adding the chat gate by hand. Sites that set `active_mode` and then only
+        synced Browser surfaces (terminal link opens through
+        `open_browser_url_from_renderer_command`, for example) used to leave the Agents chat child
+        painted over the new workarea.
+
+        CDXC:SessionChat 2026-09-20 WHY:
+        Its own gate no longer reads the active mode at all: the Agents column is on screen in every
+        view, so a chat page is visible exactly while its pane is rendered.
         */
         self.reconcile_agents_pane_surfaces(cx);
     }

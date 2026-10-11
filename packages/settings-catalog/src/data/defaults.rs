@@ -1,0 +1,818 @@
+use crate::json::J;
+
+pub const DEFAULT_GHOSTEX_SETTINGS: &[(&str, J)] = &[
+    // CDXC:Notifications 2026-05-29-12:00:
+    // Action-completion feedback should use the plain shamisen sound by default;
+    // shamisen reverb remains available from Settings for users who prefer it.
+    ("actionCompletionSound", J::Str("shamisen")),
+    ("gpuiTitlebarActionCommandByProject", J::Obj(&[])),
+    ("gpuiTitlebarOpenTargetByProject", J::Obj(&[])),
+    // CDXC:GhostexCapture 2026-09-30 WHY:
+    // The floating button sits over every app, so it is opt-in: a new install or an update must not
+    // put a window on top of someone's screen they never asked for.
+    ("ghostexCaptureEnabled", J::Bool(false)),
+    // CDXC:GhostexCapture 2026-09-30 DECISION:
+    // User: "when we send a prompt to the app we have to switch the app to that session", with a
+    // toggle under Floating Capture to turn it off. On by default; Ghostex shows the session without
+    // coming in front of the app the user is in.
+    ("ghostexCaptureSwitchToSession", J::Bool(true)),
+    ("agentboxDefaultLocation", J::Str("local")),
+    // CDXC:AgentProviders 2026-09-04 DECISION:
+    // User: new installs must start with Agent approvals set to Keep default. Running supported agents without approval is an explicit opt-in.
+    ("agentAcceptAllEnabled", J::Bool(false)),
+    ("agentHooksAutoInstall", J::Bool(false)),
+    ("agentsTidyUpOfferDismissed", J::Bool(false)),
+    ("agentManagerZoomPercent", J::Num(100.0)),
+    ("defaultPromptAgentId", J::Str("codex")),
+    ("sessionTitleGenerationAgent", J::Str("codex")),
+    ("customSessionTitleGenerationCommand", J::Str("")),
+    // CDXC:Navigation 2026-07-02-13:05:
+    // In-app link routing is the default so cmd-clicked web links land in the
+    // project Browser view unless the user opts back into the system browser in
+    // Settings.
+    //
+    // CDXC:SessionChat 2026-08-18:
+    // Session chat web links share this default for the same reason.
+    //
+    // CDXC:Navigation 2026-08-19:
+    // Detected dev-server rows now share it as well, so a fresh install answers
+    // every web link the same way instead of splitting chat and terminal links
+    // from dev-server links.
+    ("webLinkOpenTarget", J::Str("internal-browser")),
+    ("markdownFileOpenView", J::Str("docs")),
+    ("htmlFileOpenView", J::Str("docs")),
+    ("imageFileOpenTarget", J::Str("files")),
+    ("videoFileOpenTarget", J::Str("files")),
+    ("audioFileOpenTarget", J::Str("files")),
+    // CDXC:Settings 2026-06-28-08:01:
+    // New installs should start with ordinary Settings density, but an explicit
+    // Show Advanced toggle is saved so restart hydration preserves the user's
+    // last browsing mode.
+    ("showAdvancedSettings", J::Bool(false)),
+    // CDXC:Settings 2026-06-29-17:54:
+    // New installs start at General Settings. Once the user closes Settings, the
+    // modal saves only navigation chrome state here, not search text or private
+    // setting values beyond the already persisted preferences.
+    //
+    // CDXC:Settings 2026-06-30-04:47:
+    // Navigation writes can happen before close so native-window teardown does not
+    // lose the last selected Settings page.
+    (
+        "settingsModalNavigation",
+        J::Obj(&[
+            ("activeTab", J::Str("settings")),
+            ("scrollTopByTab", J::Obj(&[])),
+            ("version", J::Num(1.0)),
+        ]),
+    ),
+    // CDXC:Settings 2026-06-28-07:41:
+    // New installs and missing persisted settings should keep experimental
+    // surfaces hidden until the user enables Enable Experimental Features from
+    // Advanced Settings.
+    //
+    // CDXC:Automations 2026-09-17:
+    // All Automations and project Automate start hidden behind their
+    // coming-soon overlay until Enable Experimental Features is on.
+    ("showBetaFeatures", J::Bool(false)),
+    ("fasterRendering", J::Bool(false)),
+    ("codeViewTabHidden", J::Bool(false)),
+    ("browserViewTabHidden", J::Bool(false)),
+    ("kanbanViewTabHidden", J::Bool(false)),
+    ("automateViewTabHidden", J::Bool(false)),
+    ("docsViewTabHidden", J::Bool(false)),
+    ("terminalViewTabHidden", J::Bool(false)),
+    ("storybookViewTabHidden", J::Bool(false)),
+    ("linearViewTabHidden", J::Bool(false)),
+    ("jiraViewTabHidden", J::Bool(false)),
+    ("githubViewTabHidden", J::Bool(false)),
+    ("sentryViewTabHidden", J::Bool(true)),
+    ("figmaViewTabHidden", J::Bool(true)),
+    ("vercelViewTabHidden", J::Bool(true)),
+    ("supabaseViewTabHidden", J::Bool(true)),
+    ("githubActionsViewTabHidden", J::Bool(true)),
+    ("posthogViewTabHidden", J::Bool(true)),
+    ("customWebsiteViewTabHidden", J::Bool(true)),
+    ("projectWebsiteViews", J::Obj(&[])),
+    // CDXC:Bots 2026-09-26 DECISION:
+    // User: Bots is off by default, so Ghostex looks exactly as it did until the user turns it on.
+    ("botsHidden", J::Bool(true)),
+    // CDXC:Bots 2026-09-26 DECISION:
+    // User: Bot automations is its own switch, off by default, so Bots can be on without the feed.
+    ("botAutomationsHidden", J::Bool(true)),
+    ("tipsAndTricksTitlebarButtonHidden", J::Bool(false)),
+    ("notificationsTitlebarButtonHidden", J::Bool(false)),
+    ("helpTitlebarButtonHidden", J::Bool(false)),
+    ("resourcesTitlebarButtonHidden", J::Bool(false)),
+    ("devServersTitlebarButtonHidden", J::Bool(false)),
+    ("extensionsTitlebarButtonHidden", J::Bool(false)),
+    ("gitActionsTitlebarButtonHidden", J::Bool(false)),
+    // CDXC:Extensions 2026-10-01 DECISION: Actions is off by default (built_in_extensions.rs).
+    ("actionsHidden", J::Bool(true)),
+    // CDXC:AgentBox 2026-10-06 DECISION: Cloud Boxes is off by default (official_extensions.rs).
+    ("cloudBoxesHidden", J::Bool(true)),
+    // CDXC:Workspaces 2026-10-09 DECISION: Workspaces is off by default (official_extensions.rs).
+    ("workspacesHidden", J::Bool(true)),
+    ("openInTitlebarButtonHidden", J::Bool(false)),
+    // CDXC:CodeEditor 2026-05-06-15:00
+    // Embedded code-server editor panes can reuse the user's local VS Code
+    // user settings. A separate Insiders toggle switches the linked source
+    // directory without disabling the shared project editor runtime.
+    //
+    // CDXC:CodeEditor 2026-06-08-20:12:
+    // New installs should use Ghostex-owned bundled editor settings by default
+    // so the embedded VS Code surface starts on Dark 2026. Users can still opt
+    // into local VS Code settings explicitly from Settings.
+    ("codeServerLinkVscodeUserConfig", J::Bool(false)),
+    ("codeServerUseVscodeInsidersUserConfig", J::Bool(false)),
+    // Legacy external-IDE preference keys remain normalized so existing settings
+    // files and generic Open in IDE actions stay readable. They are no longer
+    // exposed in Settings or used by Agents Hub, which opens files in Source.
+    ("customDefaultEditorCommand", J::Str("")),
+    // CDXC:Icons 2026-06-25-21:50: New installs use the default bundled app icon (empty source id).
+    ("appIconSourceId", J::Str("")),
+    ("defaultEditorCommand", J::Str("code")),
+    // CDXC:Git 2026-05-16-08:46:
+    // Users can hide the project-header +added/-removed git summary completely
+    // when they want project names to stay visually quiet. This is independent
+    // from the existing changed-file count preference.
+    //
+    // CDXC:Settings 2026-06-13-01:06:
+    // Recommended is the default sidebar preset, so new settings show project-header
+    // git stats while keeping the changed-file count off unless the user enables it.
+    ("hideProjectHeaderDiffStats", J::Bool(false)),
+    // CDXC:Docs 2026-06-30-19:47:
+    // Additional Docs scan folders remain opt-in beyond the built-in ./docs,
+    // ./artifacts, ./ai, and ./tmp roots (and the same folder names one level
+    // down) plus root Markdown, HTML, and Excalidraw files.
+    // A configured Docs directory adds its own tree on top of whatever this
+    // lists (CDXC:Docs).
+    ("manageAdditionalDocsFolders", J::Str("")),
+    // CDXC:Projects 2026-08-02:
+    // New installs ship every Global Default empty so project resolution stays
+    // byte-for-byte identical to the pre-feature behavior until a user fills one in.
+    ("globalWorktreeCommand", J::Str("")),
+    ("globalBeadsDisplayKey", J::Str("")),
+    ("globalBeadsDirectory", J::Str("")),
+    ("globalDocsDirectory", J::Str("")),
+    // CDXC:Git 2026-05-15-14:33:
+    // Project-header git stats should hide the changed-file count by default and
+    // show only added/removed line counts. Users can opt back into the file
+    // number from Settings when they want the full diff summary.
+    ("showProjectEditorDiffFileCount", J::Bool(false)),
+    // CDXC:Git 2026-05-27-09:25:
+    // Match Starship-style tracked line counts by default. Users can opt in to
+    // show untracked line totals only when tracked `git diff --numstat HEAD` is
+    // +0 -0.
+    (
+        "showUntrackedProjectDiffWhenNoTrackedChanges",
+        J::Bool(false),
+    ),
+    ("completionSound", J::Str("arcade")),
+    // CDXC:Clipboard 2026-09-15 DECISION:
+    // User: play the copy sound everywhere in the app when copying, but "make it disabled by default for now". This supersedes the earlier enabled default; this switch is the only gate the copy sound has.
+    ("copySound", J::Bool(false)),
+    // CDXC:Notifications 2026-07-01-01:13:
+    // Plain terminal BEL events include ordinary shell feedback such as zsh
+    // completion misses. Keep terminal-bell attention notifications opt-in so
+    // Monaco prompt editing and agent completion alerts remain independent from
+    // noisy terminal-emulator bells.
+    ("showNotificationOnTerminalBell", J::Bool(false)),
+    ("createSessionOnSidebarDoubleClick", J::Bool(false)),
+    ("sidebarSessionCycleSkipsSleeping", J::Bool(false)),
+    // CDXC:Sessions 2026-09-10 DECISION:
+    // User: enable parking by default, but keep sleep on park disabled by default.
+    ("enableSessionParking", J::Bool(true)),
+    ("sleepSessionWhenParking", J::Bool(false)),
+    // CDXC:Sessions 2026-09-12 DECISION:
+    // User: "Park & Snooze with tags" is on by default, so Park and Snooze open the tag menu unless the user turns it off. Supersedes the 2026-09-11 off-by-default choice for the park-only version of this setting.
+    ("showTagMenuWhenParking", J::Bool(true)),
+    // CDXC:Sessions 2026-09-11 DECISION:
+    // User: "Unpark after sending a message" defaults to on.
+    ("unparkAfterSendingMessage", J::Bool(true)),
+    // CDXC:Telemetry 2026-08-26:
+    // Usage analytics are on by default and opt-out. Events carry only counts and
+    // fixed-list values, tied to a one-way salted hash so one person's machines
+    // group together. Nothing personal: no prompts, no paths, no project names,
+    // and never the raw account id the hash is derived from.
+    ("analyticsEnabled", J::Bool(true)),
+    ("debuggingMode", J::Bool(false)),
+    (
+        "diagnosticLogging",
+        J::Obj(&[("scenarios", J::Obj(&[])), ("version", J::Num(1.0))]),
+    ),
+    ("renameSessionOnDoubleClick", J::Bool(false)),
+    ("showProjectIcons", J::Bool(true)),
+    // CDXC:Sessions 2026-05-16-08:46:
+    // Agent identity remains configurable in Settings through an explicit
+    // hover-only mode for quieter session lists.
+    //
+    // CDXC:Settings 2026-06-13-01:06:
+    // Superseded by CDXC:Settings 2026-06-30-22:29.
+    //
+    // CDXC:Settings 2026-06-30-22:29:
+    // Recommended is the first-run preset and keeps session agent icons visible
+    // while showing detailed sidebar status chrome.
+    ("hideSessionAgentIconUntilHover", J::Bool(false)),
+    // CDXC:Browser 2026-05-28-07:38:
+    // Browser page favicons are page identity, not agent chrome. Keep them
+    // visible in the default Codex and Detailed presets even when agent icons are
+    // hover-only, while Minimal can hide favicons until hover for a quieter list.
+    ("hideBrowserFaviconUntilHover", J::Bool(false)),
+    // CDXC:Sessions 2026-05-09-17:00
+    // Session-card close controls should be available out of the box. Users can
+    // still turn the hover chrome off from Settings when they want quieter cards.
+    (
+        "sessionCardHoverButtons",
+        J::Arr(&[
+            J::Obj(&[("enabled", J::Bool(false)), ("id", J::Str("rename"))]),
+            J::Obj(&[("enabled", J::Bool(false)), ("id", J::Str("pin"))]),
+            J::Obj(&[("enabled", J::Bool(false)), ("id", J::Str("note"))]),
+            J::Obj(&[("enabled", J::Bool(false)), ("id", J::Str("snooze"))]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("closeAfterDone")),
+            ]),
+            J::Obj(&[("enabled", J::Bool(true)), ("id", J::Str("tag"))]),
+            J::Obj(&[("enabled", J::Bool(true)), ("id", J::Str("park"))]),
+            J::Obj(&[("enabled", J::Bool(true)), ("id", J::Str("sleep"))]),
+            J::Obj(&[("enabled", J::Bool(true)), ("id", J::Str("chevron"))]),
+            J::Obj(&[("enabled", J::Bool(true)), ("id", J::Str("close"))]),
+        ]),
+    ),
+    // CDXC:Sessions 2026-10-01 DECISION:
+    // User: the enabled hover buttons also appear in the session context menu by default, in the menu's own ChatGPT-style order (Rename, Pin, Snooze, Park, Sleep, Note, Tag As); this supersedes the 2026-09-15 rule that they led the menu in the card's right-to-left order. Close is the exception and never appears in the menu while it is on the card. Turning this off restores the 2026-09-12 rule where every enabled hover button leaves the context menu.
+    ("showSessionCardHoverButtonsInContextMenu", J::Bool(true)),
+    // CDXC:Sessions 2026-06-13-15:42
+    // Recommended is the default sidebar style and hides session-card Last Active
+    // timestamps by default. Settings still owns an explicit toggle for users who
+    // want the timestamp back, and the setting must not affect project-header git
+    // diff stats.
+    ("hideLastActiveTimeOnSessionCards", J::Bool(true)),
+    ("highlightPendingQuestions", J::Bool(false)),
+    ("hideAccountEmails", J::Bool(false)),
+    // CDXC:AgentProviders 2026-10-06 DECISION:
+    // User: Claude and Codex each get a setting to auto-redeem banked resets that are going to expire anyway, used 5 minutes before expiry ("no no shouldn't be 60 minutes before that's big waste. Let's do 5 minutes instead."); using one at a usage limit in its last 24 hours happens only "if user enables that toggle", the separate AtLimit switch. All off by default because a redeemed reset cannot be given back; gxserver owns the rule (server/src/accounts/reset_watch.rs). Supersedes the 2026-10-05 single switch that also covered the limit case, and the 60-minute last call.
+    ("claudeAutoRedeemExpiringResets", J::Bool(false)),
+    ("codexAutoRedeemExpiringResets", J::Bool(false)),
+    ("claudeAutoRedeemResetsAtLimit", J::Bool(false)),
+    ("codexAutoRedeemResetsAtLimit", J::Bool(false)),
+    // CDXC:Sessions 2026-06-13-17:50:
+    // First-run sidebar tag filter settings should show the default triage tags,
+    // the No tag filter, and the default separators. Users opt out by hiding or
+    // disabling individual rows from the collapsed Sidebar Tags settings area.
+    (
+        "sidebarSessionTagListItems",
+        J::Arr(&[
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("favorite")),
+                ("tag", J::Str("favorite")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("high-priority")),
+                ("tag", J::Str("high-priority")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(false)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("low-priority")),
+                ("tag", J::Str("low-priority")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(false)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("separator-priority-progress")),
+                ("type", J::Str("separator")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("todo")),
+                ("tag", J::Str("todo")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(false)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("in-progress")),
+                ("tag", J::Str("in-progress")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("testing")),
+                ("tag", J::Str("testing")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("blocked")),
+                ("tag", J::Str("blocked")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("on-hold")),
+                ("tag", J::Str("on-hold")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("done")),
+                ("tag", J::Str("done")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("separator-progress-type")),
+                ("type", J::Str("separator")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("research")),
+                ("tag", J::Str("research")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("bug")),
+                ("tag", J::Str("bug")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(false)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(false)),
+                ("id", J::Str("feature")),
+                ("tag", J::Str("feature")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(false)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("design")),
+                ("tag", J::Str("design")),
+                ("type", J::Str("tag")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("separator-type-untagged")),
+                ("type", J::Str("separator")),
+                ("visible", J::Bool(true)),
+            ]),
+            J::Obj(&[
+                ("enabled", J::Bool(true)),
+                ("id", J::Str("untagged")),
+                ("type", J::Str("untagged")),
+                ("visible", J::Bool(true)),
+            ]),
+        ]),
+    ),
+    // CDXC:SessionSleep 2026-09-13 DECISION:
+    // User: keep Agent Auto Sleep off by default because remote Claude requires its terminal to remain running.
+    //
+    // CDXC:SessionSleep 2026-05-28-08:06:
+    // Background VS Code, Project, and Git panes originally auto-slept after
+    // fifteen minutes of idle time by default. Agent terminal auto-sleep starts
+    // opt-in because it closes live user-created conversation surfaces.
+    //
+    // CDXC:SessionSleep 2026-06-15-18:31:
+    // Heavy editor, Project, Git/Browser, and browser-session surfaces should
+    // retire quickly by default because many awake webviews and code-server
+    // processes make sidebar switching laggy. Use ten-minute idle windows for
+    // browser and VS Code panes, retain five minutes for Git and Project panes,
+    // and enable browser-session Auto Sleep while keeping agent terminals opt-in.
+    //
+    // CDXC:SessionSleep 2026-06-07-00:53:
+    // Agent auto-sleep keeps its opt-in policy, but the default idle threshold is
+    // now fifteen minutes so enabled agent sessions retire on the same window as
+    // editor surfaces.
+    //
+    // CDXC:SessionSleep 2026-06-07-00:56:
+    // Focused agent sessions must never auto-sleep and no longer have a Settings
+    // override because sleeping the active conversation is not a supported UX.
+    ("autoSleepAgentIdleMinutes", J::Num(0.0)),
+    ("autoSleepBrowserIdleMinutes", J::Num(10.0)),
+    ("autoSleepCodeEditorIdleMinutes", J::Num(10.0)),
+    ("autoSleepGitEditorIdleMinutes", J::Num(5.0)),
+    ("autoSleepProjectEditorIdleMinutes", J::Num(5.0)),
+    ("autoSleepRequireAgentResumeCommand", J::Bool(true)),
+    ("autoSleepFavoriteAgentSessions", J::Bool(false)),
+    ("keepAwakeActivateOnExternalDisplay", J::Bool(false)),
+    ("keepAwakeActivateOnLaunch", J::Bool(false)),
+    ("keepAwakeAllowDisplaySleep", J::Bool(false)),
+    ("keepAwakeBatteryThresholdPercent", J::Num(0.0)),
+    ("keepAwakeDeactivateOnLowPowerMode", J::Bool(false)),
+    ("keepAwakeDeactivateOnUserSwitch", J::Bool(false)),
+    ("keepAwakeDefaultDurationMinutes", J::Num(0.0)),
+    ("keepAwakeWhileWorkingSessions", J::Bool(false)),
+    // CDXC:KeepAwake 2026-05-28-19:28:
+    // Closing a MacBook lid is not covered by the standard caffeinate idle-sleep assertion.
+    // Keep lid-close sleep prevention as an explicit opt-in because it changes the system-wide `pmset disablesleep` policy with administrator approval.
+    ("keepAwakePreventLidSleep", J::Bool(false)),
+    // CDXC:KeepAwake 2026-05-27-07:32:
+    // The titlebar keep-awake affordance is optional chrome. Keep the per-control
+    // hide preference off by default, but persist a Power setting that can remove
+    // the titlebar control completely for users who do not use Mac sleep
+    // management from Ghostex.
+    //
+    // CDXC:Settings 2026-06-28-07:41:
+    // Keep Awake is an experimental macOS feature. Enable Experimental Features
+    // must be enabled before the titlebar button or runtime automation is
+    // available; this preference only hides the button again inside that enabled
+    // state.
+    ("hideKeepAwakeTitlebarControl", J::Bool(false)),
+    // CDXC:AgentLauncher 2026-08-01:
+    // Every built-in tab strip button stays visible until the user hides it, so
+    // adding Global Actions never silently removes a control someone relies on.
+    ("hideTabStripNewTerminalButton", J::Bool(false)),
+    ("hideTabStripNewBrowserButton", J::Bool(false)),
+    // CDXC:Notifications 2026-05-10-16:46
+    // macOS attention notifications are enabled by default so a background
+    // session that transitions into attention can surface itself without relying
+    // on persistent status badges or completion sounds.
+    //
+    // CDXC:Notifications 2026-05-11-01:14
+    // Keep this default-on even after adding macOS permission prompts and test
+    // controls; users should opt out explicitly when they do not want banners.
+    ("showMacOSAttentionNotifications", J::Bool(true)),
+    // CDXC:Notifications 2026-10-05 DECISION:
+    // User: a banked reset that expires within 3 days, and again within 24 hours, also gets a system notification, which "can be switched off for the system" while the red bell row stays.
+    ("resetExpirySystemNotifications", J::Bool(true)),
+    ("hideMenuBarSessionStatusIndicators", J::Bool(false)),
+    ("petOverlayEnabled", J::Bool(false)),
+    ("selectedPetId", J::Str("boo")),
+    // CDXC:Workarea 2026-05-23-00:50:
+    // The session-id pane overlay preference is configurable, and the
+    // native label itself must still render only for terminal panes that carry
+    // zmx/tmux/zellij persistence metadata.
+    //
+    // CDXC:Workarea 2026-06-06-05:47:
+    // Provider session ids in terminal panes are opt-in chrome. Keep the setting
+    // disabled for default settings so new users do not see top-right provider
+    // identifiers unless they explicitly enable the pane overlay.
+    ("showQuickModelPickerInTerminal", J::Bool(true)),
+    ("showSessionIdInTerminalPanes", J::Bool(false)),
+    ("preferredAgentInterface", J::Str("chat")),
+    // No per-agent overrides: every agent follows the global Default Agent View
+    // until the user picks a different view for that agent in Settings > Agents.
+    ("preferredAgentInterfaceOverrides", J::Obj(&[])),
+    // CDXC:Sessions 2026-10-09 DECISION: User: "setting to enable this just for preferred chat view user (advanced). let's set disabled by default". Off until the user turns it on.
+    ("closeEmptySessionsOnNew", J::Bool(false)),
+    ("sidebarCollapseAnimationDurationMs", J::Num(400.0)),
+    ("panelAnimationSpeed", J::Str("normal")),
+    ("closeSidePanelWithLastTab", J::Bool(true)),
+    ("sidebarTooltipDelayMs", J::Num(600.0)),
+    // CDXC:Sidebar 2026-06-05-04:40:
+    // First-run reset target is 275px, but users can change this Settings
+    // value for explicit sidebar-handle double-click resets without changing the
+    // last-width restore path used at app restart.
+    ("sidebarDefaultWidthPx", J::Num(275.0)),
+    ("projectSessionListCollapsedCount", J::Num(13.0)),
+    ("groupWorkingSessions", J::Bool(false)),
+    ("sidebarSpacesEnabled", J::Bool(false)),
+    ("sidebarSpaceSwitchBehavior", J::Str("restore")),
+    ("projectSwitchKeepAliveMinutes", J::Num(10.0)),
+    ("sidebarSpaceFollowActiveSession", J::Bool(false)),
+    ("sidebarVisibilityMemory", J::Str("shared")),
+    ("expandCollapsedProjectsOnJump", J::Bool(true)),
+    ("showLessForExpandedProjectJumps", J::Bool(false)),
+    // CDXC:Theming 2026-09-14 DECISION: User: default App theme to System, with Chat and Terminal on Follow app. Existing saved theme selections remain unchanged.
+    ("sidebarTheme", J::Str("system")),
+    ("sessionChatTheme", J::Str("app")),
+    ("sessionChatFontFamily", J::Str("")),
+    ("sessionChatZoomPercent", J::Num(100.0)),
+    ("sessionChatCustomTranscriptWidthEnabled", J::Bool(false)),
+    ("sessionChatTranscriptWidthPercent", J::Num(75.0)),
+    ("sessionChatVerboseMode", J::Bool(false)),
+    // CDXC:SessionChat 2026-09-27 DECISION: User: "make simple mode default enabled in the gpui app". A saved `false` still wins; only chats with no saved choice start simple.
+    ("sessionChatSimpleMode", J::Bool(true)),
+    ("sessionChatFileEditPreviews", J::Bool(false)),
+    ("sessionChatKeepComposerExpanded", J::Bool(false)),
+    ("sessionChatConfirmEscapeInterrupt", J::Bool(true)),
+    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: "force the marked handovers for coordinators/orchestrator threads and their children by default and make it disabled by default for non-orchestrator/child threads". This switch covers every other session and stays off by default; orchestrators and threads mark regardless.
+    ("markedHandovers", J::Bool(false)),
+    // CDXC:MarkedHandovers 2026-10-11 DECISION: User: coloured labels (style D) by default, their first pick of the three.
+    ("markedHandoversStyle", J::Str("labels")),
+    // CDXC:Theming 2026-06-15-11:24:
+    // Custom sidebar/titlebar colors are scoped to the sidebar and titlebar.
+    // The default background matches Dark Gray chrome without changing modal or
+    // dropdown color tokens.
+    //
+    // CDXC:Theming 2026-06-15-13:22:
+    // Foreground is derived from background luminance, so the default foreground
+    // remains light for Dark Gray and flips to the dark foreground on light
+    // custom backgrounds.
+    //
+    // CDXC:Theming 2026-06-15-13:45:
+    // The custom background contrast slider defaults near Dark Gray and is
+    // restricted to dark applied values to avoid arbitrary bright color blends
+    // in sidebar rows.
+    //
+    // CDXC:Theming 2026-06-15-15:01:
+    // Clamp the slider to 85-100 per visual review; lighter values made the
+    // sidebar feel too gray.
+    //
+    // CDXC:Theming 2026-06-15-15:15:
+    // Keep this persisted field named darkness for compatibility while Settings
+    // labels the same control Background Contrast.
+    //
+    // CDXC:Theming 2026-06-15-15:28:
+    // The tint picker originally defaulted to neutral #808080. The tint
+    // algorithm now maps picker colors to very dark chrome backgrounds, so
+    // neutral same-channel tints do not change Dark Gray chrome.
+    //
+    // CDXC:Theming 2026-06-16-14:28:
+    // The custom chrome default is now 95 contrast with white #FFFFFF tint.
+    // Store the computed default background with those controls so Settings,
+    // native startup, and protocol snapshots agree.
+    //
+    // CDXC:Theming 2026-07-22:
+    // Default app chrome to neutral #808080 at 93 Background Contrast,
+    // resolving to #141414.
+    //
+    // CDXC:Theming 2026-09-08 SEE-ALSO:
+    // titlebar-color.ts owns the default matching the user's saved neutral #808080 tint at 96 contrast (#0b0b0b).
+    //
+    // Background Contrast and Background Tint are always-active Theming controls.
+    ("customSidebarTitlebarForegroundColor", J::Str("#d8d8d8")),
+    (
+        "customSidebarTitlebarBackgroundTintColor",
+        J::Str("#808080"),
+    ),
+    (
+        "customSidebarTitlebarBackgroundDarknessPercent",
+        J::Num(96.0),
+    ),
+    ("customSidebarTitlebarBackgroundColor", J::Str("#0b0b0b")),
+    ("darkThemePreset", J::Str("gray")),
+    ("lightThemePreset", J::Str("gray")),
+    ("themeSidebarContrast", J::Num(0.0)),
+    ("themeWorkAreaContrast", J::Num(0.0)),
+    (
+        "customSidebarTitlebarLightBackgroundTintColor",
+        J::Str("#808080"),
+    ),
+    (
+        "customSidebarTitlebarLightBackgroundLightnessPercent",
+        J::Num(96.0),
+    ),
+    (
+        "customSidebarTitlebarLightBackgroundColor",
+        J::Str("#f4f4f5"),
+    ),
+    // CDXC:Terminal 2026-05-22-12:29:
+    // New Ghostex terminals should default to the requested GitHub Dark terminal
+    // profile: JetBrains Mono 13pt, bar cursor with blink, wght=300, 20% cell
+    // height expansion, 15 MB scrollback, no copy-on-select, and one-to-one
+    // precision/discrete mouse scrolling.
+    ("terminalCursorStyle", J::Str("bar")),
+    ("terminalCursorStyleBlink", J::Bool(true)),
+    // macOS Metal terminal effect; ordinary rendering remains the default.
+    ("terminalShadersEnabled", J::Bool(false)),
+    // CDXC:PlatformSupport 2026-09-14 DECISION: User: make PowerShell the default Windows environment.
+    ("windowsTerminalBackend", J::Str("powershell")),
+    ("windowsWslDistribution", J::Str("")),
+    ("terminalFontFamily", J::Str("JetBrains Mono")),
+    ("terminalFontSize", J::Num(13.0)),
+    ("terminalFontWeight", J::Num(300.0)),
+    ("terminalColorScheme", J::Str("app")),
+    ("terminalGhosttyLightTheme", J::Str("GitHub Light Default")),
+    ("terminalGhosttyTheme", J::Str("GitHub Dark")),
+    ("terminalBackgroundImage", J::Str("")),
+    ("terminalBackgroundImageOpacity", J::Num(1.0)),
+    ("terminalBackgroundImageFit", J::Str("cover")),
+    ("terminalLetterSpacing", J::Num(0.0)),
+    ("terminalLineHeight", J::Num(1.2)),
+    ("terminalViewWidthMode", J::Str("full")),
+    ("terminalViewWidthPercent", J::Num(75.0)),
+    ("terminalWidthApplyToCommandPaneTerminals", J::Bool(false)),
+    ("terminalPaneHorizontalPaddingPx", J::Num(0.0)),
+    ("terminalPaneVerticalPaddingPx", J::Num(0.0)),
+    ("terminalMouseScrollMultiplierDiscrete", J::Num(1.0)),
+    ("terminalMouseScrollMultiplierPrecision", J::Num(1.0)),
+    ("terminalScrollToBottomWhenTyping", J::Bool(true)),
+    ("terminalScrollbackLimitMb", J::Num(15.0)),
+    ("terminalCopyOnSelect", J::Str("false")),
+    ("terminalConfirmCloseSurface", J::Str("true")),
+    ("terminalClipboardTrimTrailingSpaces", J::Bool(true)),
+    ("terminalClipboardPasteProtection", J::Bool(true)),
+    ("terminalPastePreviewableImages", J::Bool(true)),
+    ("terminalMouseHideWhileTyping", J::Bool(false)),
+    ("terminalScrollbar", J::Str("system")),
+    // CDXC:Resources 2026-06-23-19:22:
+    // New installs should discover local dev servers from terminal output and start with no ignored ports.
+    //
+    // CDXC:Navigation 2026-08-19:
+    // Where a detected URL opens is no longer a Dev Servers choice; it follows webLinkOpenTarget with every other web link.
+    ("terminalDevServerDetectionEnabled", J::Bool(true)),
+    ("terminalDevServerIgnoredPortRules", J::Arr(&[])),
+    // CDXC:Portless 2026-07-25:
+    // Keep the Portless settings contract available for a later return, but new
+    // and legacy settings snapshots must not opt into an app integration that is
+    // currently hidden and disabled.
+    ("portlessEnabled", J::Bool(false)),
+    ("portlessProtocol", J::Str("https")),
+    // CDXC:PromptEditor 2026-05-13-15:58
+    // Ctrl+G rich prompt editing originally defaulted to the floating Monaco editor.
+    //
+    // CDXC:PromptEditor 2026-05-25-11:31:
+    // Monaco is the out-of-the-box Ctrl+G prompt editor again. New installs should open the floating Monaco editor for local app terminals.
+    //
+    // CDXC:PromptEditor 2026-06-30-00:08:
+    // Settings must expose only Monaco and the user's machine default editor. Removed gte and custom selections migrate to inherit so Ctrl+G stops injecting a Ghostex-owned editor command when users choose the machine default path.
+    ("promptEditorBackend", J::Str("monaco")),
+    (
+        "hotkeys",
+        J::Obj(&[
+            ("scrollChatToBottom", J::Str("ctrl+shift+down")),
+            ("focusChatComposer", J::Str("")),
+            ("copyLastChatCodeBlock", J::Str("cmd+shift+;")),
+            ("copyLastChatReply", J::Str("cmd+shift+c")),
+            ("toggleChatSummaryMode", J::Str("ctrl+alt+s")),
+            ("createAgentSession", J::Str("cmd+shift+o")),
+            ("createSession", J::Str("cmd+shift+t")),
+            ("openCommandPalette", J::Str("cmd+shift+p")),
+            ("openSessionSearchPalette", J::Str("cmd+p")),
+            ("openProjectSearchPalette", J::Str("cmd+alt+shift+o")),
+            ("openNewThreadPalette", J::Str("cmd+n")),
+            ("openCommandsPanel", J::Str("cmd+j")),
+            ("openCommandsPanelSecondKey", J::Str("shift+escape")),
+            ("openSettings", J::Str("cmd+,")),
+            ("openExtensions", J::Str("")),
+            ("openGhostexHelp", J::Str("")),
+            ("openFileInFiles", J::Str("")),
+            ("openHotkeys", J::Str("cmd+/")),
+            ("toggleSidebarCollapsed", J::Str("cmd+b")),
+            ("toggleViewPanel", J::Str("cmd+alt+b")),
+            ("expandViewPanel", J::Str("cmd+ctrl+e")),
+            ("expandViewPanelFully", J::Str("cmd+ctrl+shift+e")),
+            ("renameActiveSession", J::Str("cmd+r")),
+            ("openBrowserPane", J::Str("cmd+t")),
+            ("switchAgentsView", J::Str("")),
+            ("switchSourceView", J::Str("")),
+            ("switchGitHubView", J::Str("")),
+            ("switchKanbanView", J::Str("")),
+            ("switchManageView", J::Str("")),
+            ("switchAutomateView", J::Str("")),
+            ("switchTerminalView", J::Str("")),
+            ("switchTitlebarView1", J::Str("alt+1")),
+            ("switchTitlebarView2", J::Str("alt+2")),
+            ("switchTitlebarView3", J::Str("alt+3")),
+            ("switchTitlebarView4", J::Str("alt+4")),
+            ("switchTitlebarView5", J::Str("alt+5")),
+            ("switchTitlebarView6", J::Str("alt+6")),
+            ("switchTitlebarView7", J::Str("alt+7")),
+            ("switchTitlebarView8", J::Str("alt+8")),
+            ("switchTitlebarView9", J::Str("alt+9")),
+            ("rotatePanesClockwise", J::Str("ctrl+shift+l")),
+            ("mergeAllTabs", J::Str("ctrl+shift+m")),
+            ("delayedSend", J::Str("ctrl+shift+s")),
+            ("closeAfterDone", J::Str("")),
+            ("openModelPicker", J::Str("alt+p")),
+            ("promptEditor", J::Str("ctrl+g")),
+            ("attachFileOrFolder", J::Str("cmd+alt+p")),
+            ("sessionNote", J::Str("cmd+alt+n")),
+            ("stashPrompt", J::Str("alt+s")),
+            ("stashedPrompts", J::Str("cmd+alt+s")),
+            ("exportTranscript", J::Str("cmd+alt+e")),
+            ("toggleAgentActions", J::Str("cmd+alt+a")),
+            ("toggleChatView", J::Str("alt+g")),
+            ("openFindPrompts", J::Str("cmd+shift+f")),
+            ("scrollTerminalToTop", J::Str("")),
+            ("scrollTerminalToBottom", J::Str("")),
+            ("splitSessionRight", J::Str("alt+shift+d")),
+            ("forkSession", J::Str("cmd+ctrl+shift+f")),
+            ("reloadSession", J::Str("")),
+            ("sleepFocusedSession", J::Str("cmd+shift+a")),
+            ("wakeFocusedSession", J::Str("")),
+            ("closeFocusedSession", J::Str("cmd+shift+backspace")),
+            ("popOutPane", J::Str("ctrl+shift+o")),
+            ("focusPreviousGroup", J::Str("")),
+            ("focusNextGroup", J::Str("")),
+            ("navigateHistoryBack", J::Str("cmd+[")),
+            ("navigateHistoryForward", J::Str("cmd+]")),
+            ("openNotifications", J::Str("cmd+i")),
+            ("jumpToLatestUnreadNotification", J::Str("cmd+shift+u")),
+            ("deferNotificationAndJumpNext", J::Str("cmd+ctrl+u")),
+            ("focusPreviousSession", J::Str("ctrl+shift+tab")),
+            ("focusNextSession", J::Str("ctrl+tab")),
+            ("focusPreviousPaneTab", J::Str("cmd+alt+[")),
+            ("focusNextPaneTab", J::Str("cmd+alt+]")),
+            ("focusUp", J::Str("cmd+alt+up")),
+            ("focusRight", J::Str("cmd+alt+right")),
+            ("focusDown", J::Str("cmd+alt+down")),
+            ("focusLeft", J::Str("cmd+alt+left")),
+            ("jumpToProject1", J::Str("cmd+ctrl+1")),
+            ("jumpToProject2", J::Str("cmd+ctrl+2")),
+            ("jumpToProject3", J::Str("cmd+ctrl+3")),
+            ("jumpToProject4", J::Str("cmd+ctrl+4")),
+            ("jumpToProject5", J::Str("cmd+ctrl+5")),
+            ("jumpToProject6", J::Str("cmd+ctrl+6")),
+            ("jumpToProject7", J::Str("cmd+ctrl+7")),
+            ("jumpToProject8", J::Str("cmd+ctrl+8")),
+            ("jumpToProject9", J::Str("cmd+ctrl+9")),
+            ("goToSpace1", J::Str("cmd+alt+shift+1")),
+            ("goToSpace2", J::Str("cmd+alt+shift+2")),
+            ("goToSpace3", J::Str("cmd+alt+shift+3")),
+            ("goToSpace4", J::Str("cmd+alt+shift+4")),
+            ("goToSpace5", J::Str("cmd+alt+shift+5")),
+            ("goToSpace6", J::Str("cmd+alt+shift+6")),
+            ("goToSpace7", J::Str("cmd+alt+shift+7")),
+            ("goToSpace8", J::Str("cmd+alt+shift+8")),
+            ("goToSpace9", J::Str("cmd+alt+shift+9")),
+            ("focusSessionSlot1", J::Str("cmd+1")),
+            ("focusSessionSlot2", J::Str("cmd+2")),
+            ("focusSessionSlot3", J::Str("cmd+3")),
+            ("focusSessionSlot4", J::Str("cmd+4")),
+            ("focusSessionSlot5", J::Str("cmd+5")),
+            ("focusSessionSlot6", J::Str("cmd+6")),
+            ("focusSessionSlot7", J::Str("cmd+7")),
+            ("focusSessionSlot8", J::Str("cmd+8")),
+            ("focusSessionSlot9", J::Str("cmd+9")),
+            ("runActionSlot1", J::Str("ctrl+shift+1")),
+            ("runActionSlot2", J::Str("ctrl+shift+2")),
+            ("runActionSlot3", J::Str("ctrl+shift+3")),
+            ("runActionSlot4", J::Str("ctrl+shift+4")),
+            ("runActionSlot5", J::Str("ctrl+shift+5")),
+            ("splitMore", J::Str("cmd+d")),
+            ("splitMoreDown", J::Str("cmd+shift+d")),
+        ]),
+    ),
+    ("showActivePaneOutline", J::Bool(false)),
+    ("workspaceActivePaneBorderColor", J::Str("#3b82f6")),
+    ("windowGlass", J::Str("auto")),
+    ("windowGlassSource", J::Str("desktopAndWindows")),
+    ("windowGlassImagePlacement", J::Str("static")),
+    ("windowGlassImageDark", J::Str("")),
+    ("windowGlassImageLight", J::Str("")),
+    ("windowGlassVideoDark", J::Str("")),
+    ("windowGlassVideoLight", J::Str("")),
+    ("windowGlassVideoOnlyOnPower", J::Bool(true)),
+    ("windowGlassLiveStyleDark", J::Str("aurora")),
+    ("windowGlassLiveStyleLight", J::Str("drift")),
+    ("windowGlassLiveSpeed", J::Num(1.0)),
+    ("windowGlassLiveBrightness", J::Num(60.0)),
+    ("windowGlassBlurRadius", J::Num(60.0)),
+    ("windowGlassMenuBlurRadius", J::Num(20.0)),
+    // CDXC:Theming 2026-10-04 DECISION:
+    // User: "please make the app's transparency level 10 by default (the slider in settings)". The four tints are the ones Settings' Strength slider writes at 10 (`transparencyStrengthPatch`), so the slider opens on 10; they replace the strength-20 tints 88, 81, 93 and 86.
+    // SEE-ALSO: apps/desktop/src/app/helpers/window_glass.rs, apps/desktop/src/app/window/onboarding/model.rs, apps/desktop/src/app/window/settings_modal/tabs/theme/colours.rs.
+    ("windowGlassSidebarOpacityDark", J::Num(94.0)),
+    ("windowGlassWorkAreaTintDark", J::Num(91.0)),
+    ("windowGlassSidebarOpacityLight", J::Num(97.0)),
+    ("windowGlassWorkAreaTintLight", J::Num(93.0)),
+    ("terminalBackgroundMode", J::Str("pure")),
+    ("workspaceBackgroundColor", J::Str("")),
+    ("clickToWakeSleepingSessions", J::Bool(true)),
+    ("dimSleepingSessions", J::Bool(false)),
+    ("wakeSleepingSessionsOnSelect", J::Bool(true)),
+    ("customViews", J::Arr(&[])),
+    ("customViewTemplates", J::Arr(&[])),
+    ("viewScopes", J::Obj(&[])),
+    ("titlebarViewOrder", J::Arr(&[])),
+    // CDXC:Titlebar 2026-05-11-00:22
+    // The titlebar Open In menu is configurable: built-in editor targets can be
+    // hidden and user-defined command targets can be appended without changing
+    // the default editor catalog.
+    ("customWorkspaceOpenTargets", J::Arr(&[])),
+    // CDXC:Titlebar 2026-05-11-02:03
+    // First launch starts with only ghostex/Open Folder until the native sidebar performs
+    // its one startup installed-target scan and persists the detected IDE list.
+    //
+    // CDXC:Titlebar 2026-06-04-13:39:
+    // The default folder target should be described with OS-agnostic Open File/Folder Location copy even though the persisted target id remains finder for compatibility.
+    (
+        "workspaceOpenTargetAvailability",
+        J::Obj(&[
+            ("availableTargetIds", J::Arr(&[J::Str("finder")])),
+            ("checkedAtMs", J::Num(0.0)),
+            ("resolvedAppNames", J::Obj(&[])),
+            ("resolvedCommands", J::Obj(&[])),
+        ]),
+    ),
+    ("workspaceOpenTargetHiddenIds", J::Arr(&[])),
+    // CDXC:Workarea 2026-05-30-07:24:
+    // The macOS app no longer exposes Pane Gap as a user setting. Keep the
+    // persisted field for settings compatibility, but normalize it to zero so
+    // native panes always render without configurable spacing.
+    ("workspacePaneGap", J::Num(0.0)),
+    ("remoteMachines", J::Arr(&[])),
+    ("remoteTailscaleEnabled", J::Bool(true)),
+    ("commandsPanelDefaultHeightPx", J::Num(125.0)),
+    ("commandsPanelSide", J::Str("bottom")),
+    ("commandsPanelAutoMinimize", J::Bool(true)),
+    ("commandsPanelAutoMinimizeDelaySeconds", J::Num(60.0)),
+];

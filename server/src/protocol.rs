@@ -186,6 +186,24 @@ pub struct ServerHealthResponse {
     pub server_id: String,
     pub started_at: String,
     pub tools: Vec<ToolCapabilityStatus>,
+    /// Windows only: how this daemon was started (`platform/launch_context.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_context: Option<LaunchContextReport>,
+}
+
+/// CDXC:PlatformSupport 2026-10-04 SEE-ALSO:
+/// The desktop app reads `limited` and `background` to replace a Windows gxserver started from SSH or session 0 (`gpui_local_gxserver_limited_launch` in apps/desktop/src/app/helpers/board_gxserver/gxserver_health_and_daemon.rs), and `gxserver start` reads them to replace it from a desktop hand-off.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchContextReport {
+    /// Started in session 0 or with a network logon (SSH).
+    pub background: bool,
+    /// `background`, or RedirectionGuard is enforced: agents under it cannot use junction-based tools.
+    pub limited: bool,
+    pub network_logon: Option<bool>,
+    pub redirection_trust_enforced: Option<bool>,
+    pub restricted_token: bool,
+    pub windows_session_id: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -378,10 +396,19 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         / session / agent ids the daemon itself published.
         */
         | "/api/switchDraftAgent"
+        // CDXC:AgentBox 2026-10-01 WHY: same reasoning as switchDraftAgent above; where a draft
+        // runs is decided by the daemon that owns the row and runs its CLI.
+        | "/api/draftRunLocation"
         // CDXC:AgentProviders 2026-09-03: same reasoning as switchDraftAgent
         // above; the resume command is built by the daemon that owns the row.
         | "/api/switchSessionAgent"
         | "/api/agentCliMaintenance"
+        | "/api/managedTools"
+        /*
+        CDXC:AgentBox 2026-10-01 WHY:
+        Remote-allowed like managedTools beside it: the boxes and the agentbox CLI belong to the machine that owns the project, so a client looking at a remote machine asks that machine. Setup commands come back as text gxserver chose, never text the caller supplied.
+        */
+        | "/api/agentbox"
         | "/api/agentAccounts"
         | "/api/readAgentLaunchPlan"
         | "/api/readAgentResumePlan"
@@ -479,6 +506,28 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         the other session-scoped lifecycle calls next to it.
         */
         | "/api/holdSessionsAwake"
+        /*
+        CDXC:Zmx 2026-10-08 WHY:
+        A chat shown on a remote machine's session claims that session's grid on the machine running it, like the keep-awake lease above. It carries only project/session ids, a holder id and a TTL.
+        */
+        | "/api/holdSessionChatGrid"
+        /*
+        CDXC:Coordinators 2026-09-30 WHY:
+        A coordinator and its threads live on the machine that runs them, so a
+        client looking at a remote machine reads and steers them there, like
+        the session calls around these. They carry project/session ids plus
+        bounded text (goal, instructions, one memory note).
+        */
+        | "/api/readCoordinator"
+        | "/api/readCoordinatorThreads"
+        | "/api/listCoordinators"
+        | "/api/updateCoordinator"
+        | "/api/linkCoordinatorThread"
+        | "/api/setCoordinatorThreadResolved"
+        | "/api/openCoordinatorThread"
+        | "/api/promoteCoordinator"
+        | "/api/toggleCloseAfterDone"
+        | "/api/openConversation"
         | "/api/sleepSession"
         | "/api/wakeSession"
         | "/api/startSessionProvider"
@@ -608,6 +657,7 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         | "/api/snoozeSession"
         | "/api/unsnoozeSession"
         | "/api/runGitAction"
+        | "/api/readProjectGitState"
         | "/api/runGitHubAction"
         | "/api/runWorktreeAction"
         | "/api/runProjectSetupCommand"
@@ -664,8 +714,95 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         | "/api/startExtension"
         | "/api/stopExtension"
         | "/api/extensionStatus"
-        | "/api/extensionBadge" => remote_allowed(path),
-        "/api/createQuickProject" => full_local(path),
+        | "/api/extensionBadge"
+        /*
+        CDXC:WorkMode 2026-10-09 WHY:
+        A sidebar showing a remote machine's projects can flip their Work mode switch and set a
+        session's links like any other session metadata; both take opaque project and session ids.
+        */
+        | "/api/setProjectWorkMode"
+        | "/api/setSessionWorkLinks"
+        // The Link to picker's suggestions and the merged-PR Clean up / Keep answer act on one
+        // session by its ids, like the links themselves.
+        | "/api/listWorkLinkCandidates"
+        | "/api/answerWorkCleanup"
+        /*
+        CDXC:WorkMode 2026-10-09 WHY:
+        Starting work on a ticket and creating a Linear ticket are remote-allowed like
+        createWorktreeSession: a sidebar showing a remote machine's projects starts work there. They
+        use that machine's Linear key without ever returning it, and take only opaque ids and text.
+        */
+        | "/api/startWorkOnTicket"
+        | "/api/createLinearIssue"
+        | "/api/listLinearTeams"
+        | "/api/listLinearProjects" => remote_allowed(path),
+        /*
+        CDXC:WorkMode 2026-10-09 WHY:
+        The Work page reads the daemon that owns the projects, like the sidebar: the list, a
+        ticket's details and its team flow take opaque ids and return what Linear and `gh` say,
+        never a key. Editing the team flow is a setting of this computer's.
+        */
+        "/api/listWorkItems" | "/api/readWorkItem" | "/api/readTeamFlow" => remote_allowed(path),
+        /*
+        CDXC:WorkMode 2026-10-09 WHY:
+        A remote sidebar creates a GitHub issue on the machine that owns the project, like a Linear
+        ticket, and closes the Work page's notice there. Reading and changing a workspace's tracker
+        is a setting of this computer's (a team workspace's choice goes through its member token).
+        */
+        "/api/createGithubIssue" | "/api/dismissWorkNotice" => remote_allowed(path),
+        "/api/readWorkTracker" | "/api/setWorkTracker" => full_local(path),
+        "/api/updateTeamFlow" => full_local(path),
+        /*
+        CDXC:WorkMode 2026-10-10 WHY:
+        A cloud session starts with this computer's own `claude` login and Git remote, and its
+        link is recorded on this computer, so only this computer's clients may draft or start one.
+        */
+        "/api/draftCloudWork" | "/api/startCloudWork" => full_local(path),
+        /*
+        CDXC:Workspaces 2026-10-09 WHY:
+        Workspaces belong to the daemon that owns the projects, exactly like its Spaces, so a
+        remote gxserver section reads and edits its own; the document carries only bounded ids,
+        names, letters, colors and an account id.
+        */
+        "/api/readWorkspaces"
+        | "/api/createWorkspace"
+        | "/api/updateWorkspace"
+        | "/api/deleteWorkspace"
+        | "/api/moveProjectToWorkspace"
+        | "/api/moveMachineToWorkspace" => remote_allowed(path),
+        /*
+        CDXC:WorkMode 2026-10-09 WHY:
+        The Linear key is a secret on this computer, so only this computer's clients may set it or
+        ask which keys exist.
+        */
+        "/api/setLinearApiKey" | "/api/readWorkModeStatus" => full_local(path),
+        /*
+        CDXC:TeamSync 2026-10-09 WHY:
+        These hold or use this computer's member token for the team's Convex project, so only this
+        computer's clients may call them; a remote sidebar gets its own machine's team data there.
+        */
+        "/api/joinTeamSync"
+        | "/api/connectTeamSync"
+        | "/api/leaveTeamSync"
+        | "/api/readTeamSyncStatus"
+        | "/api/createTeamSyncInvite"
+        | "/api/setTeamSyncIdentity"
+        | "/api/pingTeamSync"
+        | "/api/listTeamSyncCommands"
+        | "/api/listTicketSlackThreads"
+        | "/api/setTeamLinearKey"
+        | "/api/setOwnLinearKey"
+        | "/api/readSlackFlowSettings"
+        | "/api/setSlackFlowSettings"
+        | "/api/readSlackManifest"
+        | "/api/postSlackWorkingThread" => full_local(path),
+        "/api/createQuickProject" | "/api/syncBotProjects" => full_local(path),
+        /*
+        CDXC:Bots 2026-09-27 WHY:
+        The feed reads this computer's Hermes cron output, which holds whole
+        agent reports, so only the desktop on this computer may read it.
+        */
+        "/api/listBotFeed" => full_local(path),
         /*
         CDXC:Telemetry 2026-08-26:
         The desktop app's loopback analytics ping. Authenticated like every other
@@ -743,6 +880,7 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         */
         | "/api/generateCommitMessage"
         | "/api/createPullRequest"
+        | "/api/runGitShipWorkflow"
         | "/api/updatePortlessState"
         /*
         CDXC:RemotePairing 2026-09-01:
@@ -773,6 +911,18 @@ pub fn endpoint_for(path: &str) -> Option<EndpointDescriptor> {
         | "/api/pairedDeviceSeen"
         | "/api/queryLogs"
         | "/api/resolveGitRootForPath" => full_local(path),
+        /*
+        CDXC:Feedback 2026-10-04 WHY:
+        Sending feedback files a public GitHub issue through the Ghostex
+        relay, so only this computer's own app may ask for it; a remote
+        listener caller must never post issues in this user's name.
+        */
+        "/api/draftFeedback" | "/api/sendFeedback" => full_local(path),
+        /*
+        CDXC:ServerApi 2026-10-06 WHY:
+        `ghostex show` publishes a page an agent on this computer wrote, so only the loopback listener accepts it; the remote listener must not let another machine store pages that this gxserver then serves.
+        */
+        "/api/publishVisualPage" => full_local(path),
         /*
         CDXC:RemotePairing 2026-09-03:
         The only unauthenticated write endpoint. A phone registers its SSH key

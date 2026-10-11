@@ -63,10 +63,12 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use web_time::Instant;
 
 use futures::StreamExt as _;
 use image::Frame;
 
+use gpui::StatefulInteractiveElement as _;
 use gpui::{
     App, BorderStyle, Bounds, BoxShadow, ClipboardItem, ContentMask, Context, Corners, CursorStyle,
     DevicePixels, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
@@ -74,10 +76,10 @@ use gpui::{
     FontWeight, Global, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
     IntoElement, KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, Modifiers,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, RenderImage, Rgba, ScrollDelta, ScrollWheelEvent,
-    ShapedLine, SharedString, Size, StrikethroughStyle, Style, Styled, TextAlign, TextRun,
-    UTF16Selection, UnderlineStyle as GpuiUnderlineStyle, Window, canvas, div, fill, outline,
-    point, prelude::FluentBuilder as _, px, size,
+    ParentElement, Pixels, Point, Render, RenderImage, Rgba, ScrollWheelEvent, ShapedLine,
+    SharedString, Size, StrikethroughStyle, Style, Styled, TextAlign, TextRun, UTF16Selection,
+    UnderlineStyle as GpuiUnderlineStyle, Window, canvas, div, fill, outline, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use gpui_component::tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement, Tooltip};
 
@@ -85,11 +87,14 @@ use crate::ghostty_vt::{
     VtCellWide, VtDirty, VtKey, VtKeyAction, VtKeyInput, VtMods, VtMouseAction, VtMouseButton,
     VtMouseInput, VtScrollViewport, VtScrollbar, ffi,
 };
+use crate::support_logs::{self, GpuiDiagnosticScenario, GpuiSupportLog};
 use crate::terminal_model::{
     Rgb, SnapshotCell, SnapshotRow, TerminalConfirmCloseBehavior, TerminalEvent, TerminalEventSink,
-    TerminalExit, TerminalModel, TerminalPasteDiagnostic, TerminalSnapshot, TerminalSpawnConfig,
-    TerminalTextRow, UnderlineStyle as CellUnderline, WheelRoute,
+    TerminalExit, TerminalModel, TerminalSnapshot, TerminalSpawnConfig, TerminalTextRow,
+    UnderlineStyle as CellUnderline, WheelRoute,
 };
+use crate::terminal_scrollbar_reveal::ScrollbarReveal;
+use crate::terminal_wheel;
 
 gpui::actions!(
     ghostex_terminal,
@@ -98,8 +103,26 @@ gpui::actions!(
 
 pub(crate) const TERMINAL_KEY_CONTEXT: &str = "GhostexGpuiTerminal";
 const TERMINAL_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+/// How long a displayed zmx viewer holds its frame after a resize-and-claim.
+/// The hold ends once PTY output has been quiet for `ZMX_REFLOW_QUIET`, so the
+/// daemon's post-claim dump and the agent TUI's SIGWINCH redraw land in one
+/// paint, and at `ZMX_REFLOW_CAP` after the last claim at the latest. The quiet
+/// window must outlast the gap between the dump and the TUI's redraw (the dump
+/// alone is the daemon's reflow of the old width, where long border lines
+/// wrap) and the workarea's double layout pass on a session switch, where the
+/// pane settles to its final height about 150ms after its first layout and
+/// each layout claims again.
+const ZMX_REFLOW_QUIET: Duration = Duration::from_millis(250);
+const ZMX_REFLOW_CAP: Duration = Duration::from_millis(400);
+/// Longest a synchronized-output update (DECSET 2026) may defer painting, so a
+/// producer that never sends the closing reset cannot freeze the view.
+const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_millis(300);
 const TERMINAL_SCROLLBAR_THICKNESS: f32 = 5.0;
 const TERMINAL_SCROLLBAR_MIN_KNOB_HEIGHT: f32 = 24.0;
+/// Extra pointer room beside the track that keeps a revealed bar up while the
+/// pointer travels to it (ghostty's win32 apprt widens the track itself; the
+/// 5px app style is fixed, so only the hover region grows).
+const TERMINAL_SCROLLBAR_GUTTER_PADDING: f32 = 6.0;
 const TERMINAL_SCROLL_BUTTON_SIZE: f32 = 28.125;
 /// Edge inset for the terminal's remaining overlay chrome: scroll-to-top and
 /// scroll-to-bottom sit 13px in from the bottom-right pane edge.
@@ -108,121 +131,6 @@ const TERMINAL_BUTTON_GAP: f32 = 0.0;
 const TERMINAL_SCROLL_BUTTON_VISIBILITY_THRESHOLD: f32 = 200.0;
 const TERMINAL_SCROLL_BUTTON_MIN_WIDTH: f32 = 80.0;
 const TERMINAL_SCROLL_BUTTON_MIN_HEIGHT: f32 = 96.0;
-
-fn temporary_terminal_control_labels(bytes: &[u8]) -> Vec<&'static str> {
-    let mut controls = Vec::new();
-    if bytes.windows(5).any(|window| window == b"\x1b[27u") {
-        controls.push("kitty-escape");
-    } else if bytes == [0x1b] {
-        controls.push("raw-escape");
-    }
-    for (byte, label) in [
-        (0x03, "ctrl-c"),
-        (0x04, "ctrl-d"),
-        (0x15, "ctrl-u"),
-        (0x19, "ctrl-y"),
-        (0x1a, "ctrl-z"),
-        (0x1c, "ctrl-backslash"),
-    ] {
-        if bytes.contains(&byte) {
-            controls.push(label);
-        }
-    }
-    controls
-}
-
-fn log_temporary_terminal_control_write(model: &TerminalModel, source: &str, bytes: &[u8]) {
-    let controls = temporary_terminal_control_labels(bytes);
-    if controls.is_empty() {
-        return;
-    }
-    crate::support_logs::append_temporary(
-        crate::support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.gpui.sessionInterrupt.controlWrite",
-        serde_json::json!({
-            "byteLength": bytes.len(),
-            "childPid": model.diagnostic_child_pid(),
-            "controls": controls,
-            "source": source,
-        }),
-    );
-}
-
-fn install_terminal_paste_diagnostic_sink() {
-    crate::terminal_model::install_paste_diagnostic_sink(Arc::new(|diagnostic| {
-        let (event, details) = match diagnostic {
-            TerminalPasteDiagnostic::Encoded {
-                trace_id,
-                child_pid,
-                bracketed_paste,
-                source_byte_length,
-                source_contains_line_break,
-                source_contains_non_ascii,
-                encoded_byte_length,
-            } => (
-                "TEMP.gpui.remotePaste.encoded",
-                serde_json::json!({
-                    "bracketedPaste": bracketed_paste,
-                    "childPid": child_pid,
-                    "encodedByteLength": encoded_byte_length,
-                    "sourceByteLength": source_byte_length,
-                    "sourceContainsLineBreak": source_contains_line_break,
-                    "sourceContainsNonAscii": source_contains_non_ascii,
-                    "traceId": trace_id,
-                }),
-            ),
-            TerminalPasteDiagnostic::ChannelQueued {
-                trace_id,
-                child_pid,
-                success,
-                error_kind,
-            } => (
-                "TEMP.gpui.remotePaste.channelQueued",
-                serde_json::json!({
-                    "childPid": child_pid,
-                    "errorKind": error_kind.map(|kind| format!("{kind:?}")),
-                    "success": success,
-                    "traceId": trace_id,
-                }),
-            ),
-            TerminalPasteDiagnostic::PtyWriteStarted {
-                trace_id,
-                child_pid,
-                encoded_byte_length,
-            } => (
-                "TEMP.gpui.remotePaste.ptyWriteStarted",
-                serde_json::json!({
-                    "childPid": child_pid,
-                    "encodedByteLength": encoded_byte_length,
-                    "traceId": trace_id,
-                }),
-            ),
-            TerminalPasteDiagnostic::PtyWriteCompleted {
-                trace_id,
-                child_pid,
-                duration_micros,
-                stage,
-                success,
-                error_kind,
-            } => (
-                "TEMP.gpui.remotePaste.ptyWriteCompleted",
-                serde_json::json!({
-                    "childPid": child_pid,
-                    "durationMicros": duration_micros,
-                    "errorKind": error_kind.map(|kind| format!("{kind:?}")),
-                    "stage": stage,
-                    "success": success,
-                    "traceId": trace_id,
-                }),
-            ),
-        };
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            event,
-            details,
-        );
-    }));
-}
 
 /// Terminal font configuration used for cell metrics and run shaping.
 /// TODO(P1e): sync from the app's terminal settings (shared_settings
@@ -324,7 +232,13 @@ pub struct TerminalViewSettings {
     /// Carry the resolved terminal appearance so these controls follow the terminal's override independently of the app theme.
     pub light_theme: bool,
     pub cursor_shape: TerminalCursorShape,
+    #[cfg(target_os = "macos")]
+    pub shaders: Option<crate::terminal_shaders::TerminalShaderSettings>,
     pub background_image: Option<TerminalBackgroundImage>,
+    /// How much of the default background the pane paints itself; window glass sets it to 0 so the
+    /// frosted surface behind the pane shows through. Cells with an explicit background still
+    /// paint it in full.
+    pub background_alpha: f32,
     pub cursor_blink: bool,
     pub cursor_opacity: f32,
     pub cursor_text: Option<TerminalConfiguredColor>,
@@ -348,7 +262,10 @@ impl Default for TerminalViewSettings {
         Self {
             light_theme: false,
             cursor_shape: TerminalCursorShape::Block,
+            #[cfg(target_os = "macos")]
+            shaders: None,
             background_image: None,
+            background_alpha: 1.0,
             cursor_blink: false,
             cursor_opacity: 1.0,
             cursor_text: None,
@@ -502,6 +419,7 @@ struct RowLayout {
     bg_spans: Vec<CellSpan>,
     overline_spans: Vec<CellSpan>,
     runs: Vec<PositionedRun>,
+    graphics: Vec<(Bounds<Pixels>, Hsla)>,
 }
 
 struct CursorLayout {
@@ -559,12 +477,56 @@ pub struct TerminalLayout {
     scrollbar: Option<ScrollbarLayout>,
 }
 
+impl TerminalLayout {
+    /// A layout that paints only the pane background: no cells, cursor or overlays.
+    fn background_only(metrics: CellMetrics, background: Hsla) -> Self {
+        Self {
+            metrics,
+            background,
+            rows: Vec::new(),
+            selection_spans: Vec::new(),
+            search_spans: Vec::new(),
+            link_underline: None,
+            cursor: None,
+            marked_text: None,
+            scrollbar: None,
+        }
+    }
+}
+
 pub type TerminalContextMenuHandler = Box<dyn Fn(Point<Pixels>, bool, &mut Window, &mut App)>;
 
 /// Called after this view writes the clipboard for the user (copy on select,
 /// Cmd+C, OSC 52). The element stays host-agnostic: the app installs the copy
 /// sound here, and the standalone demo binary installs nothing.
-pub type TerminalCopyHandler = Box<dyn Fn()>;
+pub type TerminalCopyHandler = Box<dyn Fn(&mut App)>;
+
+/// The armed reflow hold of a displayed zmx viewer (`TerminalView::zmx_reflow_hold`).
+struct ZmxReflowHold {
+    /// Identifies this hold to its settle timer, so a timer armed for an
+    /// earlier hold does nothing.
+    token: u64,
+    /// When the hold ends regardless of output: `ZMX_REFLOW_CAP` after the
+    /// latest claim.
+    deadline: web_time::Instant,
+    /// The latest claim or PTY output; the hold settles `ZMX_REFLOW_QUIET`
+    /// after it.
+    last_activity: web_time::Instant,
+    /// Paint only the background while held: the viewer has no frame that
+    /// shows current content at the grid last on screen (a new viewer, output
+    /// that arrived while parked, or a frame taken at the chat width).
+    blank: bool,
+}
+
+/// Viewport a zmx viewer had before it parked at another grid
+/// (`TerminalView::parked_viewport`).
+#[derive(Clone, Copy)]
+struct ParkedViewport {
+    cols: u16,
+    rows: u16,
+    offset: u64,
+    at_bottom: bool,
+}
 
 /// Entity that owns a live terminal: the P1b model, the latest snapshot, and
 /// the shaped-row cache. Rendered by [`TerminalElement`]; its own `Render`
@@ -582,6 +544,8 @@ pub struct TerminalView {
     exit: Option<TerminalExit>,
     pub cursor_shape: TerminalCursorShape,
     settings: TerminalViewSettings,
+    #[cfg(target_os = "macos")]
+    shader_state: crate::terminal_shaders::TerminalShaderState,
     /// Selection over viewport cells, driven by the mouse handlers below.
     pub selection: Option<TerminalSelection>,
     /// IME marked (pre-edit) text drawn at the cursor, driven by the
@@ -592,6 +556,9 @@ pub struct TerminalView {
     /// client and keeps owning editing keys mid-composition, and places the
     /// caret inside the preedit overlay.
     marked_selection_utf16: Option<Range<usize>>,
+    /// CDXC:Terminal 2026-09-27 WHY:
+    /// Windows dead keys need both the accent and the following text key to reach TranslateMessage; encoding the following key directly would leave Windows' dead-key state pending even after sending the composed character.
+    pending_character_input: bool,
     focus_handle: FocusHandle,
     /// Focus state as of the last prepaint; edges send focus reports
     /// (mode 1004) and switch the cursor to hollow.
@@ -606,10 +573,13 @@ pub struct TerminalView {
     /// and release goes to the PTY even if modes change mid-drag.
     reporting_drag: bool,
     left_button_down: bool,
-    /// Fractional wheel rows not yet dispatched (trackpad smoothness).
-    wheel_accum: f32,
-    /// Runtime scrollbar reveal state for hovering or dragging the terminal.
-    scrollbar_visible: bool,
+    /// Sub-row wheel distance not yet dispatched (trackpad smoothness).
+    wheel_accum: terminal_wheel::WheelAccumulator,
+    /// Scroll-activity reveal state for the overlay scrollbar
+    /// ([`terminal_scrollbar_reveal`]).
+    scrollbar_reveal: ScrollbarReveal,
+    /// A fade/auto-hide driver is running for `scrollbar_reveal`.
+    scrollbar_reveal_driving: bool,
     scrollbar_drag_offset: Option<f32>,
     terminal_bounds: Option<Bounds<Pixels>>,
     scroll_button_visibility: TerminalScrollButtonVisibility,
@@ -628,7 +598,42 @@ pub struct TerminalView {
     /// (CDXC:Terminal 2026-09-03).
     pending_zmx_visible_announce: bool,
     zmx_visibility_claims_enabled: bool,
+    /// CDXC:Zmx 2026-09-19 WHY:
+    /// A parked terminal sits at the zmx resting grid, so the first prepaint of a displayed slot resizes it and claims the grid, and the daemon resizes the session. A held "next tab" key passed one such terminal per key repeat. While the app holds the claim (the selection is still moving, app/gx_store/burst.rs) the prepaint keeps the parked grid and claims nothing; the app releases the hold when the selection settles, and the next prepaint resizes and claims once.
+    zmx_grid_claim_held: bool,
+    /// CDXC:Zmx 2026-09-25 WHY:
+    /// Resizing a displayed zmx viewer used to paint the local VT reflow at once, and the daemon's post-claim refresh overwrote it a few frames later; the two reflows diverge (loop.zig handleVisibility), and the agent TUI's SIGWINCH redraw arrives as a third, separate burst, so every sidebar toggle, chat-to-terminal flip and viewer respawn showed several different screens.
+    /// While a hold is armed the viewer keeps painting the frame it last showed at its previous grid (or only its background when it has no such frame, see `ZmxReflowHold::blank`), wakeups only record activity, and one refresh lands once output has been quiet for `ZMX_REFLOW_QUIET` or `ZMX_REFLOW_CAP` after the latest claim.
+    /// This replaced a separate first-frame mount gate in the host, which kept a new viewer out of layout, so its first claim waited for the gate and the agent ran at the 80x24 spawn grid meanwhile.
+    /// Terminals without zmx visibility claims refresh immediately, as before.
+    zmx_reflow_hold: Option<ZmxReflowHold>,
+    /// Monotonic token for `ZmxReflowHold::token`.
+    zmx_reflow_hold_seq: u64,
+    /// The grid of the latest prepaint: what a displayed slot last showed. Only a
+    /// frame taken at this grid may stand in during a reflow hold.
+    displayed_grid: Option<(u16, u16)>,
+    /// Diagnostic Terminal-focus scenario: sequence number of logged frames.
+    diagnostic_frame_seq: u64,
+    /// CDXC:Terminal 2026-09-25 WHY:
+    /// A producer that wraps a redraw in synchronized output (DECSET 2026) asks the terminal not to paint until the matching reset: the zmx refresh dump does, and so do agent TUIs that stream a frame over several PTY reads. Refreshing mid-update painted half-drawn screens.
+    /// This is when the mode was first seen active, bounded by `SYNCHRONIZED_OUTPUT_TIMEOUT`: past the bound the view paints normally until the mode resets, the way Ghostty expires a stuck mode.
+    synchronized_output_since: Option<web_time::Instant>,
+    /// CDXC:Zmx 2026-09-25 WHY:
+    /// A viewer that parks at another grid (chat mode claims the 200-column resting width) reflows its local grid, and the redisplay reflow anchors at the bottom, so a viewer scrolled up into scrollback came back at the wrong scroll position.
+    /// The viewport is saved when it first parks at another grid and restored by the first redisplay whose grid matches it; a redisplay at another size drops it.
+    parked_viewport: Option<ParkedViewport>,
+    /// CDXC:Terminal 2026-09-18 WHY:
+    /// Every PTY wakeup used to refresh the grid snapshot and notify, and gpui redraws the whole window on any notify, so a hidden agent terminal streaming output behind its chat view redrew the window on every chunk.
+    /// A parked or chat-mode terminal only marks its snapshot stale; the next prepaint of a displayed slot takes the fresh frame. Titles and pwd still sync so the sidebar stays current.
+    displayed: bool,
+    snapshot_stale: bool,
+    last_prepaint: Option<web_time::Instant>,
+    /// While a panel slides: the size this terminal first had in the slide, and whether it has
+    /// changed since (`grid_resize_held`).
+    motion_bounds: Option<(Size<Pixels>, bool)>,
 }
+
+pub(crate) use crate::hotkey_label::terminal_overlay_hotkey_chord_label;
 
 impl TerminalView {
     /// Spawn the configured process and start pumping model events onto the
@@ -657,7 +662,6 @@ impl TerminalView {
         TerminalEventSink,
         futures::channel::mpsc::UnboundedReceiver<TerminalEvent>,
     ) {
-        install_terminal_paste_diagnostic_sink();
         let (event_tx, event_rx) = futures::channel::mpsc::unbounded::<TerminalEvent>();
         let sink: TerminalEventSink = Arc::new(move |event| {
             let _ = event_tx.unbounded_send(event);
@@ -723,9 +727,12 @@ impl TerminalView {
             exit: None,
             cursor_shape: TerminalCursorShape::Block,
             settings: TerminalViewSettings::default(),
+            #[cfg(target_os = "macos")]
+            shader_state: Default::default(),
             selection: None,
             marked_text: None,
             marked_selection_utf16: None,
+            pending_character_input: false,
             focus_handle: cx.focus_handle(),
             focused: false,
             last_modifiers: Modifiers::default(),
@@ -735,8 +742,9 @@ impl TerminalView {
             drag: None,
             reporting_drag: false,
             left_button_down: false,
-            wheel_accum: 0.,
-            scrollbar_visible: false,
+            wheel_accum: terminal_wheel::WheelAccumulator::default(),
+            scrollbar_reveal: ScrollbarReveal::default(),
+            scrollbar_reveal_driving: false,
             scrollbar_drag_offset: None,
             terminal_bounds: None,
             scroll_button_visibility: TerminalScrollButtonVisibility::default(),
@@ -747,6 +755,17 @@ impl TerminalView {
             search: None,
             pending_zmx_visible_announce: false,
             zmx_visibility_claims_enabled: false,
+            zmx_grid_claim_held: false,
+            zmx_reflow_hold: None,
+            zmx_reflow_hold_seq: 0,
+            displayed_grid: None,
+            diagnostic_frame_seq: 0,
+            synchronized_output_since: None,
+            parked_viewport: None,
+            displayed: true,
+            snapshot_stale: false,
+            last_prepaint: None,
+            motion_bounds: None,
         }
     }
 
@@ -765,6 +784,7 @@ impl TerminalView {
         self.focused = false;
         self.pending_zmx_visible_announce = false;
         self.zmx_visibility_claims_enabled = false;
+        self.zmx_reflow_hold = None;
         self.frame = None;
         self.row_cache = Vec::new();
         self.cached_metrics = None;
@@ -775,6 +795,7 @@ impl TerminalView {
         self.hover_cell = None;
         self.hovered_link = None;
         self.drag = None;
+        self.scrollbar_reveal.reset();
         self.model.release_viewer_emulator();
     }
 
@@ -798,20 +819,58 @@ impl TerminalView {
         self.pending_zmx_visible_announce
     }
 
+    /// Holds or releases the prepaint's grid resize and `ZMX_VISIBLE` claim (see `zmx_grid_claim_held`).
+    /// Returns whether that changed, so the caller can ask for the prepaint that acts on it.
+    pub fn set_zmx_grid_claim_held(&mut self, held: bool) -> bool {
+        std::mem::replace(&mut self.zmx_grid_claim_held, held) != held
+    }
+
+    /// Whether the app currently shows this terminal in a slot; hidden terminals stop redrawing the window on output.
+    /// Returns whether that changed, so the caller can ask for the prepaint that acts on it.
+    pub fn set_displayed(&mut self, displayed: bool) -> bool {
+        std::mem::replace(&mut self.displayed, displayed) != displayed
+    }
+
     /// Resize the cell grid outside a layout pass, keeping the cell pixel
-    /// sizes the last prepaint established. Used to park a hidden terminal
-    /// at the zmx resting width; the next prepaint of a displayed slot
-    /// resizes back to the real bounds. Cancels a pending visible announce:
-    /// a parked terminal must not claim the grid.
+    /// sizes the last prepaint established. Used when a zmx viewer leaves its
+    /// displayed slot (chat mode parks it at the resting width); the next
+    /// prepaint of a displayed slot resizes back to the real bounds. Cancels a
+    /// pending visible announce and any reflow hold: a parked terminal must
+    /// not claim the grid.
+    ///
+    /// The painted snapshot is not refreshed here, so the frame keeps the
+    /// content last shown on screen; the redisplay's reflow hold decides
+    /// whether it may stand in (`ZmxReflowHold::blank`).
     pub fn resize_grid(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
         self.pending_zmx_visible_announce = false;
+        self.zmx_reflow_hold = None;
         if (cols, rows) == self.model.size() {
             return;
         }
+        if self.parked_viewport.is_none() {
+            let (grid_cols, grid_rows) = self.model.size();
+            self.parked_viewport = self.model.scrollbar().ok().map(|scrollbar| ParkedViewport {
+                cols: grid_cols,
+                rows: grid_rows,
+                offset: scrollbar.offset,
+                at_bottom: scrollbar.offset + scrollbar.len >= scrollbar.total,
+            });
+        }
         let _ = self.model.resize_grid(cols, rows);
         self.row_cache.clear();
-        self.refresh_snapshot();
         cx.notify();
+    }
+
+    /// Consume the viewport saved when the viewer parked: re-apply it if the
+    /// grid is back at the size it was saved at, otherwise drop it. A viewer
+    /// that followed the bottom keeps following it.
+    fn restore_parked_viewport(&mut self) {
+        let Some(parked) = self.parked_viewport.take() else {
+            return;
+        };
+        if (parked.cols, parked.rows) == self.model.size() && !parked.at_bottom {
+            self.model.scroll_viewport_to_row(parked.offset);
+        }
     }
 
     pub fn paste_requires_confirmation(&mut self, text: &str) -> bool {
@@ -825,18 +884,33 @@ impl TerminalView {
         self.copy_handler = Some(handler);
     }
 
-    fn notify_copied(&self) {
+    fn notify_copied(&self, cx: &mut App) {
         if let Some(handler) = &self.copy_handler {
-            handler();
+            handler(cx);
         }
     }
 
     pub fn apply_settings(&mut self, settings: TerminalViewSettings) {
+        #[cfg(target_os = "macos")]
+        if self.settings.shaders != settings.shaders {
+            // A re-enabled or replaced chain starts with fresh cursor/focus
+            // history, so its first frame cannot trail from stale coordinates.
+            self.shader_state = crate::terminal_shaders::TerminalShaderState::default();
+        }
         self.cursor_shape = settings.cursor_shape;
         self.cursor_blink_visible = true;
         self.settings = settings;
         self.cached_metrics = None;
         self.row_cache.fill(None);
+    }
+
+    /// CDXC:Theming 2026-09-16 DECISION:
+    /// User: refresh all terminals after app or terminal theme changes that affect terminal appearance.
+    /// Updating the model's colors alone leaves the displayed snapshot stale until the next PTY output, which idle terminals may never produce.
+    pub fn refresh_appearance(&mut self, cx: &mut Context<Self>) {
+        self.row_cache.fill(None);
+        self.refresh_snapshot();
+        cx.notify();
     }
 
     pub fn apply_font(&mut self, font: TerminalFontConfig) {
@@ -956,9 +1030,28 @@ impl TerminalView {
         }
         match event {
             TerminalEvent::Wakeup => {
-                self.refresh_snapshot();
+                // Titles still sync while a refresh waits, so the sidebar stays current.
                 self.sync_title_and_pwd(cx);
-                cx.notify();
+                if let Some(hold) = self.zmx_reflow_hold.as_mut() {
+                    // The daemon's dump and the TUI's redraw are still landing: the
+                    // hold's settle timer reads this and waits out the quiet window.
+                    hold.last_activity = web_time::Instant::now();
+                    self.snapshot_stale = true;
+                    return;
+                }
+                if self.synchronized_output_defers_refresh(cx) {
+                    self.snapshot_stale = true;
+                    return;
+                }
+                let drawn_recently = self
+                    .last_prepaint
+                    .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1));
+                if self.displayed || drawn_recently {
+                    self.refresh_snapshot();
+                    cx.notify();
+                } else {
+                    self.snapshot_stale = true;
+                }
             }
             TerminalEvent::Exited(exit) => {
                 // Contents stay readable after exit; the final Wakeup may
@@ -977,10 +1070,122 @@ impl TerminalView {
             TerminalEvent::ClipboardWriteRequested => {
                 for text in self.model.take_clipboard_write_requests() {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.notify_copied();
+                    self.notify_copied(cx);
                 }
             }
         }
+    }
+
+    /// Whether a refresh now would paint a synchronized-output update that has
+    /// not finished (`synchronized_output_since`). The first sighting of the
+    /// mode arms a repaint at the bound, so the final screen shows even when
+    /// no further output arrives to wake the view.
+    fn synchronized_output_defers_refresh(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self
+            .model
+            .mode_active(ffi::GHOSTTY_MODE_SYNCHRONIZED_OUTPUT)
+        {
+            self.synchronized_output_since = None;
+            return false;
+        }
+        if let Some(since) = self.synchronized_output_since {
+            return since.elapsed() < SYNCHRONIZED_OUTPUT_TIMEOUT;
+        }
+        self.synchronized_output_since = Some(web_time::Instant::now());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(SYNCHRONIZED_OUTPUT_TIMEOUT)
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.snapshot_stale && view.displayed {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        true
+    }
+
+    /// Arm a reflow hold for the claim this prepaint just wrote, or extend the
+    /// one already armed: a hold that is still waiting keeps its stand-in
+    /// decision and its settle timer, so consecutive layouts (the workarea's
+    /// double pass, a divider drag) swap once, after the last of them.
+    fn arm_zmx_reflow_hold(&mut self, blank: bool, cx: &mut Context<Self>) {
+        let now = web_time::Instant::now();
+        if let Some(hold) = self.zmx_reflow_hold.as_mut() {
+            hold.deadline = now + ZMX_REFLOW_CAP;
+            hold.last_activity = now;
+            return;
+        }
+        self.zmx_reflow_hold_seq += 1;
+        let token = self.zmx_reflow_hold_seq;
+        self.zmx_reflow_hold = Some(ZmxReflowHold {
+            token,
+            deadline: now + ZMX_REFLOW_CAP,
+            last_activity: now,
+            blank,
+        });
+        if support_logs::scenario_enabled(GpuiDiagnosticScenario::TerminalFocus) {
+            let (cols, rows) = self.model.size();
+            support_logs::append(
+                GpuiSupportLog::TerminalFocus,
+                "reflowHoldArmed",
+                serde_json::json!({"token": token, "cols": cols, "rows": rows, "blank": blank}),
+            );
+        }
+        self.schedule_zmx_reflow_settle(token, ZMX_REFLOW_QUIET, cx);
+    }
+
+    fn schedule_zmx_reflow_settle(&self, token: u64, after: Duration, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(after).await;
+            let _ = this.update(cx, |view, cx| view.settle_zmx_reflow_hold(token, cx));
+        })
+        .detach();
+    }
+
+    /// End the reflow hold `token` once output has been quiet for
+    /// `ZMX_REFLOW_QUIET` (the dump and the TUI redraw are both in) or its
+    /// deadline has passed, with one refresh from the held frame to the final
+    /// grid. Otherwise wait until the earlier of the two and check again.
+    fn settle_zmx_reflow_hold(&mut self, token: u64, cx: &mut Context<Self>) {
+        let Some((deadline, last_activity)) = self
+            .zmx_reflow_hold
+            .as_ref()
+            .filter(|hold| hold.token == token)
+            .map(|hold| (hold.deadline, hold.last_activity))
+        else {
+            return;
+        };
+        let now = web_time::Instant::now();
+        let quiet_at = last_activity + ZMX_REFLOW_QUIET;
+        if now < deadline && now < quiet_at {
+            let wait = quiet_at.min(deadline) - now;
+            self.schedule_zmx_reflow_settle(token, wait, cx);
+            return;
+        }
+        if now < deadline && self.synchronized_output_defers_refresh(cx) {
+            // Quiet in the middle of a synchronized update: its end, or the
+            // deadline, settles the hold.
+            let wait = SYNCHRONIZED_OUTPUT_TIMEOUT.min(deadline - now);
+            self.schedule_zmx_reflow_settle(token, wait, cx);
+            return;
+        }
+        self.zmx_reflow_hold = None;
+        // The viewport restore lands before the refresh: the settled frame is
+        // the first one shown after the hold and must be at the right scroll.
+        self.restore_parked_viewport();
+        self.row_cache.clear();
+        self.snapshot_stale = false;
+        self.refresh_snapshot();
+        if support_logs::scenario_enabled(GpuiDiagnosticScenario::TerminalFocus) {
+            support_logs::append(
+                GpuiSupportLog::TerminalFocus,
+                "reflowHoldSettled",
+                serde_json::json!({"token": token}),
+            );
+        }
+        cx.notify();
     }
 
     /// Re-read title/pwd from the terminal and emit only actual changes.
@@ -1031,9 +1236,60 @@ impl TerminalView {
                 }
             }
         }
+        if support_logs::scenario_enabled(GpuiDiagnosticScenario::TerminalFocus) {
+            self.log_diagnostic_frame(&frame);
+        }
+        /*
+        CDXC:Terminal 2026-09-28 WHY:
+        A selection is stored in absolute rows of the screen it was made on, and ghostty keeps one per screen. Switching between the primary and alternate screens (Codex's fullscreen view entering or quitting, Claude Code the same) left it highlighting and copying rows of the other screen, so it is dropped when the active screen changes.
+        */
+        if self
+            .frame
+            .as_ref()
+            .is_some_and(|previous| previous.alternate_screen != frame.alternate_screen)
+        {
+            self.selection = None;
+            self.drag = None;
+        }
         self.frame = Some(frame);
+        #[cfg(target_os = "macos")]
+        self.shader_state.invalidate();
         self.recompute_search_matches();
         self.update_scroll_button_visibility();
+    }
+
+    /// Terminal-focus diagnostic scenario: log a fingerprint of this frame
+    /// (sizes, scroll offset, cursor row and a content hash, never the
+    /// content) so a trace ties each painted screen to the output behind it.
+    fn log_diagnostic_frame(&mut self, frame: &TerminalSnapshot) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        for row in &frame.rows {
+            for cell in &row.cells {
+                cell.base.hash(&mut hasher);
+            }
+        }
+        self.diagnostic_frame_seq += 1;
+        let pane_px = self
+            .terminal_bounds
+            .map(|bounds| (bounds.size.width.as_f32(), bounds.size.height.as_f32()));
+        let cell_px = self
+            .cached_metrics
+            .map(|metrics| (metrics.cell_width.as_f32(), metrics.line_height.as_f32()));
+        support_logs::append(
+            GpuiSupportLog::TerminalFocus,
+            "terminalFrame",
+            serde_json::json!({
+                "seq": self.diagnostic_frame_seq,
+                "cols": frame.cols,
+                "rowCount": frame.rows.len(),
+                "offset": frame.scrollbar.offset,
+                "cursorRow": frame.cursor.map(|(_, row)| row),
+                "contentHash": hasher.finish(),
+                "panePx": pane_px,
+                "cellPx": cell_px,
+            }),
+        );
     }
 
     fn update_scroll_button_visibility(&mut self) -> bool {
@@ -1091,6 +1347,7 @@ impl TerminalView {
             TerminalScrollEdge::Top => VtScrollViewport::Top,
             TerminalScrollEdge::Bottom => VtScrollViewport::Bottom,
         });
+        self.note_scrollbar_activity(cx);
         self.refresh_snapshot();
         cx.notify();
     }
@@ -1181,6 +1438,7 @@ impl TerminalView {
             .unwrap_or(1);
         self.model
             .scroll_viewport_to_row(row.saturating_sub(viewport_len / 2));
+        self.note_scrollbar_activity(cx);
         self.refresh_snapshot();
         cx.notify();
     }
@@ -1231,17 +1489,29 @@ impl TerminalView {
         */
         if self.input_suppressed {
             if keystroke.key == "escape" && !modifiers.modified() {
-                crate::support_logs::append_temporary(
-                    crate::support_logs::GpuiSupportLog::TerminalFocus,
-                    "TEMP.gpui.sessionInterrupt.titleCancelKey",
-                    serde_json::json!({
-                        "childPid": self.model.diagnostic_child_pid(),
-                        "held": event.is_held,
-                    }),
-                );
                 cx.emit(TerminalViewEvent::FirstPromptTitleGenerationCancelRequested);
             }
             cx.stop_propagation();
+            return;
+        }
+
+        // The web host receives clipboard data through the browser's trusted
+        // paste event. Let Shift+Insert reach that event instead of the PTY.
+        #[cfg(target_arch = "wasm32")]
+        if keystroke.key == "insert"
+            && modifiers.shift
+            && !modifiers.control
+            && !modifiers.platform
+            && !modifiers.alt
+            && !modifiers.function
+        {
+            return;
+        }
+
+        if keystroke.key_char.is_some()
+            && (event.prefer_character_input || self.pending_character_input)
+        {
+            self.pending_character_input = true;
             return;
         }
 
@@ -1409,23 +1679,6 @@ impl TerminalView {
         };
         let kitty_keyboard_flags = self.model.kitty_keyboard_flags();
         let accepted = self.model.send_key(&input);
-        if keystroke.key == "escape"
-            || (modifiers.control && matches!(keystroke.key.as_str(), "c" | "d" | "z" | "\\"))
-        {
-            crate::support_logs::append_temporary(
-                crate::support_logs::GpuiSupportLog::TerminalFocus,
-                "TEMP.gpui.sessionInterrupt.physicalKey",
-                serde_json::json!({
-                    "accepted": accepted,
-                    "childPid": self.model.diagnostic_child_pid(),
-                    "control": modifiers.control,
-                    "held": event.is_held,
-                    "key": keystroke.key,
-                    "kittyKeyboardFlags": kitty_keyboard_flags,
-                    "markedTextActive": self.marked_text.is_some(),
-                }),
-            );
-        }
         /*
         CDXC:SessionTitles 2026-07-26:
         The agent-cancel side band reports Escape only when Escape is actually
@@ -1479,6 +1732,18 @@ impl TerminalView {
     fn handle_key_up(&mut self, event: &KeyUpEvent) {
         let keystroke = &event.keystroke;
         self.last_modifiers = keystroke.modifiers;
+        // Shift+Insert's press went to the browser paste event, so its release
+        // must not reach the PTY either.
+        #[cfg(target_arch = "wasm32")]
+        if keystroke.key == "insert"
+            && keystroke.modifiers.shift
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.function
+        {
+            return;
+        }
         if terminal_word_navigation_input(keystroke).is_some() {
             return;
         }
@@ -1531,14 +1796,7 @@ impl TerminalView {
     /// borrowed platform string is written immediately and never retained
     /// (AppKit reuses IME insert buffers; gpui also copies before this).
     fn commit_ime_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedImeCommit",
-            serde_json::json!({
-                "inputSuppressed": self.input_suppressed,
-                "text": crate::support_logs::temporary_fluid_voice_text_shape(text),
-            }),
-        );
+        self.pending_character_input = false;
         if self.input_suppressed {
             self.marked_text = None;
             self.marked_selection_utf16 = None;
@@ -1558,18 +1816,9 @@ impl TerminalView {
     /// Host-initiated literal text input (prompt sends, rename flows):
     /// bytes go straight to the PTY like typed text.
     pub fn send_text_input(&mut self, text: &str, cx: &mut Context<Self>) {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedLiteralText",
-            serde_json::json!({
-                "inputSuppressed": self.input_suppressed,
-                "text": crate::support_logs::temporary_fluid_voice_text_shape(text),
-            }),
-        );
         if text.is_empty() {
             return;
         }
-        log_temporary_terminal_control_write(&self.model, "host-literal-text", text.as_bytes());
         let _ = self.model.write_input(text.as_bytes());
         self.after_send_input(cx);
     }
@@ -1580,15 +1829,6 @@ impl TerminalView {
     /// only in-memory copy of the text (the chat → terminal draft handoff)
     /// can keep it until the write is confirmed instead of before it.
     pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedPaste",
-            serde_json::json!({
-                "childPid": self.model.diagnostic_child_pid(),
-                "inputSuppressed": self.input_suppressed,
-                "text": crate::support_logs::temporary_fluid_voice_text_shape(text),
-            }),
-        );
         if text.is_empty() {
             return false;
         }
@@ -1685,7 +1925,7 @@ impl TerminalView {
                 text.truncate(text.trim_end().len());
             }
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.notify_copied();
+            self.notify_copied(cx);
             if self.settings.selection_clear_on_copy {
                 self.selection = None;
                 cx.notify();
@@ -1695,14 +1935,23 @@ impl TerminalView {
 
     #[allow(dead_code)] // reached only from the demo binary input path; kept with the rest of the TerminalView input handling
     fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
-        };
-        if text.is_empty() {
-            return;
-        }
-        let _ = self.model.send_paste(&text);
-        self.after_send_input(cx);
+        // Off the UI thread on Windows (CDXC:Clipboard in app/helpers/clipboard_read.rs); this
+        // file is also built into binaries without the app's helpers.
+        let read = cx.read_from_clipboard_async();
+        cx.spawn(async move |this, cx| {
+            let Some(text) = read.await.ok().flatten().and_then(|item| item.text()) else {
+                return;
+            };
+            if text.is_empty() {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                let _ = this.model.send_paste(&text);
+                this.after_send_input(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Copy from absolute scrollback rows so selections remain stable while
@@ -1760,10 +2009,31 @@ impl TerminalView {
                     scrollbar.knob.size.height.as_f32() / 2.0
                 };
                 self.scrollbar_drag_offset = Some(grab_offset);
+                self.scrollbar_reveal.set_dragging(true, Instant::now());
+                self.drive_scrollbar_reveal(cx);
                 self.scrollbar_to_pointer(event.position.y, grab_offset);
                 self.refresh_snapshot();
                 cx.notify();
                 cx.stop_propagation();
+                return;
+            }
+        }
+
+        /*
+        CDXC:Terminal 2026-09-28 WHY:
+        Cmd+click opens the link under the pointer (ghostty behavior) instead of starting a selection, and it is checked before mouse reporting the way ghostty's `mouseButtonCallback` handles a link before reporting, because a link click swallows the event. Codex's fullscreen view (its default since 0.157) captures the mouse for its whole session, so with the check after reporting every Cmd+click went to Codex, which opened the URL with the host's own opener and skipped Ghostex's link routing (browser pane, editor, remote sessions). A plain click still goes to the app. On Windows and Linux the modifier is Ctrl (`secondary()`), because `platform` there is the Windows/Super key; Cmd stays accepted so the web build still opens links from a Mac browser, where wasm reports Ctrl as secondary.
+        */
+        if event.button == MouseButton::Left
+            && (event.modifiers.secondary() || event.modifiers.platform)
+        {
+            let viewport_cell = self.grid_cell(event.position, origin);
+            if let Some(link) = self
+                .hovered_link
+                .as_ref()
+                .filter(|link| link.row == viewport_cell.0 && link.cols.contains(&viewport_cell.1))
+            {
+                let target = resolve_relative_link_target(&link.url, self.pwd.as_deref());
+                cx.emit(TerminalViewEvent::OpenUrlRequested(target));
                 return;
             }
         }
@@ -1828,19 +2098,6 @@ impl TerminalView {
             return;
         }
         let viewport_cell = self.grid_cell(event.position, origin);
-
-        // Cmd+click opens the link under the pointer (ghostty behavior)
-        // instead of starting a selection; the app vets and opens the URL.
-        if event.modifiers.platform
-            && let Some(link) = self
-                .hovered_link
-                .as_ref()
-                .filter(|link| link.row == viewport_cell.0 && link.cols.contains(&viewport_cell.1))
-        {
-            let target = resolve_relative_link_target(&link.url, self.pwd.as_deref());
-            cx.emit(TerminalViewEvent::OpenUrlRequested(target));
-            return;
-        }
         let cell = self.absolute_cell(viewport_cell);
 
         match event.click_count {
@@ -1894,10 +2151,14 @@ impl TerminalView {
         hovered: bool,
         cx: &mut Context<Self>,
     ) {
-        let visible = hovered || self.scrollbar_drag_offset.is_some();
-        if self.scrollbar_visible != visible {
-            self.scrollbar_visible = visible;
-            cx.notify();
+        let over_gutter = hovered
+            && self
+                .scrollbar_gutter_bounds()
+                .is_some_and(|gutter| gutter.contains(&event.position));
+        self.scrollbar_reveal
+            .set_hovered(over_gutter, Instant::now());
+        if over_gutter {
+            self.drive_scrollbar_reveal(cx);
         }
         if let Some(grab_offset) = self.scrollbar_drag_offset
             && event.pressed_button == Some(MouseButton::Left)
@@ -1934,7 +2195,7 @@ impl TerminalView {
                 };
                 if delta != 0 {
                     self.model.scroll_viewport(VtScrollViewport::Delta(delta));
-
+                    self.note_scrollbar_activity(cx);
                     self.refresh_snapshot();
                 }
             }
@@ -2042,6 +2303,8 @@ impl TerminalView {
         if event.button == MouseButton::Left {
             self.left_button_down = false;
             if self.scrollbar_drag_offset.take().is_some() {
+                self.scrollbar_reveal.set_dragging(false, Instant::now());
+                self.drive_scrollbar_reveal(cx);
                 cx.notify();
                 return;
             }
@@ -2077,11 +2340,76 @@ impl TerminalView {
 
     fn current_scrollbar_layout(&self) -> Option<ScrollbarLayout> {
         layout_scrollbar(
-            self.settings.scrollbar_visible && self.scrollbar_visible,
+            self.settings.scrollbar_visible,
+            self.scrollbar_reveal.alpha(Instant::now()),
             self.frame.as_ref()?.scrollbar,
             self.terminal_bounds?,
-            rgb_to_hsla(self.frame.as_ref()?.foreground),
+            self.settings.light_theme,
         )
+    }
+
+    /// The user moved the viewport: reveal the bar and restart its countdown.
+    /// Output that scrolls the screen on its own is not activity, so a busy
+    /// terminal does not sit behind a permanently lit scrollbar.
+    fn note_scrollbar_activity(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.scrollbar_visible {
+            return;
+        }
+        self.scrollbar_reveal.note_scroll_activity(Instant::now());
+        self.drive_scrollbar_reveal(cx);
+    }
+
+    /// Run the fade and auto-hide clock until the bar is hidden again. The
+    /// state itself decides when it next needs attention, so a bar that is
+    /// simply up costs one wakeup rather than a frame timer.
+    fn drive_scrollbar_reveal(&mut self, cx: &mut Context<Self>) {
+        if self.scrollbar_reveal_driving {
+            return;
+        }
+        self.scrollbar_reveal_driving = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(Some(delay)) = this.update(cx, |view, _cx| {
+                    view.scrollbar_reveal.next_tick(Instant::now())
+                }) else {
+                    break;
+                };
+                cx.background_executor().timer(delay).await;
+                let Ok(keep_running) = this.update(cx, |view, cx| {
+                    if view.scrollbar_reveal.tick(Instant::now()) {
+                        cx.notify();
+                    }
+                    if view.scrollbar_reveal.hidden() {
+                        view.scrollbar_reveal_driving = false;
+                        return false;
+                    }
+                    true
+                }) else {
+                    break;
+                };
+                if !keep_running {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Pointer region that holds the bar open. The visible 5px track is the
+    /// grab target; the few pixels of gutter beside it only keep the bar up
+    /// long enough to aim at it.
+    fn scrollbar_gutter_bounds(&self) -> Option<Bounds<Pixels>> {
+        let bounds = self.terminal_bounds?;
+        let scrollbar = self.frame.as_ref()?.scrollbar;
+        if !self.settings.scrollbar_visible || scrollbar.total <= scrollbar.len {
+            return None;
+        }
+        let width = px(TERMINAL_SCROLLBAR_THICKNESS + TERMINAL_SCROLLBAR_GUTTER_PADDING);
+        Some(Bounds::new(
+            point(bounds.right() - width, bounds.top()),
+            size(width, bounds.size.height),
+        ))
     }
 
     fn scrollbar_to_pointer(&mut self, pointer_y: Pixels, grab_offset: f32) {
@@ -2117,19 +2445,28 @@ impl TerminalView {
             .cached_metrics
             .map(|metrics| metrics.line_height)
             .unwrap_or(px(16.));
-        let lines = match event.delta {
-            ScrollDelta::Pixels(delta) => {
-                // Ghostty's AppKit surface doubles precise trackpad deltas.
-                delta.y.as_f32() / line_height.as_f32() * self.settings.mouse_scroll_precision * 2.0
-            }
-            ScrollDelta::Lines(delta) => delta.y * self.settings.mouse_scroll_discrete,
+        let viewport_height = self.terminal_bounds.map_or_else(
+            || line_height.as_f32(),
+            |bounds| bounds.size.height.as_f32(),
+        );
+        let Some(scroll) = terminal_wheel::normalize(
+            event.delta,
+            event.modifiers.shift,
+            line_height.as_f32(),
+            viewport_height,
+        ) else {
+            return;
         };
-        self.wheel_accum += lines;
-        let steps = self.wheel_accum.trunc() as i32;
+        let steps = terminal_wheel::wheel_rows(
+            &mut self.wheel_accum,
+            scroll,
+            line_height.as_f32(),
+            self.settings.mouse_scroll_precision,
+            self.settings.mouse_scroll_discrete,
+        );
         if steps == 0 {
             return;
         }
-        self.wheel_accum -= steps as f32;
 
         // Shift-wheel always scrolls locally (mirrors the selection
         // override for reporting modes).
@@ -2140,6 +2477,11 @@ impl TerminalView {
         };
         match route {
             WheelRoute::Report => {
+                // Ghostty clears a (shift-made) selection whenever it reports
+                // the wheel: the app scrolls other text under the highlight.
+                if self.selection.take().is_some() {
+                    cx.notify();
+                }
                 let (x, y) = self.device_position(event.position, origin, scale);
                 let button = if steps > 0 {
                     VtMouseButton::WheelUp
@@ -2147,18 +2489,20 @@ impl TerminalView {
                     VtMouseButton::WheelDown
                 };
                 // Wheel reports are press-only events (xterm buttons 64/65).
-                for _ in 0..steps.abs() {
-                    self.model.send_mouse(
-                        &VtMouseInput {
-                            action: VtMouseAction::Press,
-                            button: Some(button),
-                            mods: vt_mods(&event.modifiers),
-                            x,
-                            y,
-                        },
-                        self.left_button_down,
-                    );
-                }
+                // Ghostty queues every repeat onto one io write, so the
+                // program reads a whole notch at once instead of waking up
+                // and repainting per row.
+                self.model.send_mouse_repeat(
+                    &VtMouseInput {
+                        action: VtMouseAction::Press,
+                        button: Some(button),
+                        mods: vt_mods(&event.modifiers),
+                        x,
+                        y,
+                    },
+                    self.left_button_down,
+                    steps.unsigned_abs() as usize,
+                );
             }
             WheelRoute::ArrowKeys => {
                 let key = if steps > 0 {
@@ -2175,15 +2519,14 @@ impl TerminalView {
                     unshifted_codepoint: 0,
                     composing: false,
                 };
-                for _ in 0..steps.abs() {
-                    self.model.send_key(&input);
-                }
+                self.model
+                    .send_key_repeat(&input, steps.unsigned_abs() as usize);
             }
             WheelRoute::Viewport => {
                 // Viewport delta: up (positive wheel) is negative rows.
                 self.model
                     .scroll_viewport(VtScrollViewport::Delta(-(steps as isize)));
-
+                self.note_scrollbar_activity(cx);
                 self.refresh_snapshot();
                 cx.notify();
             }
@@ -2286,6 +2629,16 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> TerminalLayout {
         self.terminal_bounds = Some(bounds);
+        self.last_prepaint = Some(web_time::Instant::now());
+        // A reflow hold's settle takes the fresh frame itself; refreshing here
+        // would paint the mid-settle grid the hold exists to cover.
+        if self.snapshot_stale
+            && self.zmx_reflow_hold.is_none()
+            && !self.synchronized_output_defers_refresh(cx)
+        {
+            self.snapshot_stale = false;
+            self.refresh_snapshot();
+        }
         // Focus edges send focus reports (mode 1004) and toggle the hollow
         // cursor; gpui refreshes the window on focus changes, so prepaint
         // always observes them.
@@ -2303,8 +2656,9 @@ impl TerminalView {
             self.row_cache.fill(None);
         }
 
-        // CDXC:DesignSystem 2026-09-15 DECISION:
-        // User: terminal scrollbars share the floating 5px hover-only app style; the thumb must not reserve terminal columns.
+        // CDXC:DesignSystem 2026-09-20 DECISION:
+        // User: terminal scrollbars share the floating 5px app style and the thumb must not reserve terminal columns.
+        // Supersedes the 2026-09-15 "hover-only" reveal: the bar now appears while the viewport is actually scrolled and fades out again (terminal_scrollbar_reveal.rs), matching what ghostty's overlay scrollbars do.
         let content_width = bounds.size.width.max(metrics.cell_width);
         let cols = ((content_width / metrics.cell_width) as u16).max(1);
         let rows = ((bounds.size.height / metrics.line_height) as u16).max(1);
@@ -2312,17 +2666,57 @@ impl TerminalView {
         let cell_width_px = ((metrics.cell_width.as_f32() * scale).round() as u32).max(1);
         let cell_height_px = ((metrics.line_height.as_f32() * scale).round() as u32).max(1);
 
-        let grid_changed = (cols, rows) != self.model.size();
+        // A terminal whose size has not changed since the slide began (one inside the panel that
+        // is opening, laid out at its settled size and only moving with it) resizes once instead
+        // of waiting it out, so it is at its real size by the time the panel fades it in.
+        let held = if grid_resize_held() {
+            match self.motion_bounds {
+                None => {
+                    self.motion_bounds = Some((bounds.size, false));
+                    true
+                }
+                Some((first, moved)) => {
+                    let moved = moved || first != bounds.size;
+                    self.motion_bounds = Some((first, moved));
+                    moved
+                }
+            }
+        } else {
+            self.motion_bounds = None;
+            false
+        };
+        let grid_changed = !self.zmx_grid_claim_held && !held && (cols, rows) != self.model.size();
+        // A displayed zmx viewer holds its frame across a resize-and-claim
+        // (`zmx_reflow_hold`): the local reflow below is overwritten by the
+        // daemon's post-claim refresh and the TUI's redraw moments later, and
+        // painting all three is the flicker.
+        let hold_reflow = grid_changed && self.zmx_visibility_claims_enabled;
+        let hold_blank = match &self.zmx_reflow_hold {
+            Some(hold) => hold.blank,
+            None => self.frame.as_ref().is_none_or(|frame| {
+                Some((frame.cols, frame.rows.len() as u16)) != self.displayed_grid
+            }),
+        };
         if self.frame.is_none() || grid_changed {
             // Resize reflows the vt grid synchronously, so take the fresh
             // frame now instead of waiting for the SIGWINCH redraw wakeup.
             // Best-effort: the PTY side can only fail once the child is
             // gone, and the vt grid (which rendering reads) resizes first.
-            let _ = self.model.resize(cols, rows, cell_width_px, cell_height_px);
-            self.row_cache.clear();
-            self.refresh_snapshot();
+            if !self.zmx_grid_claim_held {
+                let _ = self.model.resize(cols, rows, cell_width_px, cell_height_px);
+            }
+            if !hold_reflow {
+                self.restore_parked_viewport();
+                self.row_cache.clear();
+                self.refresh_snapshot();
+            } else if self.frame.is_none() {
+                // A blank hold paints this frame's background only.
+                self.refresh_snapshot();
+            }
         }
-        if self.pending_zmx_visible_announce || (self.zmx_visibility_claims_enabled && grid_changed)
+        self.displayed_grid = Some(self.model.size());
+        if (self.pending_zmx_visible_announce && !held)
+            || (self.zmx_visibility_claims_enabled && grid_changed)
         {
             // The grid above is the real one for this displayed slot, so the
             // visibility claim carries it (CDXC:Terminal
@@ -2332,6 +2726,9 @@ impl TerminalView {
             let _ = self.model.write_input(
                 crate::terminal_model::zmx_client_visible_sequence(rows, cols).as_bytes(),
             );
+            if hold_reflow {
+                self.arm_zmx_reflow_hold(hold_blank, cx);
+            }
         }
 
         if self.update_scroll_button_visibility() {
@@ -2339,18 +2736,11 @@ impl TerminalView {
         }
 
         let Some(frame) = &self.frame else {
-            return TerminalLayout {
-                metrics,
-                background: gpui::black().into(),
-                rows: Vec::new(),
-                selection_spans: Vec::new(),
-                search_spans: Vec::new(),
-                link_underline: None,
-                cursor: None,
-                marked_text: None,
-                scrollbar: None,
-            };
+            return TerminalLayout::background_only(metrics, gpui::black());
         };
+        if self.zmx_reflow_hold.as_ref().is_some_and(|hold| hold.blank) {
+            return TerminalLayout::background_only(metrics, rgb_to_hsla(frame.background));
+        }
 
         // A failed snapshot after a grid change can leave the cache length
         // stale; re-align before filling so indexing below stays in bounds.
@@ -2411,10 +2801,11 @@ impl TerminalView {
                 window,
             ),
             scrollbar: layout_scrollbar(
-                self.settings.scrollbar_visible && self.scrollbar_visible,
+                self.settings.scrollbar_visible,
+                self.scrollbar_reveal.alpha(Instant::now()),
                 frame.scrollbar,
                 bounds,
-                rgb_to_hsla(frame.foreground),
+                self.settings.light_theme,
             ),
         }
     }
@@ -2438,7 +2829,26 @@ fn hide_mouse_cursor_until_mouse_moves() {}
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The screen as text, one node per row, so a screen reader or an e2e run reads what the
+        // terminal shows without pixels. Built only while an assistive client is connected: gpui
+        // calls the closure only then, and the row strings are made inside it.
+        let a11y_rows: Vec<String> = self
+            .frame
+            .as_ref()
+            .map(|frame| frame.rows.iter().map(SnapshotRow::text).collect())
+            .unwrap_or_default();
+        let a11y_label = self.title.clone().unwrap_or_else(|| "Terminal".to_string());
         let mut root = div()
+            .id("terminal-view")
+            .role(gpui::Role::Terminal)
+            .aria_label(a11y_label)
+            .a11y_synthetic_children(move |builder| {
+                for (index, row) in a11y_rows.iter().enumerate() {
+                    let mut node = gpui::accesskit::Node::new(gpui::Role::Label);
+                    node.set_label(row.trim_end().to_string());
+                    builder.push_child(builder.synthetic_node_id(index), node);
+                }
+            })
             .relative()
             .size_full()
             .can_drop(|value, _window, _cx| value.is::<ExternalPaths>())
@@ -2606,8 +3016,8 @@ pub(crate) fn terminal_overlay_hotkey_label(action_id: &str) -> Option<String> {
         "sleepFocusedSession" => "alt+shift+s",
         "delayedSend" => "ctrl+shift+s",
         "closeAfterDone" => "",
-        "forkSession" => "ctrl+shift+f",
-        "reloadSession" => "ctrl+shift+r",
+        "forkSession" => "cmd+ctrl+shift+f",
+        "reloadSession" => "",
         "promptEditor" => "ctrl+g",
         "sessionNote" => "cmd+alt+n",
         "toggleChatView" => "alt+g",
@@ -2628,7 +3038,18 @@ pub(crate) fn terminal_overlay_hotkey_label(action_id: &str) -> Option<String> {
         .get("hotkeys")
         .and_then(serde_json::Value::as_object)
         .and_then(|hotkeys| hotkeys.get(action_id))
-        .and_then(serde_json::Value::as_str);
+        .and_then(serde_json::Value::as_str)
+        // Retired defaults, mirroring `gpui_migrated_hotkey_for_action`.
+        .filter(|key| {
+            let retired: &[&str] = match action_id {
+                "forkSession" => &["ctrl+shift+f", "cmd+alt+f"],
+                "reloadSession" => &["ctrl+shift+r", "cmd+alt+r"],
+                _ => &[],
+            };
+            !retired
+                .iter()
+                .any(|retired| key.trim().eq_ignore_ascii_case(retired))
+        });
     let key = terminal_overlay_platform_hotkey(action_id, persisted_key.unwrap_or(default_key));
     let key = key.trim();
     if key.is_empty() {
@@ -2650,8 +3071,8 @@ fn terminal_overlay_platform_hotkey<'a>(action_id: &str, key: &'a str) -> &'a st
     }
     let defaults = match action_id {
         "delayedSend" => Some(("ctrl+shift+s", "cmd+alt+s")),
-        "forkSession" => Some(("ctrl+shift+f", "cmd+alt+f")),
-        "reloadSession" => Some(("ctrl+shift+r", "cmd+alt+r")),
+        "forkSession" => Some(("cmd+ctrl+shift+f", "cmd+alt+shift+f")),
+        "renameActiveSession" => Some(("cmd+r", "cmd+shift+r")),
         "promptEditor" => Some(("ctrl+g", "cmd+shift+g")),
         "stashedPrompts" => Some(("cmd+alt+s", "cmd+shift+s")),
         _ => None,
@@ -2664,60 +3085,6 @@ fn terminal_overlay_platform_hotkey<'a>(action_id: &str, key: &'a str) -> &'a st
         }
         _ => key,
     }
-}
-
-pub(crate) fn terminal_overlay_hotkey_chord_label(chord: &str) -> String {
-    let parts = chord
-        .split('+')
-        .map(|part| part.trim().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let has_primary_modifier = parts
-        .iter()
-        .any(|part| matches!(part.as_str(), "cmd" | "command" | "meta"));
-    let has_option_modifier = parts
-        .iter()
-        .any(|part| matches!(part.as_str(), "alt" | "opt" | "option"));
-    let mut labels = Vec::with_capacity(parts.len());
-    for part in parts {
-        let label = if cfg!(target_os = "macos") {
-            match part.as_str() {
-                "cmd" | "command" | "meta" => "⌘".to_string(),
-                "ctrl" | "control" => "⌃".to_string(),
-                "alt" | "opt" | "option" => "⌥".to_string(),
-                "shift" => "⇧".to_string(),
-                "up" | "arrowup" => "↑".to_string(),
-                "right" | "arrowright" => "→".to_string(),
-                "down" | "arrowdown" => "↓".to_string(),
-                "left" | "arrowleft" => "←".to_string(),
-                "tab" => "Tab".to_string(),
-                "ß" if has_option_modifier => "S".to_string(),
-                value if value.len() == 1 => value.to_uppercase(),
-                value if value.starts_with('f') => value.to_uppercase(),
-                value => value.to_string(),
-            }
-        } else {
-            match part.as_str() {
-                "cmd" | "command" | "meta" => "Ctrl".to_string(),
-                "ctrl" | "control" if has_primary_modifier => "Alt".to_string(),
-                "ctrl" | "control" => "Ctrl".to_string(),
-                "alt" | "opt" | "option" => "Alt".to_string(),
-                "shift" => "Shift".to_string(),
-                "up" | "arrowup" => "↑".to_string(),
-                "right" | "arrowright" => "→".to_string(),
-                "down" | "arrowdown" => "↓".to_string(),
-                "left" | "arrowleft" => "←".to_string(),
-                "tab" => "Tab".to_string(),
-                "ß" if has_option_modifier => "S".to_string(),
-                value if value.len() == 1 => value.to_uppercase(),
-                value if value.starts_with('f') => value.to_uppercase(),
-                value => value.to_string(),
-            }
-        };
-        if labels.last() != Some(&label) {
-            labels.push(label);
-        }
-    }
-    labels.join(if cfg!(target_os = "macos") { "" } else { " + " })
 }
 
 fn terminal_scroll_button_glyph(edge: TerminalScrollEdge, light_theme: bool) -> impl IntoElement {
@@ -2791,13 +3158,13 @@ impl EntityInputHandler for TerminalView {
         &mut self,
         range: Range<usize>,
         adjusted_range: &mut Option<Range<usize>>,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         // The marked text is the terminal's whole addressable document, so
         // the IME can read the preedit back (it consults this state before
         // consuming editing keys like Backspace mid-composition).
-        let result = self.marked_text.as_ref().and_then(|text| {
+        self.marked_text.as_ref().and_then(|text| {
             let len_utf16 = text.encode_utf16().count();
             let start = range.start.min(len_utf16);
             let end = range.end.clamp(start, len_utf16);
@@ -2811,37 +3178,15 @@ impl EntityInputHandler for TerminalView {
                 text[utf16_offset_to_byte(text, start)..utf16_offset_to_byte(text, end)]
                     .to_string(),
             )
-        });
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedTextServiceQuery",
-            serde_json::json!({
-                "focused": self.focus_handle.is_focused(window),
-                "query": "textForRange",
-                "rangeEnd": range.end,
-                "rangeStart": range.start,
-                "result": if result.is_some() { "markedText" } else { "none" },
-            }),
-        );
-        result
+        })
     }
 
     fn selected_text_range(
         &mut self,
         _ignore_disabled_input: bool,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedTextServiceQuery",
-            serde_json::json!({
-                "focused": self.focus_handle.is_focused(window),
-                "query": "selectedTextRange",
-                "rangeEnd": 0,
-                "rangeStart": 0,
-            }),
-        );
         // The terminal has no editable backing document. During composition
         // the selection is the IME-reported caret inside the marked text;
         // otherwise a token empty range keeps the platform from treating the
@@ -2862,15 +3207,7 @@ impl EntityInputHandler for TerminalView {
             .map(|text| 0..text.encode_utf16().count())
     }
 
-    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedUnmarkText",
-            serde_json::json!({
-                "focused": self.focus_handle.is_focused(window),
-                "hadMarkedText": self.marked_text.is_some(),
-            }),
-        );
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.marked_selection_utf16 = None;
         if self.marked_text.take().is_some() {
             cx.notify();
@@ -2879,44 +3216,22 @@ impl EntityInputHandler for TerminalView {
 
     fn replace_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        _range: Option<Range<usize>>,
         text: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedReplaceText",
-            serde_json::json!({
-                "focused": self.focus_handle.is_focused(window),
-                "rangeEnd": range.as_ref().map(|range| range.end),
-                "rangeStart": range.as_ref().map(|range| range.start),
-                "text": crate::support_logs::temporary_fluid_voice_text_shape(text),
-            }),
-        );
         self.commit_ime_text(text, cx);
     }
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
+        _range: Option<Range<usize>>,
         new_text: &str,
         new_selected_range: Option<Range<usize>>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        crate::support_logs::append_temporary(
-            crate::support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.compositedReplaceMarkedText",
-            serde_json::json!({
-                "focused": self.focus_handle.is_focused(window),
-                "rangeEnd": range.as_ref().map(|range| range.end),
-                "rangeStart": range.as_ref().map(|range| range.start),
-                "selectedRangeEnd": new_selected_range.as_ref().map(|range| range.end),
-                "selectedRangeStart": new_selected_range.as_ref().map(|range| range.start),
-                "text": crate::support_logs::temporary_fluid_voice_text_shape(new_text),
-            }),
-        );
         if self.input_suppressed {
             self.marked_selection_utf16 = None;
             if self.marked_text.take().is_some() {
@@ -3005,7 +3320,14 @@ impl TerminalElement {
             background_image_bounds(bounds, image.size(0), settings.fit, window.scale_factor());
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window
-                .paint_image(image_bounds, Corners::default(), image, 0, false)
+                .paint_image(
+                    image_bounds,
+                    image_bounds,
+                    Corners::default(),
+                    image,
+                    0,
+                    false,
+                )
                 .ok();
         });
 
@@ -3230,7 +3552,38 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) {
         self.register_input(bounds, &prepaint.hitbox, window, cx);
-        let layout = &prepaint.layout;
+        #[cfg(target_os = "macos")]
+        if let Some((effect, background_alpha)) =
+            self.shader_effect(bounds, &prepaint.layout, window, cx)
+        {
+            // CDXC:Terminal 2026-09-30 WHY: Ghostty shaders sample the theme's
+            // premultiplied background, even when Ghostex's ordinary terminal
+            // uses a transparent Glass surface. A Metal compile failure still
+            // shows this usable, unshaded capture; the off switch restores the
+            // ordinary Glass path below.
+            let mut paint_content = |window: &mut Window| {
+                self.paint_content(bounds, &prepaint.layout, Some(background_alpha), window, cx);
+            };
+            if let Some(effect) = effect {
+                window.paint_effect(bounds, effect, paint_content);
+            } else {
+                paint_content(window);
+            }
+            return;
+        }
+        self.paint_content(bounds, &prepaint.layout, None, window, cx);
+    }
+}
+
+impl TerminalElement {
+    fn paint_content(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        layout: &TerminalLayout,
+        background_alpha: Option<f32>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let origin = bounds.origin;
         let cell_width = layout.metrics.cell_width;
         let line_height = layout.metrics.line_height;
@@ -3243,7 +3596,15 @@ impl Element for TerminalElement {
             )
         };
 
-        window.paint_quad(fill(bounds, layout.background));
+        let background_alpha =
+            background_alpha.unwrap_or_else(|| self.terminal.read(cx).settings.background_alpha);
+        window.paint_quad(fill(
+            bounds,
+            Hsla {
+                a: layout.background.a * background_alpha,
+                ..layout.background
+            },
+        ));
         self.paint_background_image(bounds, layout.background, window, cx);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             for (row, layout_row) in layout.rows.iter().enumerate() {
@@ -3265,6 +3626,18 @@ impl Element for TerminalElement {
 
             for (row, layout_row) in layout.rows.iter().enumerate() {
                 let y = origin.y + line_height * (row as f32);
+                let scale = window.scale_factor();
+                let snap = |value: Pixels| (value * scale).round() / scale;
+                for (rect, color) in &layout_row.graphics {
+                    let left = snap(origin.x + rect.origin.x);
+                    let top = snap(y + rect.origin.y);
+                    let right = snap(origin.x + rect.origin.x + rect.size.width);
+                    let bottom = snap(y + rect.origin.y + rect.size.height);
+                    window.paint_quad(fill(
+                        Bounds::new(point(left, top), size(right - left, bottom - top)),
+                        *color,
+                    ));
+                }
                 for run in &layout_row.runs {
                     let run_origin = point(origin.x + cell_width * f32::from(run.col), y);
                     let _ = run.shaped.paint(
@@ -3358,6 +3731,93 @@ impl Element for TerminalElement {
                 ));
             }
         });
+    }
+
+    #[cfg(target_os = "macos")]
+    fn shader_effect(
+        &self,
+        bounds: Bounds<Pixels>,
+        layout: &TerminalLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(Option<gpui::ShaderEffect>, f32)> {
+        use crate::terminal_shaders::{ShaderAnimation, ShaderCursor};
+
+        // Every terminal paints through here on every frame; with shaders off
+        // (the default) leave before touching the window or leasing the view.
+        let view = self.terminal.read(cx);
+        let background_alpha = view
+            .settings
+            .shaders
+            .as_ref()
+            .filter(|settings| settings.enabled)?
+            .background_alpha;
+        if !window.supports_shader_effects() || view.frame.is_none() {
+            return None;
+        }
+        let canvas = window.shader_effect_size(bounds);
+        // Match GPUI's texture eligibility before advancing uniforms or
+        // scheduling an animation the renderer cannot display.
+        if canvas.width.0 <= 0
+            || canvas.height.0 <= 0
+            || canvas.width.0 > gpui::MAX_SHADER_EFFECT_TEXTURE_SIZE
+            || canvas.height.0 > gpui::MAX_SHADER_EFFECT_TEXTURE_SIZE
+        {
+            // GPUI previously painted this unshaded with the shader alpha.
+            // Keep that background treatment without preparing an effect.
+            return Some((None, background_alpha));
+        }
+        let scale = window.scale_factor();
+        self.terminal.update(cx, |view, _| {
+            let settings = view.settings.shaders.as_ref()?;
+            let snapshot = view.frame.as_ref()?;
+            let focused = view.focused && window.is_window_active();
+            let cursor = layout.cursor.as_ref().map(|cursor| {
+                let width = f32::from(layout.metrics.cell_width) * scale;
+                let height = f32::from(layout.metrics.line_height) * scale;
+                let (cursor_width, cursor_height, style) = match cursor.shape {
+                    TerminalCursorShape::Bar => (2.0 * scale, height, 2),
+                    TerminalCursorShape::Underline => {
+                        (width * f32::from(cursor.width_cells), 2.0 * scale, 3)
+                    }
+                    TerminalCursorShape::Block => (
+                        width * f32::from(cursor.width_cells),
+                        height,
+                        i32::from(cursor.hollow),
+                    ),
+                };
+                let color = cursor.color.to_rgb();
+                ShaderCursor {
+                    rect: [
+                        width * f32::from(cursor.col),
+                        height * (f32::from(cursor.row) + 1.0),
+                        cursor_width,
+                        cursor_height,
+                    ],
+                    color: [color.r, color.g, color.b, color.a],
+                    style,
+                }
+            });
+            let animate = settings.animation == ShaderAnimation::Always
+                || (settings.animation == ShaderAnimation::Focused && focused);
+            if animate {
+                window.request_animation_frame();
+            }
+            Some((
+                Some(gpui::ShaderEffect {
+                    id: view.shader_state.id,
+                    shaders: settings.sources.clone(),
+                    uniforms: view.shader_state.uniforms(
+                        [canvas.width.0 as f32, canvas.height.0 as f32],
+                        cursor,
+                        focused,
+                        animate,
+                        snapshot,
+                    ),
+                }),
+                background_alpha,
+            ))
+        })
     }
 }
 
@@ -3625,6 +4085,80 @@ fn push_span(spans: &mut Vec<CellSpan>, col: u16, color: Hsla) {
     spans.push(CellSpan { col, len: 1, color });
 }
 
+/// CDXC:Terminal 2026-09-28 WHY:
+/// Font bearings and line spacing leave seams between terminal block glyphs and straight borders. Draw their geometry against the cell edges on desktop and web, snapping shared edges to the same device pixel.
+fn push_cell_graphics(
+    ch: char,
+    col: u16,
+    color: Hsla,
+    metrics: CellMetrics,
+    graphics: &mut Vec<(Bounds<Pixels>, Hsla)>,
+) -> bool {
+    let mut rect = |x: f32, y: f32, width: f32, height: f32| {
+        graphics.push((
+            Bounds::new(
+                point(
+                    metrics.cell_width * (f32::from(col) + x),
+                    metrics.line_height * y,
+                ),
+                size(metrics.cell_width * width, metrics.line_height * height),
+            ),
+            color,
+        ));
+    };
+    match ch {
+        '▀' => rect(0., 0., 1., 0.5),
+        '▁'..='█' => {
+            let height = (ch as u32 - 0x2580) as f32 / 8.;
+            rect(0., 1. - height, 1., height);
+        }
+        '▉'..='▏' => rect(0., 0., (0x2590 - ch as u32) as f32 / 8., 1.),
+        '▐' => rect(0.5, 0., 0.5, 1.),
+        '▔' => rect(0., 0., 1., 0.125),
+        '▕' => rect(0.875, 0., 0.125, 1.),
+        '▖'..='▟' => {
+            let quadrants = match ch {
+                '▖' => 0b0100,
+                '▗' => 0b1000,
+                '▘' => 0b0001,
+                '▙' => 0b1101,
+                '▚' => 0b1001,
+                '▛' => 0b0111,
+                '▜' => 0b1011,
+                '▝' => 0b0010,
+                '▞' => 0b0110,
+                '▟' => 0b1110,
+                _ => unreachable!(),
+            };
+            for index in 0..4 {
+                if quadrants & (1 << index) != 0 {
+                    rect((index % 2) as f32 * 0.5, (index / 2) as f32 * 0.5, 0.5, 0.5);
+                }
+            }
+        }
+        '─' | '━' | '│' | '┃' | '╴'..='╻' => {
+            let heavy = matches!(ch, '━' | '┃' | '╸'..='╻');
+            let vertical = matches!(ch, '│' | '┃' | '╵' | '╷' | '╹' | '╻');
+            let thickness = if heavy { 2. } else { 1. };
+            let width = thickness / f32::from(metrics.cell_width);
+            let height = thickness / f32::from(metrics.line_height);
+            let start = if matches!(ch, '╶' | '╷' | '╺' | '╻') {
+                0.5
+            } else {
+                0.
+            };
+            let length = if matches!(ch, '╴'..='╻') { 0.5 } else { 1. };
+            if vertical {
+                rect((1. - width) / 2., start, width, length);
+            } else {
+                rect(start, (1. - height) / 2., length, height);
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// Shape one row into cached layout: merged background/overline spans plus
 /// batched same-style text runs with forced cell advance.
 fn build_row_layout(
@@ -3637,6 +4171,7 @@ fn build_row_layout(
     let mut bg_spans: Vec<CellSpan> = Vec::new();
     let mut overline_spans: Vec<CellSpan> = Vec::new();
     let mut runs: Vec<PositionedRun> = Vec::new();
+    let mut graphics = Vec::new();
 
     let mut batch_col: u16 = 0;
     let mut batch_cells: u16 = 0;
@@ -3682,6 +4217,14 @@ fn build_row_layout(
             VtCellWide::Narrow | VtCellWide::Wide => {}
         }
         if cell_is_blank(cell) {
+            continue;
+        }
+        if cell.width == VtCellWide::Narrow
+            && cell.combining.is_none()
+            && cell.underline == CellUnderline::None
+            && !cell.strikethrough
+            && push_cell_graphics(cell.base, col, rgb_to_hsla(fg), metrics, &mut graphics)
+        {
             continue;
         }
 
@@ -3748,6 +4291,7 @@ fn build_row_layout(
         bg_spans,
         overline_spans,
         runs,
+        graphics,
     }
 }
 
@@ -4105,17 +4649,28 @@ fn scan_row_url(text: &str, columns: &[u16], hover_col: u16) -> Option<(String, 
 /// Characters that may appear inside a scanned file path. Approximates
 /// ghostty's path character class minus prose punctuation (commas,
 /// quotes, brackets) that usually delimits paths in terminal output.
+/// Backslash is the Windows separator (`C:\Users\...`).
 fn is_row_scan_path_char(c: char) -> bool {
     c.is_alphanumeric()
         || matches!(
             c,
-            '_' | '-' | '.' | '/' | '~' | ':' | '@' | '#' | '$' | '%' | '+' | '='
+            '_' | '-' | '.' | '/' | '\\' | '~' | ':' | '@' | '#' | '$' | '%' | '+' | '='
         )
 }
 
+/// `C:\...` or `C:/...` with something after the separator.
+fn is_row_scan_windows_drive_path(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+}
+
 /// Find a file path covering `hover_col` in the row text, approximating
-/// ghostty's path regex for the common cases: absolute (`/`), dot-relative
-/// (`./`, `../`), home (`~/`), `$VAR/`, and bare relative paths containing
+/// ghostty's path regex for the common cases: absolute (`/`), Windows drive
+/// (`C:\`, `C:/`), dot-relative (`./`, `../`, `.\`, `..\`), home (`~/`),
+/// `$VAR/`, and bare relative paths containing
 /// a dot (`src/config/url.zig`). Returns the path text and the grid column
 /// range it occupies.
 fn scan_row_file_path(text: &str, columns: &[u16], hover_col: u16) -> Option<(String, Range<u16>)> {
@@ -4152,13 +4707,17 @@ fn scan_row_file_path(text: &str, columns: &[u16], hover_col: u16) -> Option<(St
         return None;
     }
     let token = &text[start..end];
-    let looks_like_path = if let Some(rest) = token.strip_prefix('/') {
+    let looks_like_path = if is_row_scan_windows_drive_path(token) {
+        true
+    } else if let Some(rest) = token.strip_prefix('/') {
         // Absolute path; a second leading slash reads as a comment.
         !rest.is_empty() && !rest.starts_with('/')
     } else if let Some(rest) = token
         .strip_prefix("./")
         .or_else(|| token.strip_prefix("../"))
         .or_else(|| token.strip_prefix("~/"))
+        .or_else(|| token.strip_prefix(".\\"))
+        .or_else(|| token.strip_prefix("..\\"))
     {
         !rest.is_empty()
     } else {
@@ -4182,7 +4741,11 @@ fn scan_row_file_path(text: &str, columns: &[u16], hover_col: u16) -> Option<(St
 /// and `~` paths pass through, and the raw text is kept when the
 /// resolved file does not exist.
 fn resolve_relative_link_target(url: &str, pwd: Option<&str>) -> String {
-    if url.contains("://") || url.starts_with('/') || url.starts_with('~') {
+    if url.contains("://")
+        || url.starts_with('/')
+        || url.starts_with('~')
+        || is_row_scan_windows_drive_path(url)
+    {
         return url.to_string();
     }
     if let Some(pwd) = pwd {
@@ -4342,12 +4905,13 @@ fn layout_search(
 }
 
 fn layout_scrollbar(
-    visible: bool,
+    enabled: bool,
+    alpha: f32,
     scrollbar: VtScrollbar,
     bounds: Bounds<Pixels>,
-    mut foreground: Hsla,
+    light_theme: bool,
 ) -> Option<ScrollbarLayout> {
-    if !visible || scrollbar.total <= scrollbar.len || bounds.size.height <= px(0.) {
+    if !enabled || alpha <= 0. || scrollbar.total <= scrollbar.len || bounds.size.height <= px(0.) {
         return None;
     }
 
@@ -4369,11 +4933,14 @@ fn layout_scrollbar(
     let knob_y = slot.origin.y + (slot_height - knob_height) * offset_fraction;
     let knob = Bounds::new(point(slot.origin.x, knob_y), size(thickness, knob_height));
 
-    foreground.a = 0.28;
+    // CDXC:DesignSystem 2026-09-16 SEE-ALSO:
+    // Exact app scrollbar colors are shared with packages/components/ui/scrollbar-theme.css.
+    let mut knob_color: Hsla = gpui::rgb(if light_theme { 0xbcbcbd } else { 0x424346 }).into();
+    knob_color.a *= alpha.clamp(0., 1.);
     Some(ScrollbarLayout {
         slot,
         knob,
-        knob_color: foreground,
+        knob_color,
     })
 }
 
@@ -4530,4 +5097,21 @@ fn layout_marked_text(
         caret_x,
         caret_color: fg,
     })
+}
+
+/// Set while a panel of the window slides open or shut. A terminal whose bounds move keeps its
+/// grid (painted clipped or with an empty margin) and resizes once the panel settles, so a slide
+/// sends the PTY and the zmx daemon one resize instead of one per frame; one whose size stays put
+/// resizes once on its second frame. The pending visible claim waits with it, so it
+/// never announces the size the terminal is about to leave.
+static GRID_RESIZE_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_grid_resize_held(held: bool) {
+    GRID_RESIZE_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the window's panels are sliding (`panel_motion.rs`), so a size seen this frame is not
+/// the one the layout will settle at.
+pub(crate) fn grid_resize_held() -> bool {
+    GRID_RESIZE_HELD.load(std::sync::atomic::Ordering::Relaxed)
 }

@@ -591,8 +591,9 @@ pub(crate) fn configure_process_group(command: &mut Command) {
 
     #[cfg(windows)]
     {
+        use crate::platform::process::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0000_0200);
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 }
 
@@ -609,7 +610,7 @@ pub(crate) fn terminate_process_group(child: &mut Child) {
 
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let _ = crate::platform::process::background_command("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

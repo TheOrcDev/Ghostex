@@ -24,13 +24,13 @@ name: GPUI release - Windows compile validation
 # "windows")]` bodies, new Windows-only crates or FFI, or a Cargo.lock bump
 # that moves a Windows-only dependency. That is the churn where a Windows
 # compile error is likely *and* would not have been caught by the macOS/Linux
-# jobs or by `bun run typecheck`.
+# jobs or by `cargo xtask typecheck`.
 #
 # It still checks one thing nothing else in the release pipeline compiles: the
 # gxserver tree targeting Windows. The Windows packaging jobs only build
 # apps/desktop; Windows ships gxserver through WSL as a Linux binary.
 #
-# What it type-checks that `bun run typecheck` cannot see: cfg-gated Windows
+# What it type-checks that `cargo xtask typecheck` cannot see: cfg-gated Windows
 # code paths, on both x64 and ARM64.
 #
 # Deliberately NOT a source of build outputs (§Q7). `cargo check` emits .rmeta
@@ -87,7 +87,7 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     env:
-      CEF_PATH: ${{ github.workspace }}\gpui\build\cef-cache
+      CEF_PATH: ${{ github.workspace }}\apps\desktop\build\cef-cache
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}\build\zig-global-cache
     steps:
       - uses: actions/checkout@v6

@@ -65,6 +65,42 @@ fn cursor_visible_text(text: &str) -> Option<String> {
     (!visible.is_empty()).then_some(visible)
 }
 
+/// CDXC:SessionChat 2026-09-16 WHY:
+/// Cursor appends a user-role tool catalog during compaction without a user_query envelope; rendering it leaked internal metadata into chat and counting it as a prompt shifted the mirror's reasoning alignment.
+/// Match the complete metadata envelope so actual user queries quoting these tags remain visible.
+pub(crate) fn is_cursor_context_metadata(record: &serde_json::Map<String, Value>) -> bool {
+    if record.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    let Some(items) = record
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if items.len() != 1 || items[0].get("type").and_then(Value::as_str) != Some("text") {
+        return false;
+    }
+    let Some(mut text) = items[0].get("text").and_then(Value::as_str) else {
+        return false;
+    };
+    for (open, close) in [
+        ("<available_subagent_types>", "</available_subagent_types>"),
+        (
+            "<available_subagent_models>",
+            "</available_subagent_models>",
+        ),
+        ("<dynamic_tools>", "</dynamic_tools>"),
+    ] {
+        let Some(rest) = strip_cursor_metadata_block(text.trim_start(), open, close) else {
+            return false;
+        };
+        text = rest;
+    }
+    text.trim().is_empty()
+}
+
 /// Blocks plus whether every one of them came from a `thinking` block, which
 /// is what turns the message into a reasoning turn. Thinking blocks are not in
 /// Cursor's raw jsonl; the chat mirror splices them in from the session store
@@ -102,10 +138,28 @@ fn cursor_message_blocks(role: &str, content: Option<&Value>) -> (Vec<SessionCha
                     blocks.push(text_block(text));
                 }
             }
-            Some("tool_use") => blocks.push(SessionChatBlock::ToolCall {
-                name: extract_string(record.get("name")).unwrap_or_else(|| "tool".to_string()),
-                input: record.get("input").cloned().unwrap_or(Value::Null),
-            }),
+            Some("tool_use") => {
+                let name = extract_string(record.get("name")).unwrap_or_else(|| "tool".to_string());
+                let input = record.get("input").cloned().unwrap_or(Value::Null);
+                // CDXC:SessionChat 2026-10-07 WHY: Cursor 2026.10 records the tools it loads on demand (its to-do list among them) as `CallDynamicTool {namespace, toolName, arguments}`, which the chat showed as one opaque "CallDynamicTool" row; the call is shown as the tool it runs, so TodoWrite reads as Claude's does.
+                let (name, input) =
+                    match (name.as_str(), input.get("toolName").and_then(Value::as_str)) {
+                        ("CallDynamicTool", Some(tool)) if !tool.trim().is_empty() => (
+                            tool.to_string(),
+                            input.get("arguments").cloned().unwrap_or(Value::Null),
+                        ),
+                        _ => (name, input),
+                    };
+                let plan = (name == "CreatePlan")
+                    .then(|| cursor_plan_markdown(&input))
+                    .flatten();
+                blocks.push(SessionChatBlock::ToolCall {
+                    name,
+                    input,
+                    call_id: None,
+                });
+                blocks.extend(plan.map(text_block));
+            }
             _ => {}
         }
     }
@@ -113,8 +167,54 @@ fn cursor_message_blocks(role: &str, content: Option<&Value>) -> (Vec<SessionCha
     (blocks, reasoning_only)
 }
 
+/// CDXC:SessionChat 2026-10-07 WHY: Cursor's Plan mode writes its plan only as the `plan` argument of a `CreatePlan` tool call, which the chat folded away with the other tool rows (its open row showed the argument as escaped JSON), while the terminal shows the plan above its "Ready to build?" panel. The plan follows the call as Markdown so it reads in the chat before the build decision; Cursor drops the leading `<!-- … -->` marker the same way.
+fn cursor_plan_markdown(input: &Value) -> Option<String> {
+    let plan = input.get("plan").and_then(Value::as_str)?.trim_start();
+    let plan = match plan
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.split_once("-->"))
+    {
+        Some((_, rest)) => rest.trim_start(),
+        None => plan,
+    };
+    (!plan.trim().is_empty()).then(|| plan.trim_end().to_string())
+}
+
+/// CDXC:SessionChat 2026-10-07 WHY: choosing Build on Cursor's "Ready to build?" panel makes Cursor itself send a user query (the plan's title, then "Implement the plan as specified, it is attached for your reference. …"), which the chat drew as a message the user had typed. It is shown as a status row naming the plan instead.
+fn cursor_plan_build_title(blocks: &[SessionChatBlock]) -> Option<String> {
+    let [SessionChatBlock::Text { text }] = blocks else {
+        return None;
+    };
+    let (title, rest) = text.trim().split_once("\n\n")?;
+    let title = title.trim();
+    (rest
+        .trim_start()
+        .starts_with("Implement the plan as specified, it is attached for your reference.")
+        && !title.is_empty()
+        && !title.contains('\n'))
+    .then(|| title.to_string())
+}
+
+/// The time the chat mirror stamps on each line (`session_chat_cursor_mirror::merge_cursor_transcript`).
+fn cursor_record_timestamp(record: &serde_json::Map<String, Value>) -> Option<i64> {
+    record.get("ghostexTimestamp").and_then(Value::as_i64)
+}
+
+fn cursor_record_id(record: &serde_json::Map<String, Value>, fallback_id: &str) -> String {
+    match (
+        record.get("ghostexId").and_then(Value::as_str),
+        fallback_id.rsplit_once(':'),
+    ) {
+        (Some(id), Some((path, _))) => format!("{path}:{id}"),
+        _ => fallback_id.to_string(),
+    }
+}
+
 pub fn decode_cursor_transcript_line(line: &str, fallback_id: &str) -> Option<SessionChatMessage> {
     let record = parse_json_object(line)?;
+    if is_cursor_context_metadata(&record) {
+        return None;
+    }
     if record.get("type").and_then(Value::as_str) == Some("turn_ended") {
         if record.get("status").and_then(Value::as_str) == Some("success") {
             return None;
@@ -122,12 +222,12 @@ pub fn decode_cursor_transcript_line(line: &str, fallback_id: &str) -> Option<Se
         let text = extract_string(record.get("error"))
             .unwrap_or_else(|| INTERRUPTED_STATUS_TEXT.to_string());
         return Some(SessionChatMessage {
-            id: fallback_id.to_string(),
+            id: cursor_record_id(&record, fallback_id),
             role: SessionChatRole::System,
             blocks: vec![text_block(text)],
-            timestamp: None,
+            timestamp: cursor_record_timestamp(&record),
             source: SessionChatSource::Transcript,
-            turn_id: Some(fallback_id.to_string()),
+            turn_id: Some(cursor_record_id(&record, fallback_id)),
             byte_offset: None,
             async_questions: None,
             queued: false,
@@ -140,17 +240,23 @@ pub fn decode_cursor_transcript_line(line: &str, fallback_id: &str) -> Option<Se
     if blocks.is_empty() {
         return None;
     }
-    let role = match role {
-        "user" => SessionChatRole::User,
-        "assistant" if reasoning_only => SessionChatRole::Reasoning,
-        "assistant" => SessionChatRole::Assistant,
+    let (role, blocks) = match role {
+        "user" => match cursor_plan_build_title(&blocks) {
+            Some(title) => (
+                SessionChatRole::System,
+                vec![text_block(format!("Building the plan: {title}"))],
+            ),
+            None => (SessionChatRole::User, blocks),
+        },
+        "assistant" if reasoning_only => (SessionChatRole::Reasoning, blocks),
+        "assistant" => (SessionChatRole::Assistant, blocks),
         _ => return None,
     };
     Some(SessionChatMessage {
-        id: fallback_id.to_string(),
+        id: cursor_record_id(&record, fallback_id),
         role,
         blocks,
-        timestamp: None,
+        timestamp: cursor_record_timestamp(&record),
         source: SessionChatSource::Transcript,
         turn_id: None,
         byte_offset: None,
@@ -174,7 +280,7 @@ pub fn decode_cursor_turn_lifecycle(
     };
     Some(SessionChatTurnLifecycle {
         state,
-        turn_id: fallback_id.to_string(),
-        timestamp: None,
+        turn_id: cursor_record_id(&record, fallback_id),
+        timestamp: cursor_record_timestamp(&record),
     })
 }

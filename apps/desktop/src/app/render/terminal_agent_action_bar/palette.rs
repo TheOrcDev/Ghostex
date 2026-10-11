@@ -2,9 +2,17 @@
 //! User: the toolbar below agent terminals must look correct in light mode.
 //! Resolve its pill, controls and menus from the app appearance, independently of the terminal content theme.
 
-use gpui::Rgba;
+use gpui::{Hsla, Rgba};
 
-use crate::app::helpers::chrome_color;
+use crate::app::helpers::{chrome_color, window_glass_active};
+use crate::app::native_chat::appearance::ChatAppearance;
+
+/// CDXC:Theming 2026-09-23 DECISION:
+/// User: "apply glass effect exactly like the one we have for the composer in the gpui chat view for the bar in the gpui terminal view". Under window glass the bar's pill and its ghost buttons' hover take their colours from the chat composer's own frosted appearance (`ChatAppearance::on_window_glass`), so the two stay one definition; the prompt-editor button keeps its solid fill like the composer's Send button does.
+fn glass_composer_appearance() -> Option<ChatAppearance> {
+    window_glass_active()
+        .then(|| ChatAppearance::current(&serde_json::Value::Null).on_window_glass(true))
+}
 
 pub(super) fn terminal_agent_bar_indicator_background() -> Rgba {
     chrome_color(0xe0e0e0, 0xdbeafe)
@@ -18,12 +26,27 @@ pub(super) fn terminal_agent_bar_disabled_icon_color() -> Rgba {
     chrome_color(0x5a5a5a, 0xb0b5bd)
 }
 
-pub(super) fn terminal_agent_bar_background() -> Rgba {
-    chrome_color(0x141414, 0xf4f5f7)
+pub(super) fn terminal_agent_bar_background() -> Hsla {
+    glass_composer_appearance().map_or_else(
+        || chrome_color(0x141414, 0xf4f5f7).into(),
+        |composer| composer.composer_background,
+    )
 }
 
-pub(super) fn terminal_agent_bar_border_color() -> Rgba {
-    chrome_color(0x262626, 0xdedfe3)
+pub(super) fn terminal_agent_bar_border_color() -> Hsla {
+    glass_composer_appearance().map_or_else(
+        || chrome_color(0x262626, 0xdedfe3).into(),
+        |composer| composer.composer_border,
+    )
+}
+
+/// The hover of the bar's own ghost buttons: the composer toolbar buttons' hover under glass.
+/// Rows in the bar's opaque ⋯ menu keep `terminal_agent_bar_hover_background`.
+pub(super) fn terminal_agent_bar_button_hover_background() -> Hsla {
+    glass_composer_appearance().map_or_else(
+        || terminal_agent_bar_hover_background().into(),
+        |composer| composer.border,
+    )
 }
 
 pub(super) fn terminal_agent_bar_hover_background() -> Rgba {

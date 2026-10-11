@@ -41,7 +41,12 @@ if ($env:GHOSTEX_HOME -and [IO.Path]::IsPathRooted($env:GHOSTEX_HOME)) {
 pub(crate) fn gpui_remote_windows_cli_setup() -> String {
     format!(
         r#"{GPUI_REMOTE_WINDOWS_STORAGE}
-$gxCandidates=@((Join-Path $gxData 'gxserver/package/bin/ghostex.exe'), (Join-Path $env:ProgramFiles 'Ghostex/resources/native/ghostex.exe'), (Join-Path $env:USERPROFILE '.local/bin/ghostex.exe'))
+$gxAppDir=$null
+$gxAppDirFile=Join-Path $gxData 'gxserver/windows-app-dir'
+if (Test-Path -LiteralPath $gxAppDirFile -PathType Leaf) {{ $gxAppDir=(Get-Content -LiteralPath $gxAppDirFile -Raw).Trim() }}
+$gxCandidates=@((Join-Path $gxData 'gxserver/package/bin/ghostex.exe'))
+if ($gxAppDir) {{ $gxCandidates+=Join-Path $gxAppDir 'resources/native/ghostex.exe' }}
+$gxCandidates+=@((Join-Path $env:LOCALAPPDATA 'Ghostex/current/resources/native/ghostex.exe'), (Join-Path $env:ProgramFiles 'Ghostex/resources/native/ghostex.exe'), (Join-Path $env:USERPROFILE '.local/bin/ghostex.exe'))
 $gxCommand=Get-Command ghostex.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($gxCommand) {{ $gxCandidates+=$gxCommand.Source }}
 $gxExe=$gxCandidates | Where-Object {{ Test-Path -LiteralPath $_ -PathType Leaf }} | Select-Object -First 1

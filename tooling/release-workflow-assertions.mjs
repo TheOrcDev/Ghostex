@@ -15,8 +15,8 @@
     indentation, and line wrapping cannot change a parsed value, so a formatting
     pass can no longer break a gate check.
  2. Giving every assertion an explicit CONTRACT: the literals it depends on that
-    live in other files (the env var the build script reads, the subcommand the
-    resumable driver implements). If a contract literal is gone, the assertion
+    live in other files (the env var the build script reads, the cargo call the
+    build script makes). If a contract literal is gone, the assertion
     cannot be trusted and is reported as STALE - "fix the check" - never as a
     product regression.
  3. Separating the three outcomes a gate check can have:
@@ -42,10 +42,7 @@ export const REGRESSION_ABSENT = 'absent';
 export const REGRESSION_VALUE = 'value';
 
 const GXSERVER_BUILD_SCRIPT = 'tooling/build-remote-gxserver-linux-release.sh';
-const RESUMABLE_DRIVER = 'tooling/release-resumable.mjs';
 const BUILD_SCRIPT_BASENAME = 'build-remote-gxserver-linux-release.sh';
-const STAGE_ADVANCE_COMMAND = 'stage-package-and-advance';
-const ARM64_NATIVE_RUNNER = 'ubuntu-24.04-arm';
 
 /*
  CDXC:Release 2026-09-02:
@@ -87,7 +84,8 @@ const RELEASE_BUILD_WORKFLOWS = [
     platform: 'macos',
   },
   {
-    compileNeedles: ['windows.ps1', 'cargo '],
+    // The compile step runs windows.ps1 through windows-build-watchdog.ps1.
+    compileNeedles: ['windows.ps1', 'windows-build-watchdog.ps1', 'cargo '],
     contract: [{ file: 'apps/desktop/scripts/build-windows-app.ps1', literal: 'cargo build --release' }],
     file: '.github/workflows/release-gpui-windows.yml',
     platform: 'windows',
@@ -100,7 +98,7 @@ const RELEASE_BUILD_WORKFLOWS = [
   },
   {
     compileNeedles: [BUILD_SCRIPT_BASENAME, 'cargo '],
-    contract: [{ file: 'server/package-remote-linux.mjs', literal: "'build', '--release'" }],
+    contract: [{ file: 'server/package-remote-linux.mjs', literal: 'run("cargo", ["build", "--release"' }],
     file: '.github/workflows/release-gpui-gxserver.yml',
     platform: 'gxserver',
   },
@@ -126,105 +124,8 @@ function jobSteps(document, jobName) {
   return { job, steps: Array.isArray(job.steps) ? job.steps : [] };
 }
 
-function stepsRunning(steps, needle) {
-  return steps.filter((step) => step && typeof step.run === 'string' && step.run.includes(needle));
-}
-
 function describeStep(step, index) {
   return step?.name ? `step "${step.name}"` : `step #${index + 1}`;
-}
-
-/*
- Every assertion the release preflight makes about a workflow file. Each one
- states, in order: which file it reads, which job/step it navigates to, which
- literals in OTHER files it depends on, and what the parsed value must be.
-*/
-export function gxserverLinuxWorkflowAssertions(arch) {
-  const file = `.github/workflows/release-build-gxserver-${arch}.yml`;
-  const shared = { arch, file };
-  const assertions = [
-    {
-      ...shared,
-      contract: [
-        { file: GXSERVER_BUILD_SCRIPT, literal: '--arch' },
-        { file: GXSERVER_BUILD_SCRIPT, literal: arch },
-      ],
-      id: `gxserver-linux-${arch}/build-arch`,
-      requirement: `the build job runs ${BUILD_SCRIPT_BASENAME} --arch ${arch}`,
-      verify(document) {
-        const build = jobSteps(document, 'build');
-        if (!build) {
-          return stale(`${file} has no jobs.build; the assertion navigates by that job name.`);
-        }
-        const matches = stepsRunning(build.steps, BUILD_SCRIPT_BASENAME);
-        if (matches.length === 0) {
-          return regressed(REGRESSION_ABSENT, `no jobs.build step runs ${BUILD_SCRIPT_BASENAME}.`);
-        }
-        const requested = matches.flatMap((step) =>
-          [...step.run.matchAll(/build-remote-gxserver-linux-release\.sh\s+--arch\s+(\S+)/g)].map((match) => match[1])
-        );
-        if (requested.length === 0) {
-          return regressed(
-            REGRESSION_ABSENT,
-            `${BUILD_SCRIPT_BASENAME} runs without --arch, so this workflow no longer pins an architecture.`
-          );
-        }
-        if (!requested.includes(arch)) {
-          return regressed(REGRESSION_VALUE, `builds --arch ${requested.join(', ')} instead of ${arch}.`);
-        }
-        return ok(`--arch ${arch}`);
-      },
-    },
-    {
-      ...shared,
-      contract: [{ file: RESUMABLE_DRIVER, literal: STAGE_ADVANCE_COMMAND }],
-      id: `gxserver-linux-${arch}/stage-and-advance`,
-      requirement: `the stage job advances durable release state with ${STAGE_ADVANCE_COMMAND}`,
-      verify(document) {
-        const stage = jobSteps(document, 'stage');
-        if (!stage) {
-          return stale(`${file} has no jobs.stage; the assertion navigates by that job name.`);
-        }
-        const matches = stepsRunning(stage.steps, 'release-resumable.mjs');
-        if (matches.length === 0) {
-          return regressed(REGRESSION_ABSENT, 'no jobs.stage step invokes release-resumable.mjs.');
-        }
-        if (!matches.some((step) => step.run.includes(STAGE_ADVANCE_COMMAND))) {
-          return regressed(
-            REGRESSION_VALUE,
-            `jobs.stage invokes release-resumable.mjs without ${STAGE_ADVANCE_COMMAND}, so durable release state is never advanced.`
-          );
-        }
-        return ok(STAGE_ADVANCE_COMMAND);
-      },
-    },
-  ];
-  if (arch === 'arm64') {
-    assertions.push({
-      ...shared,
-      contract: [],
-      id: 'gxserver-linux-arm64/native-runner',
-      requirement: `the build job runs on ${ARM64_NATIVE_RUNNER}`,
-      verify(document) {
-        const build = jobSteps(document, 'build');
-        if (!build) {
-          return stale(`${file} has no jobs.build; the assertion navigates by that job name.`);
-        }
-        if (!Object.hasOwn(build.job, 'runs-on')) {
-          return regressed(REGRESSION_ABSENT, 'jobs.build declares no runs-on.');
-        }
-        const runsOn = build.job['runs-on'];
-        if (runsOn !== ARM64_NATIVE_RUNNER) {
-          return regressed(
-            REGRESSION_VALUE,
-            `jobs.build runs on ${JSON.stringify(runsOn)}, not the native ARM64 runner ${ARM64_NATIVE_RUNNER}; the musl cargo build must run on real ARM64 hardware.`
-          );
-        }
-        return ok(ARM64_NATIVE_RUNNER);
-      },
-    });
-  }
-  return assertions;
 }
 
 /*
@@ -445,6 +346,7 @@ function resolveReleaseRunner(runsOn, arch) {
   return { label: arch === match[1] ? match[2] : match[3] };
 }
 
+/** @param {{ arch: string, compileNeedles?: string[], duplicatedCargo?: any, job: string, release: any }} options */
 function warmCacheJobAssertions({ arch, compileNeedles, duplicatedCargo, job, release }) {
   const file = WARM_CACHE_WORKFLOW;
   const shared = { file, platform: `warm/${job}`, related: [release.file] };
@@ -689,6 +591,221 @@ function warmCacheJobAssertions({ arch, compileNeedles, duplicatedCargo, job, re
   ];
 }
 
+/*
+ CDXC:Release 2026-10-07 WHY:
+ The Windows workflow compiles the native runtime (gxserver, ghostex, wmx, the
+ prompt editor) in jobs.runtime on a second runner while jobs.build compiles
+ the desktop app, and jobs.build packages the runtime outputs it downloads.
+ Nothing at run time notices when the two jobs drift apart: a different runner
+ label or cargo env compiles different bytes and misses the sccache namespace
+ the warm jobs fill, an artifact name or path mismatch only fails the packaging
+ phase 25 minutes in, and a `needs: runtime` edge or a `-Phase compile` in
+ jobs.build silently puts the runtime build back on the critical path. These
+ assertions hold the hand-off together.
+*/
+const WINDOWS_WORKFLOW = '.github/workflows/release-gpui-windows.yml';
+const WINDOWS_RUNTIME_ARTIFACT = 'release-windows-native-runtime-${{ inputs.arch }}';
+/* Each path build-windows-app.ps1's stage half copies from a runtime build. */
+const WINDOWS_RUNTIME_OUTPUTS = [
+  {
+    literal: '"server/target/release/$binary"',
+    upload: ['server/target/release/gxserver.exe', 'server/target/release/ghostex.exe'],
+  },
+  { literal: '".dependencies/wmx/target/release/wmx.exe"', upload: ['.dependencies/wmx/target/release/wmx.exe'] },
+  {
+    literal: '"apps/editor/desktop/target/release/ghostex-editor.exe"',
+    upload: ['apps/editor/desktop/target/release/ghostex-editor.exe'],
+  },
+  { literal: '"apps/editor/dist/web"', upload: ['apps/editor/dist/web/'] },
+];
+
+function windowsRuntimeJobs(document) {
+  const build = jobSteps(document, 'build');
+  const runtime = jobSteps(document, 'runtime');
+  if (!build) {
+    return { problem: stale(`${WINDOWS_WORKFLOW} has no jobs.build; the assertion navigates by that job name.`) };
+  }
+  if (!runtime) {
+    return {
+      problem: regressed(
+        REGRESSION_ABSENT,
+        `${WINDOWS_WORKFLOW} has no jobs.runtime, but jobs.build waits for its release-windows-native-runtime artifact.`
+      ),
+    };
+  }
+  return { build, runtime };
+}
+
+const runsPhase = (step, phase) =>
+  step &&
+  typeof step.run === 'string' &&
+  step.run.includes('windows-build-watchdog.ps1') &&
+  step.run.includes(`-Phase ${phase} `);
+
+const usesArtifact = (step, action) =>
+  step &&
+  typeof step.uses === 'string' &&
+  step.uses.split('@')[0] === action &&
+  step.with?.name === WINDOWS_RUNTIME_ARTIFACT;
+
+export function windowsNativeRuntimeAssertions() {
+  const shared = { contract: [], file: WINDOWS_WORKFLOW, platform: 'windows-runtime', related: [] };
+  return [
+    {
+      ...shared,
+      id: 'windows-runtime/mirrors-build',
+      requirement:
+        'jobs.runtime runs on the same runs-on expression as jobs.build and matches its job env for every cargo-affecting variable',
+      verify(document) {
+        const { problem, build, runtime } = windowsRuntimeJobs(document);
+        if (problem) {
+          return problem;
+        }
+        const runtimeRunner = runtime.job['runs-on'];
+        const buildRunner = build.job['runs-on'];
+        if (runtimeRunner !== buildRunner) {
+          return regressed(
+            REGRESSION_VALUE,
+            `jobs.runtime runs on ${JSON.stringify(runtimeRunner)} but jobs.build on ${JSON.stringify(buildRunner)}; the runtime binaries would come from a different toolchain image.`
+          );
+        }
+        const buildEnv = effectiveJobEnv(document, build.job);
+        const runtimeEnv = effectiveJobEnv(document, runtime.job);
+        const affecting = (name) =>
+          CARGO_AFFECTING_JOB_ENV.includes(name) ||
+          CARGO_AFFECTING_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
+        const names = new Set([...Object.keys(buildEnv), ...Object.keys(runtimeEnv)].filter(affecting));
+        const drift = [...names].filter((name) => String(buildEnv[name]) !== String(runtimeEnv[name]));
+        if (drift.length > 0) {
+          const described = drift.map(
+            (name) => `${name} (${JSON.stringify(runtimeEnv[name])} vs ${JSON.stringify(buildEnv[name])})`
+          );
+          return regressed(
+            REGRESSION_VALUE,
+            `jobs.runtime and jobs.build differ on ${described.join(', ')}; the runtime compile keys differently from the warm and release caches.`
+          );
+        }
+        return ok(`runs-on and ${[...names].sort().join(', ')} match`);
+      },
+    },
+    {
+      ...shared,
+      id: 'windows-runtime/action-pin',
+      requirement: `jobs.runtime installs ${SCCACHE_ACTION}@${SCCACHE_ACTION_TAG} before its compile-runtime step`,
+      verify(document) {
+        const { problem, runtime } = windowsRuntimeJobs(document);
+        if (problem) {
+          return problem;
+        }
+        const compileIndex = runtime.steps.findIndex((step) => runsPhase(step, 'compile-runtime'));
+        if (compileIndex === -1) {
+          return regressed(
+            REGRESSION_ABSENT,
+            'jobs.runtime has no step running windows.ps1 -Phase compile-runtime under the watchdog.'
+          );
+        }
+        const installs = stepsUsing(runtime.steps, SCCACHE_ACTION);
+        if (installs.length === 0 || installs.every(({ index }) => index > compileIndex)) {
+          return regressed(
+            REGRESSION_ABSENT,
+            `jobs.runtime does not install ${SCCACHE_ACTION} before its compile step.`
+          );
+        }
+        const unpinned = installs
+          .map(({ step }) => step.uses.split('@')[1] ?? '')
+          .filter((ref) => ref !== SCCACHE_ACTION_TAG);
+        if (unpinned.length > 0) {
+          return regressed(
+            REGRESSION_VALUE,
+            `jobs.runtime uses ${SCCACHE_ACTION}@${unpinned.join(', @')} instead of @${SCCACHE_ACTION_TAG}.`
+          );
+        }
+        return ok(`${SCCACHE_ACTION}@${SCCACHE_ACTION_TAG}`);
+      },
+    },
+    {
+      ...shared,
+      contract: WINDOWS_RUNTIME_OUTPUTS.map(({ literal }) => ({
+        file: 'apps/desktop/scripts/build-windows-app.ps1',
+        literal,
+      })),
+      id: 'windows-runtime/hand-off',
+      requirement: `jobs.runtime uploads ${WINDOWS_RUNTIME_ARTIFACT} (hidden files included) with every runtime output the stage half copies, and jobs.build compiles only the app half, has no needs: edge on it, and awaits and downloads it into the workspace before -Phase package`,
+      verify(document) {
+        const { problem, build, runtime } = windowsRuntimeJobs(document);
+        if (problem) {
+          return problem;
+        }
+        const upload = runtime.steps.find((step) => usesArtifact(step, 'actions/upload-artifact'));
+        if (!upload) {
+          return regressed(REGRESSION_ABSENT, `jobs.runtime uploads no artifact named ${WINDOWS_RUNTIME_ARTIFACT}.`);
+        }
+        const uploaded = String(upload.with.path ?? '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const missing = WINDOWS_RUNTIME_OUTPUTS.flatMap(({ upload: paths }) => paths).filter(
+          (output) => !uploaded.includes(output)
+        );
+        if (missing.length > 0) {
+          return regressed(
+            REGRESSION_ABSENT,
+            `jobs.runtime does not upload ${missing.join(', ')}, which the stage half copies.`
+          );
+        }
+        if (String(upload.with['include-hidden-files']) !== 'true') {
+          return regressed(
+            REGRESSION_VALUE,
+            'jobs.runtime uploads without include-hidden-files: true, which drops .dependencies/wmx/target/release/wmx.exe.'
+          );
+        }
+        if ([build.job.needs ?? []].flat().map(String).includes('runtime')) {
+          return regressed(REGRESSION_VALUE, 'jobs.build needs jobs.runtime, which serialises the two compiles again.');
+        }
+        if (build.steps.some((step) => runsPhase(step, 'compile'))) {
+          return regressed(
+            REGRESSION_VALUE,
+            'jobs.build runs -Phase compile, which compiles the native runtime a second time on the critical path; it runs -Phase compile-app.'
+          );
+        }
+        const appIndex = build.steps.findIndex((step) => runsPhase(step, 'compile-app'));
+        const awaitIndex = build.steps.findIndex(
+          (step) =>
+            step &&
+            typeof step.run === 'string' &&
+            step.run.includes('await-run-artifacts.mjs') &&
+            step.run.includes('release-windows-native-runtime-')
+        );
+        const downloadIndex = build.steps.findIndex((step) => usesArtifact(step, 'actions/download-artifact'));
+        const packageIndex = build.steps.findIndex((step) => runsPhase(step, 'package'));
+        const absent = [
+          appIndex === -1 && 'the -Phase compile-app step',
+          awaitIndex === -1 && 'the await for the runtime artifact',
+          downloadIndex === -1 && `the download of ${WINDOWS_RUNTIME_ARTIFACT}`,
+          packageIndex === -1 && 'the -Phase package step',
+        ].filter(Boolean);
+        if (absent.length > 0) {
+          return regressed(REGRESSION_ABSENT, `jobs.build lacks ${absent.join(', ')}.`);
+        }
+        if (!(appIndex < awaitIndex && awaitIndex < downloadIndex && downloadIndex < packageIndex)) {
+          return regressed(
+            REGRESSION_VALUE,
+            'jobs.build must compile the app, then await and download the runtime artifact, then package, in that order.'
+          );
+        }
+        const downloadPath = String(build.steps[downloadIndex].with?.path ?? '');
+        if (downloadPath !== '${{ github.workspace }}') {
+          return regressed(
+            REGRESSION_VALUE,
+            `jobs.build downloads the runtime artifact to ${JSON.stringify(downloadPath)}, not the workspace root the stage half copies from.`
+          );
+        }
+        return ok(`${uploaded.length} runtime outputs handed from jobs.runtime to jobs.build`);
+      },
+    },
+  ];
+}
+
 export function warmCacheWorkflowAssertions() {
   const file = WARM_CACHE_WORKFLOW;
   return [
@@ -753,11 +870,11 @@ export function warmCacheWorkflowAssertions() {
   ];
 }
 
+/** @returns {Array<Record<string, any>>} */
 export function releaseWorkflowAssertions() {
   return [
-    ...gxserverLinuxWorkflowAssertions('x64'),
-    ...gxserverLinuxWorkflowAssertions('arm64'),
     ...RELEASE_BUILD_WORKFLOWS.flatMap((workflow) => sccacheWorkflowAssertions(workflow)),
+    ...windowsNativeRuntimeAssertions(),
     ...warmCacheWorkflowAssertions(),
   ];
 }
@@ -787,6 +904,7 @@ async function checkContract(repoRoot, contract, sources) {
  contents (used by the tests that prove each check still fails when the real
  gate is absent) without touching a workflow file on disk.
 */
+/** @param {{ repoRoot?: string, sources?: Record<string, string> }} [options] */
 export async function evaluateWorkflowAssertions({ repoRoot, sources = {} } = {}) {
   const assertions = releaseWorkflowAssertions();
   const parsed = new Map();
@@ -911,31 +1029,13 @@ export function extractSparklePublicKey(buildScript) {
  probed against the file that owns it, so a rename there is reported as a stale
  preflight constant instead of quietly comparing against a dead value.
 */
-export function preflightLiteralProbes({ sparklePublicKey, signingIdentity, githubRepo }) {
+export function preflightLiteralProbes({ sparklePublicKey }) {
   return [
     {
       file: SPARKLE_KEY_SOURCE,
       id: 'sparkle-public-key/build-script',
       literal: sparklePublicKey,
       why: 'the app stamps this key into Info.plist as SUPublicEDKey',
-    },
-    {
-      file: 'tooling/release-ghostex.mjs',
-      id: 'sparkle-public-key/release-driver',
-      literal: sparklePublicKey,
-      why: 'release-ghostex.mjs verifies signed appcasts against the same key',
-    },
-    {
-      file: 'tooling/release-ghostex.mjs',
-      id: 'signing-identity/release-driver',
-      literal: signingIdentity,
-      why: 'preflight probes the local keychain for the identity release-ghostex.mjs signs with',
-    },
-    {
-      file: 'tooling/release-ghostex.mjs',
-      id: 'github-repo/release-driver',
-      literal: githubRepo,
-      why: 'preflight looks for an existing release in the repository release-ghostex.mjs publishes to',
     },
     {
       file: 'appcast.xml',
@@ -947,7 +1047,7 @@ export function preflightLiteralProbes({ sparklePublicKey, signingIdentity, gith
       file: GXSERVER_BUILD_SCRIPT,
       id: 'gxserver-build-script/path',
       literal: '--arch',
-      why: 'both Linux gxserver workflows dispatch this script with a pinned --arch',
+      why: 'release-gpui-gxserver.yml and the cache warmer dispatch this script with a pinned --arch',
     },
   ];
 }

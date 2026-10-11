@@ -35,23 +35,12 @@ pub(crate) enum GpuiEngineTerminalEventTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GpuiTerminalAttachmentTarget {
     Terminal(GpuiEngineTerminalEventTarget),
-    // Companion can display a shell id borrowed from a project-local remote
-    // namespace. Retain the full shared workspace identity across the native
-    // picker and upload so parked projects with the same numeric id cannot
-    // redirect either the upload or its eventual paste.
-    ProjectEditorCompanion {
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-        session_key: GpuiWorkspaceTerminalSessionKey,
-    },
 }
 
 impl GpuiTerminalAttachmentTarget {
     pub(crate) fn engine_target(&self) -> GpuiEngineTerminalEventTarget {
         match self {
             Self::Terminal(target) => *target,
-            Self::ProjectEditorCompanion { slot_id, .. } => {
-                GpuiEngineTerminalEventTarget::Agents(slot_id.session_id)
-            }
         }
     }
 }
@@ -271,10 +260,14 @@ pub(crate) enum GpuiAddProjectDialogOperation {
     CancelCloneJob,
     CreateDirectory,
     DiscoverSourceControl,
+    /// Starts gxserver's managed install of a provider CLI (`gh`, `glab`) from its row.
+    InstallSourceControlTool,
     ListMachines,
     LookupRepository,
     PreviewClone,
     ReadCloneJob,
+    /// Reads that install's progress.
+    ReadSourceControlTool,
     StartClone,
 }
 
@@ -286,6 +279,8 @@ impl GpuiAddProjectDialogOperation {
             "cancelCloneJob" => Some(Self::CancelCloneJob),
             "createDirectory" => Some(Self::CreateDirectory),
             "discoverSourceControl" => Some(Self::DiscoverSourceControl),
+            "installSourceControlTool" => Some(Self::InstallSourceControlTool),
+            "readSourceControlTool" => Some(Self::ReadSourceControlTool),
             "listMachines" => Some(Self::ListMachines),
             "lookupRepository" => Some(Self::LookupRepository),
             "previewClone" => Some(Self::PreviewClone),
@@ -302,6 +297,8 @@ impl GpuiAddProjectDialogOperation {
             Self::CancelCloneJob => "cancelCloneJob",
             Self::CreateDirectory => "createDirectory",
             Self::DiscoverSourceControl => "discoverSourceControl",
+            Self::InstallSourceControlTool => "installSourceControlTool",
+            Self::ReadSourceControlTool => "readSourceControlTool",
             Self::ListMachines => "listMachines",
             Self::LookupRepository => "lookupRepository",
             Self::PreviewClone => "previewClone",
@@ -317,6 +314,9 @@ impl GpuiAddProjectDialogOperation {
             Self::CancelCloneJob => Some("/api/cancelRepositoryCloneJob"),
             Self::CreateDirectory => Some("/api/createProjectDirectory"),
             Self::DiscoverSourceControl => Some("/api/discoverSourceControl"),
+            Self::InstallSourceControlTool | Self::ReadSourceControlTool => {
+                Some("/api/managedTools")
+            }
             Self::ListMachines => None,
             Self::LookupRepository => Some("/api/lookupRepository"),
             Self::PreviewClone => Some("/api/previewRepositoryClone"),
@@ -334,6 +334,8 @@ impl GpuiAddProjectDialogOperation {
             Self::CancelCloneJob
             | Self::CreateDirectory
             | Self::ReadCloneJob
+            | Self::InstallSourceControlTool
+            | Self::ReadSourceControlTool
             | Self::ListMachines => GPUI_ADD_PROJECT_DIALOG_JOB_TIMEOUT,
         }
     }

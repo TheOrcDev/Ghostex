@@ -30,15 +30,26 @@ fn invocation(
     )
 }
 
-pub(super) fn process(script: &str) -> Result<Option<(Command, HashMap<String, String>)>, String> {
+/// The wmx command, its environment, and the extra creation flags it needs.
+///
+/// CDXC:PlatformSupport 2026-10-06 WHY:
+/// gxserver suppresses Windows error dialogs for the helpers it starts (`suppress_helper_error_dialogs`), and children inherit that error mode. `wmx start` launches the daemon whose PowerShell and agent run inside the user's session, so it gets CREATE_DEFAULT_ERROR_MODE: programs the user runs there keep Windows' normal error dialogs.
+pub(super) fn process(
+    script: &str,
+) -> Result<Option<(Command, HashMap<String, String>, u32)>, String> {
+    const CREATE_DEFAULT_ERROR_MODE: u32 = 0x0400_0000;
     let Some(encoded) = script.strip_prefix(PREFIX) else {
         return Ok(None);
     };
     let invocation: Invocation =
         serde_json::from_str(encoded).map_err(|error| error.to_string())?;
+    let flags = match invocation.args.first().map(String::as_str) {
+        Some("start" | "start-encoded") => CREATE_DEFAULT_ERROR_MODE,
+        _ => 0,
+    };
     let mut command = Command::new(invocation.program);
     command.args(invocation.args);
-    Ok(Some((command, invocation.environment)))
+    Ok(Some((command, invocation.environment, flags)))
 }
 
 fn simple(program: &str, operation: &str, name: &str) -> String {
@@ -135,6 +146,8 @@ pub(crate) fn build_zmx_shell_provider_command(input: ZmxShellProviderCommandInp
     )
 }
 
+/// CDXC:PromptEditor 2026-09-23 WHY:
+/// Apply the editor handshake after the PowerShell profile and pin it to this server's sibling CLI; bare `ghostex` selected an obsolete package from PATH even after the desktop and editor were updated.
 #[allow(clippy::too_many_arguments)]
 fn start(
     program: &str,
@@ -157,17 +170,26 @@ fn start(
         ),
         ("GHOSTEX_SESSION_ID", Some(name.to_string())),
         ("GHOSTEX_ZMX_BIN", Some(program.to_string())),
+        // CDXC:AgentScreenDetection 2026-10-07 WHY: sessions advertise TERM_PROGRAM=ghostty, so Empryo draws its chat avatars as Kitty image placeholders (U+10EEEE plus row and column diacritics). wmx's screen model does not place those cells the way Empryo does, so every capture of a window showing them came back shifted and overwritten (seen live 2026-10-07: "Empr̎pryo" rows, an input box missing its right border), and Empryo's chat could find no input box and held every send. Empryo is told not to draw them in wmx sessions until wmx models the placeholders. SEE-ALSO: .dependencies/wmx (its VT screen).
+        ("EMPRYO_NO_KITTY_IMAGES", Some("1".to_string())),
     ] {
         if let Some(value) = value {
             environment.insert(key.into(), value);
         }
     }
-    // CDXC:PromptEditor 2026-09-14 WHY:
-    // Apply Ghostex's editor handshake after the user's PowerShell profile; otherwise profile-assigned VS Code blocks chat/terminal transfers.
+    let cli = std::env::current_exe()
+        .expect("resolve running gxserver for the session editor")
+        .with_file_name("ghostex.exe");
+    let editor = format!("\"{}\" prompt-editor", cli.to_string_lossy());
+    // The profile runs after ConPTY applies launch.cwd and may change location.
+    // Restore the selected project before any agent command can run.
     let startup = format!(
-        "$env:GHOSTEX_PROMPT_EDITOR_MACHINE_VISUAL=$env:VISUAL; $env:GHOSTEX_PROMPT_EDITOR_MACHINE_EDITOR=$env:EDITOR; $env:VISUAL='ghostex prompt-editor'; $env:EDITOR=$env:VISUAL; $env:GHOSTEX_PROMPT_EDITING_ENABLED='1'; {}",
-        startup.unwrap_or_default().trim_end_matches(['\r', '\n'])
+        "Set-Location -LiteralPath {} -ErrorAction Stop; $env:GHOSTEX_PROMPT_EDITOR_MACHINE_VISUAL=$env:VISUAL; $env:GHOSTEX_PROMPT_EDITOR_MACHINE_EDITOR=$env:EDITOR; $env:VISUAL={}; $env:EDITOR=$env:VISUAL; $env:GHOSTEX_PROMPT_EDITING_ENABLED='1'; {}",
+        quote(cwd),
+        quote(&editor),
+        agent_without_powershell7_modules(startup.unwrap_or_default().trim_end_matches(['\r', '\n']))
     );
+    let startup = startup_from_environment(&startup, &mut environment);
     let launch = json!({"name": name, "cwd": cwd,
         "shell": crate::platform::shell::command_shell().executable,
         "startup": startup});
@@ -176,13 +198,48 @@ fn start(
     invocation(program, vec!["start-encoded".into(), encoded], environment)
 }
 
+/// Runs the agent's startup command with PowerShell 7's own module folder out of `PSModulePath`, then puts the shell's value back.
+///
+/// CDXC:PlatformSupport 2026-10-08 WHY:
+/// pwsh 7 writes its `$PSHOME\Modules` folder into `PSModulePath` and every child inherits it. A Windows PowerShell 5.1 child (`powershell.exe`) started by the agent itself, for example Codex's "Update" running `powershell -c 'irm https://chatgpt.com/codex/install.ps1 | iex'`, then loads that folder's Core-only `Microsoft.PowerShell.Utility` 7.0 before its own 3.1 and loses cmdlets such as Get-FileHash ("iex : The term 'Get-FileHash' is not recognized"). pwsh repairs the value only for 5.1 processes it starts itself, so the same command typed at the prompt worked. Reproduced from a Node parent in a wmx session: only the `$PSHOME\Modules` entry breaks 5.1; `Documents\PowerShell\Modules` and `Program Files\PowerShell\Modules` are harmless.
+/// The value cannot be fixed for the shell itself: with the entry removed, or merely moved behind the Windows PowerShell folders, pwsh 7 resolves PSReadLine 2.0 and loads Microsoft.PowerShell.Archive through the 5.1 compatibility session. So only the agent's command line loses it, and the shell's value returns when the agent exits. A child `pwsh` re-adds its own folder at startup, so agents that run pwsh tools are unaffected. The guard on `PSEdition` keeps this a no-op when the session shell is Windows PowerShell 5.1, where `$PSHOME\Modules` is 5.1's own folder.
+fn agent_without_powershell7_modules(command: &str) -> String {
+    if command.is_empty() {
+        return String::new();
+    }
+    format!(
+        "if ($PSVersionTable.PSEdition -eq 'Core') {{ $ghostexPsModulePath=$env:PSModulePath; $ghostexPwshModules=(Join-Path $PSHOME 'Modules').TrimEnd('\\'); $env:PSModulePath=(($env:PSModulePath -split ';') | Where-Object {{ $_ -and $_.TrimEnd('\\') -ne $ghostexPwshModules }}) -join ';' }}; try {{ {command}\n}} finally {{ if ($null -ne $ghostexPsModulePath) {{ $env:PSModulePath=$ghostexPsModulePath; Remove-Variable ghostexPsModulePath, ghostexPwshModules }} }}"
+    )
+}
+
+/// CDXC:PlatformSupport 2026-09-25 WHY:
+/// Resume lookup can contain the full first prompt. Putting it in wmx's launch argument and then PowerShell's UTF-16 EncodedCommand exceeded Windows' command-line limit and prevented session attach. Transport the UTF-8 payload in bounded environment values, consumed before the agent starts, so neither command line grows with the prompt.
+fn startup_from_environment(startup: &str, environment: &mut HashMap<String, String>) -> String {
+    let encoded = STANDARD.encode(startup.as_bytes());
+    let mut count = 0;
+    for (index, chunk) in encoded.as_bytes().chunks(8192).enumerate() {
+        environment.insert(
+            format!("GHOSTEX_NATIVE_STARTUP_{index}"),
+            String::from_utf8(chunk.to_vec()).expect("base64 is ASCII"),
+        );
+        count += 1;
+    }
+    format!(
+        ". (& {{ $payload = -join @(for ($i = 0; $i -lt {count}; $i++) {{ \
+         $key = 'GHOSTEX_NATIVE_STARTUP_' + $i; \
+         [Environment]::GetEnvironmentVariable($key, 'Process'); \
+         Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction Stop \
+         }}); [ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))) }})"
+    )
+}
+
 pub(crate) fn process_snapshot_command(program: &str) -> String {
     invocation(program, vec!["process-snapshot".into()], HashMap::new())
 }
 
 /// CDXC:PlatformSupport 2026-09-14 WHY:
 /// Keep the existing endpoint directory when migrating to wmx so running native sessions remain attachable without restarting their agents.
-fn session_directory() -> String {
+pub(crate) fn session_directory() -> String {
     ghostex_paths::GhostexPaths::resolve()
         .runtime_dir
         .join("windows-sessions")

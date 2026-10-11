@@ -34,6 +34,12 @@ const (
 	// meow handshake with the peer.
 	reachabilityTimeout = 30 * time.Second
 
+	// reuseProbeTimeout bounds the disco ping that checks a tunnel being reused
+	// still answers. A healthy tunnel answers in one relay round-trip; magicsock
+	// itself gives up on a disco ping after 5s and never reports the timeout,
+	// so this context is the only thing that ends the wait.
+	reuseProbeTimeout = 4 * time.Second
+
 	// dialTimeout bounds one accepted connection's dial to the peer.
 	dialTimeout = 30 * time.Second
 )
@@ -75,12 +81,13 @@ var (
 // StartForward ensures a loopback listener that forwards every accepted
 // connection to remotePort on the tailcat peer identified by token, and
 // returns the listener's local port. id keys the forward (one per machine):
-// calling again with the same id, token, and remotePort returns the existing
-// listener's port, so reconnects reuse the already-established tunnel.
+// calling again with the same id, token, and remotePort reuses the existing
+// tunnel when it still answers, so reconnects skip the rendezvous.
 // A changed token or remotePort for the same id replaces the forward.
 //
-// Before returning, the peer is pinged so an unreachable machine, a stale
-// token, or a failed DERP map fetch surfaces here as a real error instead of
+// Before returning, the peer is checked so an unreachable machine, a stale
+// token, a failed DERP map fetch, or a tunnel that died while the app was
+// suspended surfaces here as a real error (or a rebuilt tunnel) instead of
 // silently resetting the SSH client's TCP connection later.
 func StartForward(id, token string, remotePort int) (int, error) {
 	token = strings.TrimSpace(token)
@@ -92,26 +99,78 @@ func StartForward(id, token string, remotePort int) (int, error) {
 	}
 	log.Printf("tailcat[%s]: StartForward remotePort=%d tokenLen=%d", id, remotePort, len(token))
 
-	f, port, err := ensureForward(id, token, remotePort)
-	if err != nil {
-		log.Printf("tailcat[%s]: StartForward could not open a loopback listener: %v", id, err)
-		return 0, err
+	for attempt := 0; ; attempt++ {
+		f, port, reused, err := ensureForward(id, token, remotePort)
+		if err != nil {
+			log.Printf("tailcat[%s]: StartForward could not open a loopback listener: %v", id, err)
+			return 0, err
+		}
+		if !reused {
+			if err := rendezvous(f); err != nil {
+				stopForwardIf(id, f)
+				return 0, err
+			}
+			log.Printf("tailcat[%s]: forwarding 127.0.0.1:%d -> peer:%d", id, port, remotePort)
+			return port, nil
+		}
+		if err := probeReused(f); err == nil {
+			log.Printf("tailcat[%s]: reusing tunnel, forwarding 127.0.0.1:%d -> peer:%d", id, port, remotePort)
+			return port, nil
+		} else if attempt == 0 {
+			log.Printf("tailcat[%s]: rebuilding the tunnel: %v", id, err)
+			stopForwardIf(id, f)
+			continue
+		} else {
+			// The forward another caller built while this one was probing is dead too.
+			stopForwardIf(id, f)
+			return 0, fmt.Errorf("tailcat: cannot reach paired machine: %w", err)
+		}
 	}
+}
 
-	// Ping outside the lock: a cold rendezvous blocks for seconds, and a warm
-	// one is a single relay round-trip, so validating on every call is cheap
-	// and keeps "Test connection" honest.
+// rendezvous performs a fresh client's cold start: the DERP map fetch, the
+// relay connection, and the meow handshake that registers it with the peer.
+// It runs outside the registry lock because it blocks for seconds.
+func rendezvous(f *forward) error {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(f.ctx, reachabilityTimeout)
 	defer cancel()
 	if _, err := f.client.Ping(ctx); err != nil {
-		log.Printf("tailcat[%s]: peer unreachable after %v: %v", id, elapsed(start), err)
-		stopForwardIf(id, f)
-		return 0, fmt.Errorf("tailcat: cannot reach paired machine: %w", err)
+		log.Printf("tailcat[%s]: peer unreachable after %v: %v", f.id, elapsed(start), err)
+		return fmt.Errorf("tailcat: cannot reach paired machine: %w", err)
 	}
-	log.Printf("tailcat[%s]: peer reachable in %v, forwarding 127.0.0.1:%d -> peer:%d",
-		id, elapsed(start), port, remotePort)
-	return port, nil
+	log.Printf("tailcat[%s]: peer reachable in %v", f.id, elapsed(start))
+	return nil
+}
+
+// probeReused checks that a tunnel built earlier still carries traffic to the
+// peer, and that the peer still knows this client.
+//
+// CDXC:RemotePairing 2026-09-22 WHY:
+// A reused client must be probed with a disco ping, not Client.Ping: the
+// meow handshake completes once per client and every later Ping returns at
+// once without touching the network, so the reachability check the first
+// version ran here always passed on a dead tunnel. That is how the iPhone
+// lost Easy Connect after leaving the app: iOS suspends the process, the
+// relay connection and any direct path die, and every reconnect reused the
+// same client, whose dials then hung until the app was killed. A disco ping
+// needs a live path and a pong from the paired machine, so it also fails when
+// the machine's tailcat helper restarted and forgot this client; either way
+// the caller rebuilds the tunnel and a fresh client registers again.
+func probeReused(f *forward) error {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(f.ctx, reuseProbeTimeout)
+	defer cancel()
+	res, err := f.client.DiscoPing(ctx)
+	if err != nil {
+		return fmt.Errorf("reused tunnel did not answer within %v: %w", elapsed(start), err)
+	}
+	path := "relay"
+	if res.Endpoint != "" {
+		path = "direct " + res.Endpoint
+	}
+	log.Printf("tailcat[%s]: reused tunnel answered in %v over %s", f.id, elapsed(start), path)
+	return nil
 }
 
 // StopForward closes the machine's listener, its tunnel, and every in-flight
@@ -162,7 +221,7 @@ func Ping(token string, timeoutMs int) (int, error) {
 	if timeoutMs <= 0 {
 		timeoutMs = 15000
 	}
-	client := tailcat.NewClient(tailcat.ConnBlob(token))
+	client := tailcat.NewClient(tailcat.Addr(token))
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
@@ -174,29 +233,34 @@ func Ping(token string, timeoutMs int) (int, error) {
 }
 
 // ensureForward returns the live forward for id (creating it, or replacing one
-// whose token or remote port changed) together with its local port.
-func ensureForward(id, token string, remotePort int) (*forward, int, error) {
+// whose token or remote port changed) together with its local port. reused
+// reports whether the forward existed before this call, so the caller knows
+// whether it needs the cold rendezvous or the reuse probe.
+func ensureForward(id, token string, remotePort int) (f *forward, port int, reused bool, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if existing, ok := forwards[id]; ok {
 		if existing.token == token && existing.remotePort == remotePort {
-			return existing, existing.listener.Addr().(*net.TCPAddr).Port, nil
+			return existing, existing.listener.Addr().(*net.TCPAddr).Port, true, nil
 		}
 		log.Printf("tailcat[%s]: token or remote port changed, replacing forward", id)
 		stopLocked(id)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &forward{
+	f = &forward{
 		id:         id,
 		token:      token,
 		remotePort: remotePort,
 		listener:   listener,
+		// CDXC:RemotePairing 2026-09-15 WHY:
+		// The tailcat library must be newer than v0.5.0: gxserver installs the tailcat v0.6.0 helper, which serves addresses carrying a WireGuard pre-shared key, and an older client still passes the reachability ping but never completes the handshake, so every dial hangs and the phone reports "Reached the computer, but Ghostex there did not answer".
+		// SEE-ALSO: server/src/tailcat/install.rs (TAILCAT_MODULE) and the go.mod pin next to this file.
 		client: &tailcat.Client{
-			Server: tailcat.ConnBlob(token),
+			Server: tailcat.Addr(token),
 			Logf:   forwardLogf(id),
 		},
 		closed: make(chan struct{}),
@@ -205,7 +269,7 @@ func ensureForward(id, token string, remotePort int) (*forward, int, error) {
 	}
 	forwards[id] = f
 	go acceptLoop(f)
-	return f, listener.Addr().(*net.TCPAddr).Port, nil
+	return f, listener.Addr().(*net.TCPAddr).Port, false, nil
 }
 
 // forwardLogf attributes the tailcat library's own log lines to one machine.

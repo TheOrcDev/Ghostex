@@ -3,6 +3,7 @@
 // C1) into this descriptively named module per its FOLLOW-UPS.md note (pure
 // move, no logic changes).
 
+use crate::app::render::workarea_header::workarea_header_bottom_y;
 use crate::*;
 
 pub(crate) fn command_pane_height_ratio(ratio: f32) -> f32 {
@@ -47,6 +48,18 @@ pub(crate) fn gpui_click_to_wake_sleeping_sessions_from_shared_settings(
         .unwrap_or(true)
 }
 
+/// `wakeSleepingSessionsOnSelect`, true when missing or malformed like shared Settings. See the
+/// SessionSleep decision on `select_sleeping_local_workspace_tab`.
+pub(crate) fn gpui_wake_sleeping_sessions_on_select_from_shared_settings(
+    settings: &shared_settings::SharedSidebarSettingsSnapshot,
+) -> bool {
+    settings
+        .object()
+        .get("wakeSleepingSessionsOnSelect")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
 pub(crate) fn command_pane_click_to_wake_sleeping_sessions_from_shared_settings(
     settings: &shared_settings::SharedSidebarSettingsSnapshot,
 ) -> bool {
@@ -74,269 +87,6 @@ pub(crate) fn command_pane_sleeping_tab_selection_wake_target(
         .session(session_id)
         .is_some_and(|session| session.is_sleeping)
         .then_some((group_id, session_id))
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label(
-    active_session_is_sleeping: bool,
-    click_to_wake_enabled: bool,
-) -> Option<&'static str> {
-    (active_session_is_sleeping && click_to_wake_enabled)
-        .then_some(COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL)
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_is_private_data_safe(
-    label: &str,
-) -> bool {
-    /*
-    CDXC:SessionSleep 2026-06-27-00:22:
-    The paint path may render only the fixed native wake affordance. Keep this guard at the writer boundary so future canvas callers cannot paint command text, session titles, paths, URLs, tokens, or terminal content into the sleeping command body.
-    */
-    label == COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CommandPaneSleepingPlaceholderWakeLabelFrame {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) width: f32,
-    pub(crate) height: f32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CommandPaneSleepingPlaceholderWakeLabelLine {
-    pub(crate) text: String,
-    pub(crate) measured_width: f32,
-}
-
-pub(crate) struct CommandPaneSleepingPlaceholderWakeLabelPaintState {
-    pub(crate) frame: CommandPaneSleepingPlaceholderWakeLabelFrame,
-    pub(crate) label_lines: Vec<gpui::ShapedLine>,
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_max_size(
-    body_width: f32,
-    body_height: f32,
-) -> Option<(f32, f32)> {
-    /*
-    CDXC:SessionSleep 2026-06-27-00:22:
-    Match native body-bound visibility exactly: the sleeping wake label has no geometry when the body cannot provide positive `body.width - 8` and `body.height - 16` label limits.
-    */
-    if !body_width.is_finite() || !body_height.is_finite() {
-        return None;
-    }
-
-    let max_label_width =
-        body_width - (COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_HORIZONTAL_PADDING * 2.0);
-    let max_label_height =
-        body_height - (COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_VERTICAL_PADDING * 2.0);
-    (max_label_width > 0.0 && max_label_height > 0.0).then_some((max_label_width, max_label_height))
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_frame(
-    body_width: f32,
-    body_height: f32,
-    measured_width: f32,
-    measured_height: f32,
-) -> Option<CommandPaneSleepingPlaceholderWakeLabelFrame> {
-    /*
-    CDXC:SessionSleep 2026-06-27-00:22:
-    Native centers a measured label frame inside the command body after applying the exact AppKit clamps: width is ceil(measured width)+8 with a 1px floor, height is ceil(measured height) with an 18px floor, and both are clamped to the body-derived max label size.
-    */
-    if !measured_width.is_finite()
-        || !measured_height.is_finite()
-        || measured_width < 0.0
-        || measured_height < 0.0
-    {
-        return None;
-    }
-
-    let (max_label_width, max_label_height) =
-        command_pane_sleeping_placeholder_wake_label_max_size(body_width, body_height)?;
-    let label_width = (measured_width.ceil()
-        + (COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_HORIZONTAL_PADDING * 2.0))
-        .max(1.0)
-        .min(max_label_width);
-    let label_height = measured_height
-        .ceil()
-        .max(COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT)
-        .min(max_label_height);
-
-    Some(CommandPaneSleepingPlaceholderWakeLabelFrame {
-        x: (body_width - label_width) / 2.0,
-        y: (body_height - label_height) / 2.0,
-        width: label_width,
-        height: label_height,
-    })
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_char_wrap_lines(
-    label: &str,
-    max_label_width: f32,
-    mut measure: impl FnMut(&str) -> Option<f32>,
-) -> Option<Vec<CommandPaneSleepingPlaceholderWakeLabelLine>> {
-    /*
-    CDXC:SessionSleep 2026-06-27-00:22:
-    AppKit uses character wrapping for the wake label, not word wrapping. Split the fixed label by measured character fit so narrow command bodies break within words exactly because the body bounds require it.
-    */
-    if !command_pane_sleeping_placeholder_wake_label_is_private_data_safe(label)
-        || !max_label_width.is_finite()
-        || max_label_width <= 0.0
-    {
-        return None;
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0.0;
-
-    for character in label.chars() {
-        let mut candidate = current.clone();
-        candidate.push(character);
-        let candidate_width = measure(&candidate)?;
-        if !candidate_width.is_finite() || candidate_width < 0.0 {
-            return None;
-        }
-
-        if !current.is_empty() && candidate_width > max_label_width {
-            lines.push(CommandPaneSleepingPlaceholderWakeLabelLine {
-                text: current,
-                measured_width: current_width,
-            });
-            current = character.to_string();
-            current_width = measure(&current)?;
-            if !current_width.is_finite() || current_width < 0.0 {
-                return None;
-            }
-        } else {
-            current = candidate;
-            current_width = candidate_width;
-        }
-    }
-
-    if !current.is_empty() {
-        lines.push(CommandPaneSleepingPlaceholderWakeLabelLine {
-            text: current,
-            measured_width: current_width,
-        });
-    }
-
-    (!lines.is_empty()).then_some(lines)
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_text_run(len: usize) -> gpui::TextRun {
-    let mut font = gpui::font(".SystemUIFont");
-    font.weight = FontWeight::MEDIUM;
-    gpui::TextRun {
-        len,
-        font,
-        color: command_pane_sleeping_placeholder_wake_label_color(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    }
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_shape_line(
-    label: &str,
-    window: &mut Window,
-) -> gpui::ShapedLine {
-    window.text_system().shape_line(
-        gpui::SharedString::from(label.to_string()),
-        px(COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_FONT_SIZE),
-        &[command_pane_sleeping_placeholder_wake_label_text_run(
-            label.len(),
-        )],
-        None,
-    )
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_prepaint(
-    bounds: Bounds<Pixels>,
-    label: &'static str,
-    window: &mut Window,
-) -> Option<CommandPaneSleepingPlaceholderWakeLabelPaintState> {
-    /*
-    CDXC:SessionSleep 2026-06-27-00:22:
-    Runtime wake-label layout must come from this paint pass's exact command-body bounds. Measure the fixed label with 13px medium system text, character-wrap within `body.width - 8`, clamp the centered frame to native limits, and produce no paint state when native would hide it.
-    */
-    if !command_pane_sleeping_placeholder_wake_label_is_private_data_safe(label) {
-        return None;
-    }
-
-    let body_width = bounds.size.width.as_f32();
-    let body_height = bounds.size.height.as_f32();
-    let (max_label_width, _) =
-        command_pane_sleeping_placeholder_wake_label_max_size(body_width, body_height)?;
-    let wrapped_lines = command_pane_sleeping_placeholder_wake_label_char_wrap_lines(
-        label,
-        max_label_width,
-        |line| {
-            Some(
-                command_pane_sleeping_placeholder_wake_label_shape_line(line, window)
-                    .width()
-                    .as_f32(),
-            )
-        },
-    )?;
-    let measured_width = wrapped_lines
-        .iter()
-        .map(|line| line.measured_width)
-        .fold(0.0, f32::max);
-    let measured_height =
-        wrapped_lines.len() as f32 * COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT;
-    let frame = command_pane_sleeping_placeholder_wake_label_frame(
-        body_width,
-        body_height,
-        measured_width,
-        measured_height,
-    )?;
-    let label_lines = wrapped_lines
-        .iter()
-        .map(|line| command_pane_sleeping_placeholder_wake_label_shape_line(&line.text, window))
-        .collect();
-
-    Some(CommandPaneSleepingPlaceholderWakeLabelPaintState { frame, label_lines })
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_paint(
-    body_bounds: Bounds<Pixels>,
-    paint_state: CommandPaneSleepingPlaceholderWakeLabelPaintState,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let frame = paint_state.frame;
-    let label_bounds = Bounds::new(
-        gpui::point(
-            body_bounds.left() + px(frame.x),
-            body_bounds.top() + px(frame.y),
-        ),
-        size(px(frame.width), px(frame.height)),
-    );
-    let measured_height = paint_state.label_lines.len() as f32
-        * COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT;
-    let mut line_origin = gpui::point(
-        label_bounds.left(),
-        label_bounds.top() + px((frame.height - measured_height).max(0.0) / 2.0),
-    );
-
-    window.with_content_mask(
-        Some(ContentMask {
-            bounds: label_bounds,
-        }),
-        |window| {
-            for line in paint_state.label_lines {
-                let _ = line.paint(
-                    line_origin,
-                    px(COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT),
-                    gpui::TextAlign::Center,
-                    Some(px(frame.width)),
-                    window,
-                    cx,
-                );
-                line_origin.y += px(COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT);
-            }
-        },
-    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -520,8 +270,10 @@ pub(crate) fn command_pane_default_height_ratio_for_default_height_px(
     command_pane_height_ratio(default_height_px / content_height.max(1.0))
 }
 
+/// The height the command pane's ratio is measured against: everything the workspace column owns
+/// below the workarea header.
 pub(crate) fn command_pane_content_height(window: &Window) -> f32 {
-    (window.bounds().size.height.as_f32() - TITLEBAR_HEIGHT).max(1.0)
+    (window.bounds().size.height.as_f32() - workarea_header_bottom_y()).max(1.0)
 }
 
 pub(crate) fn command_pane_workspace_width(

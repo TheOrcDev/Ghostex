@@ -12,11 +12,7 @@ export const IOS_DISCORD_URL = 'https://discord.gg/df7b3G92CS';
 export const AUR_PACKAGE_URL = 'https://aur.archlinux.org/packages/ghostex-bin';
 
 export function renderIosAvailabilityNotes() {
-  return [
-    '### iOS',
-    '',
-    `The iOS TestFlight is available through [Discord](${IOS_DISCORD_URL}). Join and post in the iOS channel to get the app.`,
-  ].join('\n');
+  return `iOS: TestFlight through [Discord](${IOS_DISCORD_URL}) (post in the iOS channel)`;
 }
 
 function assertVersion(version) {
@@ -33,18 +29,18 @@ export function customerDownloadUrl(version, assetName) {
 export function customerDownloadEntries(version, assetNames) {
   assertVersion(version);
   const available = new Set(assetNames ?? []);
+  /** @type {(label: string, assetName: string) => { assetName?: string, label: string, url?: string }} */
   const asset = (label, assetName) => ({ assetName, label });
+  /** @type {(label: string, url: string) => { assetName?: string, label: string, url?: string }} */
   const link = (label, url) => ({ label, url });
   const groups = [
     {
-      title: 'macOS ARM',
-      downloads: [asset('Download DMG', `ghostex-${version}-arm64.dmg`)],
+      line: 1,
+      title: 'macOS',
+      downloads: [asset('Apple Silicon DMG', `ghostex-${version}-arm64.dmg`)],
     },
     {
-      title: 'Android',
-      downloads: [asset('Download APK', 'ghostex-android.apk')],
-    },
-    {
+      line: 1,
       title: 'Windows',
       downloads: [
         asset('x64 installer', `ghostex-${version}-windows-x64.exe`),
@@ -54,13 +50,19 @@ export function customerDownloadEntries(version, assetNames) {
       ],
     },
     {
-      title: 'Linux',
+      line: 2,
+      title: 'Linux x64',
       downloads: [
-        asset('x64 Debian package', `ghostex_${version}_amd64.deb`),
-        asset('x64 RPM package', `ghostex-${version}-1.x86_64.rpm`),
-        link('AUR link (ghostex-bin)', AUR_PACKAGE_URL),
-        asset('x64 tarball (Arch & other distros, mise/ubi)', `ghostex-${version}-linux-x64.tar.zst`),
+        asset('.deb', `ghostex_${version}_amd64.deb`),
+        asset('.rpm', `ghostex-${version}-1.x86_64.rpm`),
+        asset('tarball (mise/ubi)', `ghostex-${version}-linux-x64.tar.zst`),
+        link('AUR (ghostex-bin)', AUR_PACKAGE_URL),
       ],
+    },
+    {
+      line: 3,
+      title: 'Android',
+      downloads: [asset('APK', 'ghostex-android.apk')],
     },
   ];
 
@@ -77,28 +79,48 @@ export function customerDownloadEntries(version, assetNames) {
     .filter((group) => group.downloads.some((download) => download.assetName !== undefined));
 }
 
+export const DOWNLOADS_START = '<!-- ghostex-downloads:start -->';
+const DOWNLOADS_END = '<!-- ghostex-downloads:end -->';
+
+/*
+ CDXC:Release 2026-10-04 DECISION:
+ User: "i want just download links at the top pls instead of bottom but should be max 3 lines not tons of lines".
+ The release body opens with one marked block of at most three lines (macOS and Windows, Linux, phones), each platform's
+ links inline and separated by " · ", followed by the CHANGELOG notes. Platforms publish on their own, so every
+ publish or amend regenerates the block from the live asset list between its markers instead of appending, and strips
+ the old bottom "## Download Ghostex" section from bodies written before this change. Checksums and provenance stay
+ release assets without links.
+*/
 export function renderCustomerDownloadNotes(version, assetNames) {
   const groups = customerDownloadEntries(version, assetNames);
   if (groups.length === 0) return '';
 
-  const lines = [`## Download Ghostex ${version}`, ''];
+  /** @type {Map<number, string[]>} */
+  const lines = new Map();
   for (const group of groups) {
-    lines.push(`### ${group.title}`, '');
-    for (const download of group.downloads) {
-      lines.push(`- [${download.label}](${download.url})`);
-    }
-    lines.push('');
-    if (group.title === 'Android') {
-      lines.push(renderIosAvailabilityNotes(), '');
-    }
+    const links = group.downloads.map((download) => `[${download.label}](${download.url})`).join(' · ');
+    const parts = lines.get(group.line) ?? [];
+    parts.push(`**${group.title}:** ${links}`);
+    if (group.title === 'Android') parts.push(renderIosAvailabilityNotes());
+    lines.set(group.line, parts);
   }
-  return lines.join('\n').trimEnd();
+  const rendered = [...lines.keys()]
+    .sort((a, b) => a - b)
+    .map((line) => /** @type {string[]} */ (lines.get(line)).join(' · '));
+  // A trailing backslash is a GFM hard line break, so the lines stay separate without blank lines between them.
+  const body = rendered.map((line, index) => (index < rendered.length - 1 ? `${line}\\` : line)).join('\n');
+  return `${DOWNLOADS_START}\n${body}\n${DOWNLOADS_END}`;
 }
 
 export function mergeCustomerDownloadNotes(body, version, assetNames) {
-  const normalized = String(body ?? '')
-    .replaceAll('\r\n', '\n')
-    .trimEnd();
+  let normalized = String(body ?? '').replaceAll('\r\n', '\n');
+  const blockStart = normalized.indexOf(DOWNLOADS_START);
+  if (blockStart >= 0) {
+    const blockEnd = normalized.indexOf(DOWNLOADS_END, blockStart);
+    if (blockEnd < 0) throw new Error('Existing release notes have an unterminated download block');
+    normalized = `${normalized.slice(0, blockStart)}${normalized.slice(blockEnd + DOWNLOADS_END.length)}`;
+  }
+  normalized = normalized.trim();
   if (!normalized) throw new Error('Existing release notes are empty');
 
   const removableHeadings = [
@@ -112,5 +134,5 @@ export function mergeCustomerDownloadNotes(body, version, assetNames) {
   }, normalized.length);
   const prose = normalized.slice(0, cutAt).trimEnd();
   const downloads = renderCustomerDownloadNotes(version, assetNames);
-  return `${prose}${downloads ? `\n\n${downloads}` : ''}\n`;
+  return `${downloads ? `${downloads}\n\n` : ''}${prose}\n`;
 }

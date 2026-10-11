@@ -137,6 +137,9 @@ pub(crate) fn command_pane_model_to_shell_state_json_with_optional_delayed_send_
                         "actionCommandId".to_string(),
                         serde_json::Value::String(command_id.clone()),
                     );
+                    if let Some(scope) = session.action_scope {
+                        object.insert("actionScope".to_string(), serde_json::json!(scope.mutation_target()));
+                    }
                 }
                 if let Some((timer, remaining_ms)) = restored_timer
                     && let Some(object) = session_json.as_object_mut()
@@ -154,6 +157,7 @@ pub(crate) fn command_pane_model_to_shell_state_json_with_optional_delayed_send_
             })
             .collect::<Vec<_>>(),
         "root": command_pane_node_to_shell_state_json(&model.root),
+        "viewRoot": command_pane_node_to_shell_state_json(&model.view_root),
         "focusedGroupId": model.focused_group.0,
         "focusModeGroupId": model
             .focus_mode_group
@@ -165,7 +169,7 @@ pub(crate) fn command_pane_model_to_shell_state_json_with_optional_delayed_send_
         "nextSplitId": model.next_split_id,
         "nextSessionId": model.next_session_id,
     });
-    if model.has_sessions() {
+    if model.has_panel_sessions() {
         state["heightRatio"] = json_number_f32(command_pane_height_ratio(model.height_ratio));
         state["widthRatio"] = json_number_f32(command_pane_width_ratio(model.width_ratio));
     }
@@ -219,6 +223,8 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
         return Some(CommandPaneModel {
             terminal_sessions: Vec::new(),
             root: command_pane_dummy_node(),
+            view_root: command_pane_dummy_node(),
+            view_dock_visible: false,
             focused_group: CommandPaneGroupId(0),
             focus_mode_group: None,
             mode: CommandPaneMode::Collapsed,
@@ -239,9 +245,23 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
         .iter()
         .map(|session| session.id)
         .collect::<Vec<_>>();
-    let root = command_pane_node_from_shell_state(object.get("root")?, &session_ids)?;
+    /*
+    CDXC:CommandPane 2026-09-22 WHY:
+    Either tree may be empty on its own: a project can have only a Terminal view, or only a
+    Commands pane. An empty tree serializes as the dummy leaf, which the node parser rejects, so
+    each tree parses on its own terms and only both being empty discards the model.
+    */
+    let root = object
+        .get("root")
+        .and_then(|value| command_pane_node_from_shell_state(value, &session_ids))
+        .unwrap_or_else(command_pane_dummy_node);
+    let view_root = object
+        .get("viewRoot")
+        .and_then(|value| command_pane_node_from_shell_state(value, &session_ids))
+        .unwrap_or_else(command_pane_dummy_node);
     let mut group_ids = Vec::new();
     collect_command_leaf_ids(&root, &mut group_ids);
+    collect_command_leaf_ids(&view_root, &mut group_ids);
     if group_ids.is_empty()
         || has_duplicate_u64(
             &group_ids
@@ -255,6 +275,7 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
 
     let mut referenced_session_ids = Vec::new();
     collect_command_node_session_ids(&root, &mut referenced_session_ids);
+    collect_command_node_session_ids(&view_root, &mut referenced_session_ids);
     if referenced_session_ids.is_empty()
         || has_duplicate_u64(
             &referenced_session_ids
@@ -280,6 +301,7 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
         .unwrap_or(group_ids[0]);
     let mut split_ids = Vec::new();
     collect_command_split_ids(&root, &mut split_ids);
+    collect_command_split_ids(&view_root, &mut split_ids);
     if has_duplicate_u64(
         &split_ids
             .iter()
@@ -304,6 +326,8 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
     let mut model = CommandPaneModel {
         terminal_sessions,
         root,
+        view_root,
+        view_dock_visible: false,
         focused_group,
         focus_mode_group: None,
         mode,
@@ -345,6 +369,10 @@ pub(crate) fn command_pane_model_from_shell_state_with_default_height_px(
                 + 1,
         ),
     };
+    if !model.has_panel_sessions() {
+        // Only the Terminal view survived: the Commands pane has nothing to show, so it starts hidden.
+        model.mode = CommandPaneMode::Collapsed;
+    }
     if let Some(focus_mode_group) = object
         .get("focusModeGroupId")
         .and_then(json_u64_value)
@@ -426,6 +454,11 @@ pub(crate) fn command_session_from_shell_state(
         .with_sleeping(is_sleeping);
     if let Some(command_id) = action_command_id {
         session = session.with_action_command_id(command_id);
+        session.action_scope = match json_string_field(object, "actionScope") {
+            Some("command") => Some(crate::app::helpers::GpuiSidebarCommandScope::Project),
+            Some("globalCommand") => Some(crate::app::helpers::GpuiSidebarCommandScope::Global),
+            _ => None,
+        };
     }
     Some(session)
 }
@@ -843,7 +876,9 @@ pub(crate) fn command_pane_apply_startup_activity_restore_intents(
         {
             changed = true;
         }
-        if !command_pane.is_expanded() {
+        if command_pane.dock_for_group(target_group_id) == Some(CommandPaneDock::Panel)
+            && !command_pane.is_expanded()
+        {
             command_pane.expand();
             changed = true;
         }
@@ -894,7 +929,11 @@ pub(crate) fn command_pane_apply_delayed_send_restore_intent(
     {
         changed = true;
     }
-    if !command_pane.is_expanded() {
+    // A Terminal view tab cannot be expanded from here: the view opens when it is the project's
+    // active view again, and the resumed timer waits for that body like a manually slept tab.
+    if command_pane.dock_for_group(target_group_id) == Some(CommandPaneDock::Panel)
+        && !command_pane.is_expanded()
+    {
         command_pane.expand();
         changed = true;
     }

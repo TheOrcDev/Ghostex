@@ -2,7 +2,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /*
  CDXC:Release 2026-09-02-12:40:
@@ -21,16 +21,16 @@ import { pathToFileURL } from 'node:url';
  re-exports, dynamic import(), require(), and createRequire(...)() call sites.
  Specifiers are reduced to their package root before the package.json lookup.
 
- Template bodies are blanked on purpose: tooling/generate-mobile-tabler-icons.mjs
- emits a file whose `import ... from 'react-native-svg'` only resolves inside the
- apps/mobile/app submodule, and reporting it here would be a false positive.
+ Template bodies are blanked on purpose: a generator's output template (the
+ phone's icon generator writes `import ... from 'react-native-svg'`, which only
+ resolves inside the apps/mobile/app submodule) is not an import of the
+ generator itself, and reporting it here would be a false positive.
  The cost is that source assembled from template strings and handed to a
- bundler - tooling/shiki-classic-assets.mjs builds an esbuild stdin entry that
- imports `@shikijs/themes` - is outside this scan; that package is declared in
- the root package.json by hand for the same reason esbuild is.
+ bundler is outside this scan; such packages have to be declared in the root
+ package.json by hand, the same as esbuild.
 */
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const toolingRoot = path.join(repoRoot, 'tooling');
 const scannedExtensions = new Set(['.mjs', '.js', '.ts']);
 const skippedDirectories = new Set(['node_modules', 'patches']);
@@ -176,8 +176,15 @@ function collectSpecifiers(source) {
   return specifiers;
 }
 
+/*
+ CDXC:Release 2026-09-21 WHY:
+ `@/` is the repo-root path alias from tsconfig.json (`@/packages/...`,
+ `@/apps/...`), not an npm scope, so it resolves to repo files and has no
+ package.json entry to declare. The quick-access hotkey-table generator in tooling/gx-core imports through it.
+*/
 function packageRoot(specifier) {
   if (
+    specifier.startsWith('@/') ||
     specifier.startsWith('.') ||
     specifier.startsWith('/') ||
     specifier.startsWith('#') ||

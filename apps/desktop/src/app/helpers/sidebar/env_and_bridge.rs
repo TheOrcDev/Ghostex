@@ -6,12 +6,8 @@
 // C1 wave-1 extraction: stateless helper functions moved verbatim out of
 // main.rs (pure move, no logic changes). See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
-use std::{env, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{sync::atomic::Ordering, time::Duration};
 
-// RefCell backs cross-platform runtime state (window frame persistence), not
-// just the macOS-only shims that first introduced the import.
-
-use anyhow::{Context as _, Result};
 use gpui::{Hsla, rgb};
 
 use crate::app::helpers::*;
@@ -26,72 +22,26 @@ pub(crate) fn sidebar_cef_prepaint_background_color() -> u32 {
     0xff00_0000 | GPUI_TITLEBAR_BACKGROUND_RGB.load(Ordering::Relaxed) as u32
 }
 
-/// CDXC:Sidebar 2026-09-13 DECISION:
-/// User: the five-pixel grab handle between the sidebar and main agent area is white in light mode.
+/// CDXC:Sidebar 2026-09-16 DECISION:
+/// User: resize drag-area backgrounds are #F3F4F6 in light mode, superseding the earlier #C9C9C9 choice and the white sidebar grab handle requested on 2026-09-13.
 pub(crate) fn sidebar_divider_background_color() -> Hsla {
     if CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed) {
-        rgb(0xffffff).into()
+        rgb(LIGHT_RESIZE_HANDLE_RGB).into()
     } else {
         workspace_background_color()
     }
 }
 
-/// CDXC:Sidebar 2026-09-14 DECISION:
-/// User: restore a one-pixel #d4d4d4 line between the sidebar and resize rail in light mode.
+/// CDXC:Sidebar 2026-09-19 DECISION:
+/// User: the line between the sidebar and the workspace matches the companion sidepane's left border in both themes (#d4d4d4 in light mode, drawn in dark mode too). Since the same-day Workarea decision to make rails look like Waku's, the 2px resize rail is that line: it fills with this colour instead of drawing one pixel beside a black gap, and stays the single owner of the edge, so the sidebar itself must not add a border there as well.
 pub(crate) fn sidebar_divider_line_color() -> Hsla {
-    if CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed) {
-        rgb(0xd4d4d4).into()
-    } else {
-        rgb(0x000000).opacity(0.0).into()
-    }
+    glass_divider(chrome_color(0x252525, 0xd4d4d4).into())
 }
 
 /// CDXC:Theming 2026-09-14 DECISION:
 /// User: the resize drag handle's hovered/active color is light blue in light mode.
 pub(crate) fn sidebar_divider_hover_line_color() -> Hsla {
     chrome_color(0xffffff, 0x93c5fd).into()
-}
-
-pub(crate) fn sidebar_url() -> Result<String> {
-    if let Ok(value) = env::var("GHOSTEX_GPUI_SIDEBAR_URL") {
-        if !value.trim().is_empty() {
-            return Ok(value);
-        }
-    }
-
-    let executable = env::current_exe().context("failed to resolve current executable")?;
-    if let Some(bundle_root) = find_app_bundle_root(&executable) {
-        let bundled = bundle_root.join("Contents/Resources/sidebar/index.html");
-        if bundled.exists() {
-            return Ok(file_url(&bundled));
-        }
-    }
-
-    /*
-    CDXC:PlatformSupport 2026-07-04:
-    Packaged Windows and Linux layouts have no .app bundle: the packaging
-    scripts (build-windows-app.ps1 / build-linux-app.sh) stage the sidebar at
-    dist/sidebar beside the executable. That directory name is load-bearing —
-    the CEF helper's first-party entry-URL check accepts only
-    /Contents/Resources/sidebar/ or /dist/sidebar/ file URLs.
-    */
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    if let Some(exe_dir) = executable.parent() {
-        let packaged = exe_dir.join("dist/sidebar/index.html");
-        if packaged.exists() {
-            return Ok(file_url(&packaged));
-        }
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let local = manifest_dir.join("dist/sidebar/index.html");
-    if local.exists() {
-        return Ok(file_url(&local));
-    }
-
-    anyhow::bail!(
-        "sidebar bundle was not found; run gpui/scripts/build-macos-app.sh or bunx vite build --config gpui/vite.config.ts"
-    );
 }
 
 pub(crate) fn gpui_app_modal_sidebar_session_id_allowed(value: &str) -> bool {
@@ -106,18 +56,6 @@ pub(crate) fn gpui_percent_decoded_id_part(value: &str) -> Option<String> {
         && decoded.chars().count() <= GPUI_PROJECT_CONTRACT_STRING_MAX_CHARS
         && !decoded.chars().any(char::is_control))
     .then_some(decoded)
-}
-
-pub(crate) fn gpui_sidebar_reveal_browser_tab_script(payload: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui;if(bridge&&typeof bridge.onRevealBrowserTab==='function'){{bridge.onRevealBrowserTab({payload});}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_sidebar_host_message_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui;if(bridge&&typeof bridge.onSidebarHostMessage==='function'){{bridge.onSidebarHostMessage({message});}}}})(); undefined;"
-    )
 }
 
 #[cfg(target_os = "macos")]
@@ -146,40 +84,6 @@ a persistent flag would also block the next hover from opening a tooltip.
 */
 #[cfg(target_os = "macos")]
 pub(crate) const GPUI_SIDEBAR_DISMISS_TOOLTIPS_SCRIPT: &str = "(function(){const bridge=window.ghostexGpui;if(bridge&&typeof bridge.dismissSidebarTooltips==='function'){bridge.dismissSidebarTooltips();}})(); undefined;";
-
-/*
-CDXC:Spaces 2026-08-29:
-A finger scroll gesture began inside the sidebar's native frame. The page's
-Space-swipe handler resets its gesture lock on this — DOM wheel events carry no
-momentum phase, so only AppKit can mark where one physical swipe ends and the
-next begins.
-*/
-#[cfg(target_os = "macos")]
-pub(crate) const GPUI_SIDEBAR_SCROLL_GESTURE_BEGAN_SCRIPT: &str = "(function(){const bridge=window.ghostexGpui;if(bridge&&typeof bridge.onNativeScrollGestureBegan==='function'){bridge.onNativeScrollGestureBegan();}})(); undefined;";
-
-pub(crate) fn gpui_sidebar_command_pane_sessions_script(sessions: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};bridge.commandPaneSessions={sessions};if(typeof bridge.onCommandPaneSessionsChanged==='function'){{bridge.onCommandPaneSessionsChanged(bridge.commandPaneSessions);}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_sidebar_agents_delayed_sends_script(sessions: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};bridge.workspaceSessionDelayedSends={sessions};if(typeof bridge.onWorkspaceSessionDelayedSendsChanged==='function'){{bridge.onWorkspaceSessionDelayedSendsChanged(bridge.workspaceSessionDelayedSends);}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_sidebar_displayed_sessions_script(session_ids_json: &str) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};bridge.displayedWorkspaceSessionIds={session_ids_json};if(typeof bridge.onDisplayedWorkspaceSessionIdsChanged==='function'){{bridge.onDisplayedWorkspaceSessionIdsChanged(bridge.displayedWorkspaceSessionIds);}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_sidebar_browser_tabs_script(tabs_json: &str) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};bridge.browserTabs={tabs_json};if(typeof bridge.onBrowserTabsChanged==='function'){{bridge.onBrowserTabsChanged(bridge.browserTabs);}}}})(); undefined;"
-    )
-}
 
 pub(crate) fn gpui_action_completion_sound_from_settings() -> &'static str {
     let settings = shared_settings::shared_sidebar_settings_snapshot();
@@ -265,7 +169,9 @@ pub(crate) fn gpui_sidebar_agent_icon(value: Option<&str>) -> Option<&'static st
         "command-code" | "command code" | "commandcode" => Some("command-code"),
         "mastra" | "mastracode" | "mastra code" => Some("mastra"),
         "zcode" => Some("zcode"),
+        "freebuff" => Some("freebuff"),
         "devin" => Some("devin"),
+        "empryo" | "em" => Some("empryo"),
         _ => None,
     }
 }
@@ -282,45 +188,6 @@ pub(crate) fn gpui_previous_session_reference_from_history_id(
         return None;
     }
     Some((project_id, session_id))
-}
-
-pub(crate) fn gpui_quick_access_sidebar_groups_from_presentation_snapshot(
-    snapshot: &serde_json::Value,
-    active_project_id: Option<&str>,
-) -> Vec<serde_json::Value> {
-    gpui_titlebar_resource_groups_from_presentation_snapshot(snapshot, active_project_id)
-        .into_iter()
-        .filter_map(|mut group| {
-            let group_object = group.as_object_mut()?;
-            group_object.insert(
-                "isFocusModeActive".to_string(),
-                serde_json::Value::Bool(false),
-            );
-            group_object.insert("layoutVisibleCount".to_string(), serde_json::json!(1));
-            group_object.insert("viewMode".to_string(), serde_json::json!("grid"));
-            group_object.insert("visibleCount".to_string(), serde_json::json!(1));
-
-            for session in group_object
-                .get_mut("sessions")
-                .and_then(serde_json::Value::as_array_mut)
-                .into_iter()
-                .flatten()
-            {
-                let Some(session_object) = session.as_object_mut() else {
-                    continue;
-                };
-                session_object.insert("column".to_string(), serde_json::json!(0));
-                session_object.insert("isFocused".to_string(), serde_json::Value::Bool(false));
-                session_object.insert("isVisible".to_string(), serde_json::Value::Bool(false));
-                session_object.insert("row".to_string(), serde_json::json!(0));
-                session_object.insert(
-                    "shortcutLabel".to_string(),
-                    serde_json::Value::String(String::new()),
-                );
-            }
-            Some(group)
-        })
-        .collect()
 }
 
 pub(crate) fn gpui_sidebar_portless_state_from_update_result(

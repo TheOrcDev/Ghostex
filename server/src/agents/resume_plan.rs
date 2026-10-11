@@ -1,8 +1,16 @@
 use serde_json::{Map, Value};
 
+#[cfg(not(windows))]
+mod claude_background;
+mod claude_identity;
+mod empryo_wake;
+mod hermes_profile;
 #[cfg(windows)]
 mod windows;
 use super::*;
+#[cfg(not(windows))]
+use claude_background::build_claude_attach_or_resume_command;
+pub(crate) use empryo_wake::seed_empryo_wake_session;
 #[cfg(windows)]
 pub(crate) use windows::*;
 
@@ -11,6 +19,9 @@ pub(crate) fn build_agent_resume_plan(
     session: &Value,
     settings: &Map<String, Value>,
 ) -> Value {
+    if let Some(plan) = crate::agentbox::box_resume_plan(session) {
+        return plan;
+    }
     let input = to_agent_resume_input(project, session, settings);
     // CDXC:Sessions 2026-09-08 WHY:
     // Detected conversations already have an exact transcript and provider home; resolving by title or the current account could open a different conversation.
@@ -137,7 +148,11 @@ pub(crate) fn account_switch_resume_command(
         "claude" => {
             let reference = get_claude_session_reference(&input)?;
             let id = get_claude_session_id(Some(&reference))?;
-            build_claude_resume_invocation(command, &quote_shell_arg(&id))
+            if claude_transcript_written(&input, &id) {
+                build_claude_resume_invocation(command, &quote_shell_arg(&id))
+            } else {
+                build_claude_fresh_invocation(command, &quote_shell_arg(&id))
+            }
         }
         "codex" => {
             let id = get_codex_session_reference(&input)?;
@@ -150,6 +165,21 @@ pub(crate) fn account_switch_resume_command(
     };
     // A raw shell write must be one input line, including custom command arguments.
     (!resume.chars().any(char::is_control)).then_some(resume)
+}
+
+/// CDXC:AgentProviders 2026-10-04 WHY:
+/// Claude writes no transcript until the first prompt, so switching the account of a session nobody has typed into resumed a conversation that does not exist: Claude printed "No conversation found with session ID" and exited, and the switch failed. Such a session starts fresh under the same id, which keeps the session's conversation identity, title and draft, and lets its hooks report the id Ghostex already stores.
+fn claude_transcript_written(input: &AgentResumeInput, id: &str) -> bool {
+    input
+        .agent_session_path
+        .as_deref()
+        .map(crate::resume_lookup::expand_home)
+        .is_some_and(|path| path.is_file())
+        || crate::agent_transcripts::find_claude_transcript(id).is_some()
+}
+
+fn build_claude_fresh_invocation(agent_command: &str, shell_reference: &str) -> String {
+    format!("{agent_command} --session-id {shell_reference}")
 }
 
 #[derive(Clone)]
@@ -185,41 +215,58 @@ pub(crate) fn to_agent_resume_input(
         Some(&launch_settings),
     );
     /*
-    CDXC:AgentProviders 2026-08-29:
-    A `custom-…` agent id names a sidebar CONFIGURATION; the CLI family it runs
-    is declared by its icon — the same contract available_draft_agents,
-    session_chat_composer_agent_id, and launch_agent_mismatch read. Resume
-    planning must speak the family: with the raw configuration id,
-    `restorable_agent_id` matched nothing, `build_agent_resume_plan` emitted no
-    startup text, and a custom-agent session whose daemon was gone could never
-    be woken, restored, or forked — clicking it only flashed the row in the
-    sidebar. The configured command (stored `agentCommand` or the custom
-    config's `command`) still wins below, so the family only selects the resume
-    grammar, not the binary.
+    CDXC:AgentProviders 2026-09-16 WHY:
+    A custom agent id names a sidebar configuration; its icon declares the CLI family that supplies resume grammar, while its command selects the launcher.
+    Supersedes the 2026-08-29 note: saved commands from a different known CLI must not win after live identity adoption, which otherwise pairs the old binary with the new family's grammar and conversation id.
+    Commands with no inferable CLI remain usable so custom wrappers keep working; this also repairs previously saved mismatches without modifying the stored row.
     */
     let agent_id = resume_agent_family_id(configured_agent_id, &agent_config, &launch_settings);
     let stored_agent_command = read_text_from_map(&runtime_settings, "agentCommand");
-    let configured_agent_command = read_text_from_map(&agent_config, "command");
-    let base_command =
-        if let Some(command) = read_text_from_map(&runtime_settings, "accountCommand") {
-            reusable_account_command(&command, agent_id.as_deref().unwrap_or_default()).ok()
+    // A custom Empryo row whose launch settings lost the command still names it here.
+    let agent_id = agent_id.map(|id| {
+        if is_custom_agent_id(&id) && command_runs_empryo(stored_agent_command.as_deref()) {
+            "empryo".to_string()
         } else {
-            stored_agent_command
-                .clone()
-                .filter(|command| !is_one_time_agent_session_command(agent_id.as_deref(), command))
-                .or_else(|| {
-                    configured_agent_command.filter(|command| {
-                        !is_one_time_agent_session_command(agent_id.as_deref(), command)
-                    })
+            id
+        }
+    });
+    let configured_agent_command = read_text_from_map(&agent_config, "command");
+    let base_command = if let Some(command) =
+        read_text_from_map(&runtime_settings, "accountCommand")
+            .filter(|command| stored_agent_command_matches_family(agent_id.as_deref(), command))
+    {
+        reusable_account_command(&command, agent_id.as_deref().unwrap_or_default()).ok()
+    } else {
+        stored_agent_command
+            .clone()
+            .filter(|command| {
+                !is_one_time_agent_session_command(agent_id.as_deref(), command)
+                    && stored_agent_command_matches_family(agent_id.as_deref(), command)
+            })
+            .or_else(|| {
+                configured_agent_command.filter(|command| {
+                    !is_one_time_agent_session_command(agent_id.as_deref(), command)
+                        && stored_agent_command_matches_family(agent_id.as_deref(), command)
                 })
-                .or_else(|| {
-                    agent_id
-                        .as_deref()
-                        .and_then(default_agent_command)
-                        .map(str::to_string)
-                })
-                .or(stored_agent_command)
-        };
+            })
+            .or_else(|| {
+                agent_id
+                    .as_deref()
+                    .and_then(default_agent_command)
+                    .map(str::to_string)
+            })
+            .or(stored_agent_command)
+    };
+    let base_command = base_command.map(|command| {
+        hermes_profile::with_session_hermes_profile(
+            agent_id.as_deref(),
+            command,
+            &runtime_settings,
+            &launch_settings,
+        )
+    });
+    let base_command = base_command
+        .map(|command| with_resume_model_pin(agent_id.as_deref(), project, session, command));
     let runtime_command = agent_id
         .as_ref()
         .and_then(|agent_id| {
@@ -241,12 +288,23 @@ pub(crate) fn to_agent_resume_input(
             })
         })
         .or_else(|| base_command.clone());
+    let agent_session_id = read_text_from_map(&runtime_settings, "agentSessionId");
+    let agent_session_path = read_text_from_map(&runtime_settings, "agentSessionPath");
+    let (agent_session_id, agent_session_path) = if agent_id.as_deref() == Some("claude") {
+        claude_identity::written_claude_identity(
+            read_text_value(session, "zmxName").as_deref(),
+            agent_session_id,
+            agent_session_path,
+        )
+    } else {
+        (agent_session_id, agent_session_path)
+    };
     AgentResumeInput {
         agent_command: runtime_command,
         agent_id,
         agent_lookup_command: base_command,
-        agent_session_id: read_text_from_map(&runtime_settings, "agentSessionId"),
-        agent_session_path: read_text_from_map(&runtime_settings, "agentSessionPath"),
+        agent_session_id,
+        agent_session_path,
         first_user_message: read_text_from_map(&runtime_settings, "firstUserMessage")
             .or_else(|| read_text_from_map(&launch_settings, "firstUserMessage")),
         project_path: read_text_value(session, "cwd").or_else(|| read_text_value(project, "path")),
@@ -256,6 +314,47 @@ pub(crate) fn to_agent_resume_input(
             .or_else(|| read_text_from_map(&runtime_settings, "restoreTitleSource"))
             .or_else(|| Some("user".to_string())),
     }
+}
+
+/// A resumed or woken Claude, Codex or Cursor session comes back on the conversation's own model
+/// and effort (CDXC:SessionChat 2026-10-08 in agent_model_pins.rs), which replace the flags its
+/// saved command was launched with: a `/model` typed in its terminal, or a chat pick on a session
+/// whose account command a pick never rewrote, otherwise came back on the launch model. With
+/// nothing remembered, a command that names a model keeps it, and one that names none starts on
+/// the agent's default (CDXC:AgentProviders 2026-10-07).
+fn with_resume_model_pin(
+    family: Option<&str>,
+    project: &Value,
+    session: &Value,
+    command: String,
+) -> String {
+    let Some(family) = family.and_then(crate::agent_model_pins::pin_family) else {
+        return command;
+    };
+    let agent_session_id = session
+        .pointer("/runtimeSettings/agentSessionId")
+        .and_then(Value::as_str);
+    let remembered = read_text_value(session, "projectId")
+        .or_else(|| read_text_value(project, "projectId"))
+        .zip(read_text_value(session, "sessionId"))
+        .and_then(|(project_id, session_id)| {
+            crate::agent_model_pins::session_choice(
+                &project_id,
+                &session_id,
+                family,
+                agent_session_id,
+            )
+        });
+    let pin = match remembered {
+        Some(pin) => pin,
+        None if command_names_model(&command, family) => return command,
+        None => match crate::agent_model_pins::launch_default(family) {
+            Some(pin) => pin,
+            None => return command,
+        },
+    };
+    let effort = pin.effort.as_deref().filter(|_| family != "cursor");
+    with_agent_model_options(&command, family, Some(&pin.model), effort).unwrap_or(command)
 }
 
 fn is_one_time_agent_session_command(agent_id: Option<&str>, command: &str) -> bool {
@@ -292,6 +391,23 @@ fn is_one_time_agent_session_command(agent_id: Option<&str>, command: &str) -> b
                 || token.starts_with("--fork-session=")
         }),
         _ => false,
+    }
+}
+
+/// Whether a candidate base command still belongs to the resume family's CLI.
+/// A command whose CLI is inferable and different is stale metadata left by an
+/// earlier agent that owned the pane; resume must use the family default
+/// instead of that binary. A command no known CLI claims is kept: custom
+/// wrappers and unlisted launchers cannot be second-guessed. A family that is
+/// not a built-in restorable id (a raw `custom-…` fallback) keeps every
+/// command, because there is no family default to fall back to.
+fn stored_agent_command_matches_family(family: Option<&str>, command: &str) -> bool {
+    let Some(inferred) = infer_agent_id_from_command(command) else {
+        return true;
+    };
+    match family.and_then(|family| restorable_agent_id(Some(family))) {
+        Some(family) => family == inferred.as_str(),
+        None => true,
     }
 }
 
@@ -373,18 +489,28 @@ pub(crate) fn build_agent_resume_command(
         }
         "grok" => exact_reference
             .map(|reference| format!("{agent_command} -r {}", quote_shell_double_arg(&reference))),
+        "freebuff" => exact_reference.map(|reference| {
+            format!(
+                "{agent_command} --continue {}",
+                quote_shell_double_arg(&reference)
+            )
+        }),
         "kiro" => exact_reference.map(|reference| {
             format!(
                 "{agent_command} --resume-id {}",
                 quote_shell_double_arg(&reference)
             )
         }),
-        "omp" => exact_reference.map(|reference| {
-            format!(
-                "{agent_command} --session {}",
-                quote_shell_double_arg(&reference)
-            )
-        }),
+        // CDXC:AgentProviders 2026-10-06 DECISION: "Resume. `empryo --session <id>`. The process-identity scan reads `--session` from argv." SEE-ALSO: extract_agent_process_session_id in server/src/zmx/process_identity.rs.
+        // A session with no written folder: see `get_empryo_session_reference`.
+        "omp" | "empryo" => exact_reference
+            .map(|reference| {
+                format!(
+                    "{agent_command} --session {}",
+                    quote_shell_double_arg(&reference)
+                )
+            })
+            .or_else(|| (agent_id == "empryo").then(|| agent_command.to_string())),
         "codex" => {
             let reference = codex_reference?;
             if options.display {
@@ -407,11 +533,30 @@ pub(crate) fn build_agent_resume_command(
             }
         }
         "claude" => {
-            if let Some(exact) = claude_exact_reference {
-                return Some(build_claude_resume_invocation(
+            // CDXC:SessionChat 2026-10-09 WHY:
+            // A session whose Claude has no conversation yet has nothing to lose, so a wake starts it fresh under the same session id instead of resuming. A wake used to resume whatever id the session held, and a Claude that quit before its first message printed "No conversation found with session ID" and fell back to the shell, so the automatic send recovery and Fix it (session_chat_queue_runtime/send_heal.rs) both failed on it. Every wake now follows the account switch's rule (CDXC:AgentProviders 2026-10-04 above).
+            if let Some(id) = claude_exact_reference
+                .as_deref()
+                .and_then(|exact| get_claude_session_id(Some(exact)))
+                .filter(|id| !claude_transcript_written(input, id))
+            {
+                return Some(build_claude_fresh_invocation(
                     agent_command,
-                    &quote_shell_double_arg(&exact),
+                    &quote_shell_double_arg(&id),
                 ));
+            }
+            if let Some(exact) = claude_exact_reference {
+                let resume_invocation =
+                    build_claude_resume_invocation(agent_command, &quote_shell_double_arg(&exact));
+                #[cfg(not(windows))]
+                if !options.display {
+                    return Some(build_claude_attach_or_resume_command(
+                        agent_command,
+                        &exact,
+                        resume_invocation,
+                    ));
+                }
+                return Some(resume_invocation);
             }
             let resume_title = resume_title?;
             if options.display {
@@ -473,12 +618,7 @@ pub(crate) fn build_agent_resume_command(
                 ))
             }
         }
-        "pi" => pi_reference.map(|reference| {
-            format!(
-                "{agent_command} --session {}",
-                quote_shell_double_arg(&reference)
-            )
-        }),
+        "pi" => pi_reference.and_then(|_| build_pi_resume_command(agent_command, input)),
         "rovodev" => {
             exact_reference.map(|reference| build_rovodev_resume_command(agent_command, &reference))
         }
@@ -513,13 +653,19 @@ pub(crate) fn build_agent_resume_copy_command(input: &AgentResumeInput) -> Optio
         }
         "grok" => exact_reference
             .map(|reference| format!("{agent_command} -r {}", quote_shell_double_arg(&reference))),
+        "freebuff" => exact_reference.map(|reference| {
+            format!(
+                "{agent_command} --continue {}",
+                quote_shell_double_arg(&reference)
+            )
+        }),
         "kiro" => exact_reference.map(|reference| {
             format!(
                 "{agent_command} --resume-id {}",
                 quote_shell_double_arg(&reference)
             )
         }),
-        "omp" => exact_reference.map(|reference| {
+        "omp" | "empryo" => exact_reference.map(|reference| {
             format!(
                 "{agent_command} --session {}",
                 quote_shell_double_arg(&reference)
@@ -543,12 +689,7 @@ pub(crate) fn build_agent_resume_copy_command(input: &AgentResumeInput) -> Optio
                 quote_shell_double_arg(&reference)
             )
         }),
-        "pi" => get_pi_session_reference(input).map(|reference| {
-            format!(
-                "{agent_command} --session {}",
-                quote_shell_double_arg(&reference)
-            )
-        }),
+        "pi" => build_pi_resume_command(agent_command, input),
         "rovodev" => {
             exact_reference.map(|reference| build_rovodev_resume_command(agent_command, &reference))
         }
@@ -608,13 +749,20 @@ pub(crate) fn resume_agent_family_id(
     launch_settings: &Map<String, Value>,
 ) -> Option<String> {
     let configured = agent_id?;
-    if !configured
-        .trim()
-        .to_ascii_lowercase()
-        .starts_with("custom-")
-    {
+    if !is_custom_agent_id(&configured) {
         return Some(configured);
     }
+    /*
+    CDXC:AgentProviders 2026-10-06 WHY:
+    Before Empryo was a built-in agent it ran as a custom agent with no icon, so those rows named no CLI family and a row that had already run woke to nothing (a session that ran gets only a resume command). A custom agent whose command runs Empryo is the Empryo family, the spec's "old Empryo rows keep opening"; other custom wrappers keep the icon rule.
+    */
+    let runs_empryo = [
+        read_text_from_map(agent_config, "command"),
+        read_text_from_map(agent_config, "agentCommand"),
+        read_text_from_map(launch_settings, "agentCommand"),
+    ]
+    .iter()
+    .any(|command| command_runs_empryo(command.as_deref()));
     read_text_from_map(agent_config, "icon")
         .or_else(|| read_text_from_map(launch_settings, "icon"))
         .and_then(|icon| {
@@ -622,15 +770,25 @@ pub(crate) fn resume_agent_family_id(
                 .map(str::to_string)
                 .or_else(|| normalize_agent_id(Some(&icon)))
         })
+        .or_else(|| runs_empryo.then(|| "empryo".to_string()))
         .or(Some(configured))
+}
+
+fn is_custom_agent_id(agent_id: &str) -> bool {
+    agent_id.trim().to_ascii_lowercase().starts_with("custom-")
+}
+
+fn command_runs_empryo(command: Option<&str>) -> bool {
+    command.and_then(infer_agent_id_from_command).as_deref() == Some("empryo")
 }
 
 pub(crate) fn restorable_agent_id(value: Option<&str>) -> Option<&str> {
     let value = value?.trim();
     match value {
         "amp" | "antigravity" | "claude" | "codebuddy" | "codex" | "command-code" | "copilot"
-        | "cursor" | "devin" | "droid" | "gemini" | "grok" | "hermes-agent" | "kimi" | "kiro"
-        | "omp" | "openclaude" | "opencode" | "pi" | "qoder" | "rovodev" | "zcode" => Some(value),
+        | "cursor" | "devin" | "droid" | "empryo" | "freebuff" | "gemini" | "grok"
+        | "hermes-agent" | "kimi" | "kiro" | "omp" | "openclaude" | "opencode" | "pi" | "qoder"
+        | "rovodev" | "zcode" => Some(value),
         _ => None,
     }
 }
@@ -644,8 +802,40 @@ pub(crate) fn get_exact_agent_session_reference(
         "cursor" => get_cursor_session_reference(input),
         "omp" => get_omp_session_reference(input),
         "pi" => get_pi_session_reference(input),
+        "empryo" => get_empryo_session_reference(input),
         _ => input.agent_session_id.clone(),
     }
+}
+
+/// CDXC:SessionIdentity 2026-10-06 WHY:
+/// Empryo reports its session id when it mounts but writes `.empryo/sessions/<id>/` only with the first prompt, so waking a session that slept before its first message ran `empryo --session <id>` for a folder that never existed and Empryo printed "Session not found" (seen live 2026-10-06). Only a written session folder resumes; a session without one is seeded a fresh folder before it wakes (`seed_empryo_wake_session`), and a plan built without that seeding runs a fresh `empryo` (a missing resume command would leave the pane unstarted).
+fn get_empryo_session_reference(input: &AgentResumeInput) -> Option<String> {
+    let session_id = input.agent_session_id.as_deref()?.trim();
+    if !crate::session_chat_empryo_mirror::is_safe_empryo_session_id(session_id) {
+        return None;
+    }
+    let written = |folder: &std::path::Path| {
+        folder.join("meta.json").is_file() || folder.join("session.jsonl").is_file()
+    };
+    let hook_folder = input
+        .agent_session_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(crate::resume_lookup::expand_home)
+        .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+    let mut candidates = hook_folder.into_iter().chain(
+        [
+            input.project_path.as_deref().map(std::path::PathBuf::from),
+            Some(crate::resume_lookup::home_dir()),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|root| root.join(".empryo").join("sessions").join(session_id)),
+    );
+    candidates
+        .any(|folder| written(&folder))
+        .then(|| session_id.to_string())
 }
 
 pub(crate) fn get_codex_session_reference(input: &AgentResumeInput) -> Option<String> {
@@ -673,6 +863,49 @@ pub(crate) fn get_pi_session_reference(input: &AgentResumeInput) -> Option<Strin
         .agent_session_path
         .clone()
         .or_else(|| input.agent_session_id.clone())
+}
+
+/// CDXC:SessionIdentity 2026-10-06 WHY:
+/// Pi writes its session file only once the first message exists, while Ghostex knows the session's id from launch (`--session-id`, see agents/pi_session_id.rs) and its future path from the SessionStart hook. Waking a session that slept before its first message with `--session <path>` asked Pi for a file that was never written, so a written file resumes by path and anything else reopens the same id with `--session-id`, which Pi creates when it is missing.
+fn build_pi_resume_command(agent_command: &str, input: &AgentResumeInput) -> Option<String> {
+    let written = |path: &str| crate::resume_lookup::expand_home(path).is_file();
+    if let Some(path) = input
+        .agent_session_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| written(path))
+    {
+        return Some(format!(
+            "{agent_command} --session {}",
+            quote_shell_double_arg(path)
+        ));
+    }
+    let id = input
+        .agent_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    match id {
+        Some(id) if super::pi_session_id::is_pi_session_id(id) => {
+            match crate::session_chat::resolve_session_chat_transcript_path(
+                crate::session_chat::SessionChatTranscriptAgent::Pi,
+                Some(id),
+                None,
+            ) {
+                Some(path) => Some(format!(
+                    "{agent_command} --session {}",
+                    quote_shell_double_arg(&path.to_string_lossy())
+                )),
+                None => Some(format!("{agent_command} --session-id {id}")),
+            }
+        }
+        _ => get_pi_session_reference(input).map(|reference| {
+            format!(
+                "{agent_command} --session {}",
+                quote_shell_double_arg(&reference)
+            )
+        }),
+    }
 }
 
 /// CDXC:SessionIdentity 2026-09-14 WHY:

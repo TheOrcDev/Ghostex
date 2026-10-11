@@ -68,13 +68,15 @@ fn read_ssh_server_detail() -> String {
 }
 
 // The OpenSSH Server optional feature registers the `sshd` service, so the
-// service's presence is the install check that needs no elevation
-// (`Get-WindowsCapability -Online` is a DISM call and does). `Status` and
-// `StartType` are both on ServiceController in Windows PowerShell 5.1, the
-// floor Microsoft's OpenSSH guide sets.
+// service's registry key is the install check that needs no elevation
+// (`Get-WindowsCapability -Online` is a DISM call and does). Get-Service alone
+// cannot be the check: it reports "not found" whenever this token may not open
+// the service (see the CDXC:RemotePairing WHY in `ssh_enable.rs`). `Status`
+// and `StartType` are both on ServiceController in Windows PowerShell 5.1,
+// the floor Microsoft's OpenSSH guide sets.
 #[cfg(windows)]
 fn read_ssh_server_detail() -> String {
-    const QUERY: &str = "$s = Get-Service -Name sshd -ErrorAction SilentlyContinue; if ($null -eq $s) { 'absent' } else { '{0} {1}' -f $s.Status, $s.StartType }";
+    const QUERY: &str = "$s = Get-Service -Name sshd -ErrorAction SilentlyContinue; if ($null -ne $s) { '{0} {1}' -f $s.Status, $s.StartType } elseif (Test-Path -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\sshd') { 'unreadable' } else { 'absent' }";
     let Some(line) = read_command_first_line(
         "powershell",
         &["-NoProfile", "-NonInteractive", "-Command", QUERY],
@@ -86,6 +88,10 @@ fn read_ssh_server_detail() -> String {
     let start_type = parts.next().unwrap_or_default();
     match status {
         "absent" => "The OpenSSH Server feature is not installed.".to_string(),
+        "unreadable" => {
+            "The OpenSSH Server feature is installed, but its service state could not be read."
+                .to_string()
+        }
         "Running" => "SSH access is on: the OpenSSH Server service is running.".to_string(),
         "Stopped" if start_type == "Disabled" => {
             "The OpenSSH Server feature is installed but its service is disabled.".to_string()
@@ -258,7 +264,7 @@ fn read_command_first_line(program: &str, args: &[&str]) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    super::ssh_enable::hide_console_window(&mut command);
+    crate::platform::process::NoConsoleWindow::no_console_window(&mut command);
     let output = command.output().ok()?;
     if !output.status.success() {
         return None;

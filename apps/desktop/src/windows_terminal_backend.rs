@@ -44,7 +44,7 @@ pub(crate) struct WindowsWslGhostexCliStatus {
     pub(crate) browser_skill_path: Option<String>,
     pub(crate) computer_use_skill_path: Option<String>,
     pub(crate) embedded_browser_skill_path: Option<String>,
-    pub(crate) fable56_orchestration_skill_path: Option<String>,
+    pub(crate) agents_orchestration_skill_path: Option<String>,
     pub(crate) manage_beads_skill_path: Option<String>,
     pub(crate) generate_title_skill_path: Option<String>,
     pub(crate) ghostex_path: Option<String>,
@@ -53,6 +53,7 @@ pub(crate) struct WindowsWslGhostexCliStatus {
     pub(crate) gx_usable: bool,
     pub(crate) move_codex_session_skill_path: Option<String>,
     pub(crate) help_skill_path: Option<String>,
+    pub(crate) visuals_skill_path: Option<String>,
 }
 
 #[allow(dead_code)] // used by the windows path
@@ -94,6 +95,8 @@ pub(crate) fn reload_preference_for_setup() {
 
 #[cfg(windows)]
 mod native;
+#[cfg(windows)]
+mod native_package;
 #[cfg(target_os = "windows")]
 mod platform;
 
@@ -121,6 +124,22 @@ pub(crate) fn ghostex_cli_status() -> Result<WindowsWslGhostexCliStatus, String>
         return Ok(native::cli_status());
     }
     platform::ghostex_cli_status()
+}
+
+/// CDXC:AgentSkills 2026-09-27 WHY:
+/// Settings must run the CLI in the same environment its status probe inspects: the bundled executable for PowerShell, or the owned CLI in the selected WSL distribution. The desktop's PATH cannot identify both.
+#[cfg(target_os = "windows")]
+pub(crate) fn ghostex_cli_invocation(
+    args: &[&str],
+) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    if current_preference() == WindowsTerminalBackendPreference::PowerShell {
+        let path = native::cli_path().ok_or_else(|| {
+            "The bundled Ghostex CLI is missing. Reinstall Ghostex before installing agent skills."
+                .to_string()
+        })?;
+        return Ok((path, args.iter().map(|arg| (*arg).to_string()).collect()));
+    }
+    platform::ghostex_cli_invocation(args)
 }
 
 #[cfg(target_os = "windows")]
@@ -155,6 +174,14 @@ pub(crate) fn terminal_invocation(
     working_directory: Option<&std::path::Path>,
 ) -> (String, Vec<String>) {
     platform::terminal_invocation(command, working_directory)
+}
+
+#[cfg(windows)]
+pub(crate) fn native_terminal_invocation(
+    command: Option<String>,
+    working_directory: Option<&std::path::Path>,
+) -> (String, Vec<String>) {
+    native::invocation(command, working_directory)
 }
 
 #[cfg(target_os = "windows")]

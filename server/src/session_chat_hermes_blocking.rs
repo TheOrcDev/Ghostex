@@ -43,19 +43,28 @@ fn collapse_spaces(line: &str) -> String {
 }
 
 fn scan_lines(text: &str) -> Vec<String> {
+    scan_lines_with_raw(text).0
+}
+
+/// The scanned lines, and each one as printed (indentation and trailing spaces kept).
+fn scan_lines_with_raw(text: &str) -> (Vec<String>, Vec<String>) {
     let mut lines = Vec::new();
+    let mut printed = Vec::new();
     for raw in text.lines().rev() {
-        let line = collapse_spaces(normalize_spaces(&strip_ansi_sgr(raw)).trim());
+        let raw = normalize_spaces(&strip_ansi_sgr(raw));
+        let line = collapse_spaces(raw.trim());
         if line.is_empty() {
             continue;
         }
         lines.push(line);
+        printed.push(raw);
         if lines.len() >= HERMES_BLOCKING_SCAN_LINES {
             break;
         }
     }
     lines.reverse();
-    lines
+    printed.reverse();
+    (lines, printed)
 }
 
 fn strip_box_border(line: &str) -> &str {
@@ -309,6 +318,99 @@ pub fn detect_hermes_hook_trust(
             SessionChatTerminalNoticeAction::switch_to_terminal("Open terminal"),
         ]),
     )
+}
+
+/// CDXC:AgentScreenDetection 2026-09-28 WHY:
+/// When Hermes gives up on a turn (a provider rejects the request, retries or credits run out, the context cannot shrink) it prints the reason on a "❌" line at the left margin and in its reply box, and stores neither: its session store gets at most a generic "Your request was not processed" row, and none once a tool has run, so chat showed a turn that simply stopped (Dobby sessions G9eas and G26an, 2026-09-28). The newest such line, printed after the latest prompt with Hermes back at its composer, is the error. Replies are indented, so a reply's own "❌ Not done" line never matches. A prompt's echo ("● text" and its continuation lines) ends at a rule, so a pasted "❌" inside it never matches; a slash command's echo ("⚙️ /model …") owns the errors below it; the next prompt or command echoed below the error retires it. "❌ Error during API call #N" is followed by a retry, so it counts only when Hermes then gives up with its "Hermes hit repeated errors" reply.
+pub fn detect_hermes_turn_error(text: &str) -> Option<String> {
+    const RETRY_NOTICE: &str = "\u{274c} Error during API call #";
+    const GAVE_UP_REPLY: &str = "Hermes hit repeated errors";
+    if !text.contains('\u{274c}') {
+        return None;
+    }
+    let (lines, printed) = scan_lines_with_raw(text);
+    let index = (0..lines.len()).rev().find(|index| {
+        !printed[*index].starts_with(char::is_whitespace) && lines[*index].starts_with('\u{274c}')
+    })?;
+    if lines[index].starts_with(RETRY_NOTICE)
+        && !lines[index + 1..]
+            .iter()
+            .any(|line| line.contains(GAVE_UP_REPLY))
+    {
+        return None;
+    }
+    // A long turn can push its prompt's echo out of the scanned window; then the whole window is that turn.
+    if let Some(echo) = lines[..index]
+        .iter()
+        .rposition(|line| line.starts_with(['\u{25cf}', '\u{2699}']))
+    {
+        let echo_end = (echo + 1..index).find(|line_index| is_horizontal_rule(&lines[*line_index]));
+        if lines[echo].starts_with('\u{2699}') || echo_end.is_none() {
+            return None;
+        }
+    }
+    if lines[index + 1..]
+        .iter()
+        .any(|line| line.starts_with(['\u{25cf}', '\u{2699}']))
+        || !composer_after(&lines, index)
+    {
+        return None;
+    }
+    Some(unwrap_terminal_rows(&lines, &printed, index))
+}
+
+/// Rejoins a line the terminal soft-wrapped. The capture drops each row's trailing spaces, so a
+/// wrapped row is one that fills the pane (its width is the widest rule, the composer's), or one
+/// cell short of it when the wrap fell right after a space.
+fn unwrap_terminal_rows(lines: &[String], printed: &[String], index: usize) -> String {
+    let pane_width = lines
+        .iter()
+        .filter(|line| is_horizontal_rule(line))
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(usize::MAX);
+    let mut joined = printed[index].trim_end().to_string();
+    let mut row = index;
+    while let Some(next) = printed.get(row + 1) {
+        // An error that happens to end at the pane edge is followed by Hermes's own chrome, never a wrapped row.
+        let next_start = next.trim_start();
+        if next_start.starts_with(|character: char| ('\u{2500}'..='\u{257f}').contains(&character))
+            || crate::session_chat_options::is_hermes_statusline(next_start)
+        {
+            break;
+        }
+        let cells = terminal_cells(printed[row].trim_end());
+        if cells == pane_width {
+            joined.push_str(next.trim_end());
+        } else if cells + 1 == pane_width
+            && next.starts_with(|character: char| character.is_alphanumeric())
+        {
+            joined.push(' ');
+            joined.push_str(next.trim_end());
+        } else {
+            break;
+        }
+        row += 1;
+    }
+    collapse_spaces(joined.trim_start_matches('\u{274c}'))
+}
+
+/// Terminal cells a printed line takes: two for emoji and East Asian wide text, one otherwise.
+fn terminal_cells(line: &str) -> usize {
+    line.chars()
+        .map(|character| match character as u32 {
+            0x274c
+            | 0x1100..=0x115f
+            | 0x2e80..=0xa4cf
+            | 0xac00..=0xd7a3
+            | 0xf900..=0xfaff
+            | 0xfe30..=0xfe4f
+            | 0xff00..=0xff60
+            | 0xffe0..=0xffe6
+            | 0x1f300..=0x1faff => 2,
+            _ => 1,
+        })
+        .sum()
 }
 
 /// Classify a live Hermes screen that owns terminal input in place of the

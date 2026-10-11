@@ -11,7 +11,7 @@ use crate::{
 /// CDXC:Extensions 2026-09-09 DECISION:
 /// User: selecting a Space makes the view available to every project in that Space.
 /// Resolve current daemon-owned membership, including collection and parent-worktree inheritance, independently of the sidebar's selected filter.
-/// SEE-ALSO: packages/shared/sidebar-spaces-other.ts owns the equivalent sidebar membership rule.
+/// SEE-ALSO: packages/shared/sidebar-spaces-other.ts (deleted 2026-10-01) owns the equivalent sidebar membership rule.
 pub(super) fn matches(db: &Connection, server_id: &str, params: &Value) -> Result<bool> {
     let repository = DomainRepository::new(db, server_id);
     let Some(project) = repository.get_project(text(params, "projectId"))? else {

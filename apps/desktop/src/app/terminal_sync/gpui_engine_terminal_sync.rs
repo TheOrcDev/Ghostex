@@ -4,7 +4,6 @@ use crate::app::terminal_sync::GpuiTerminalViewerRecipe;
 // modules; pure move, no logic changes. Cluster: GPUI-engine terminal reconciliation (agents + command), startup spawn, and engine terminal view/agent action event handling.
 
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use gpui::AppContext as _;
 
@@ -25,7 +24,16 @@ impl GhostexGpuiApp {
     back to Running because the composited element needs no native remount.
     */
     pub(crate) fn sync_agents_gpui_engine_terminals(&mut self, cx: &mut gpui::Context<Self>) {
-        self.release_unused_agents_gpui_terminal_viewers(false, cx);
+        // A window closing beside another one detaches its terminals; that is not their sessions
+        // exiting (app/workspace_windows/).
+        if self.workspace_window_closing {
+            return;
+        }
+        // CDXC:Terminal 2026-09-19 WHY: every tab step used to retire the viewer of the tab it left and spawn an attach client for the tab it entered, so a held "next tab" key started and killed one process per repeat. While the selection is still moving both wait (gx_store/burst.rs); a tab whose viewer is already mounted is drawn regardless, and the settle repaints so this pass runs for the tab the user landed on.
+        let selection_settling = self.gx_store_selection_is_settling();
+        if !selection_settling {
+            self.release_unused_agents_gpui_terminal_viewers(false, &HashSet::new(), cx);
+        }
         // Prune records whose shell session or runtime identity is gone;
         // dropping a record kills the child through the model. Sleeping
         // sessions drop their record too (mirroring the command pane): a
@@ -45,7 +53,7 @@ impl GhostexGpuiApp {
                         })
                 });
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         {
             let retained_askpass = self
                 .agents_gpui_terminal_viewer_recipes
@@ -89,8 +97,31 @@ impl GhostexGpuiApp {
             .collect::<Vec<_>>();
         let mut shell_state_changed = false;
         let keyboard_owner_before = self.keyboard_owner_session();
+        /*
+        CDXC:Sessions 2026-10-03 WHY:
+        A Full Reload's sleep kills the daemon, so the row's attach client exits, often before the sleep's answer marks the row Sleeping (which is what keeps an ordinary sleep's placeholder tab). Closing that tab here moved the focus to a neighbour in the middle of the reload, against the user's decision in gx-core reload.rs. Its dead viewer goes, as the wake's `forceRemount` would drop it, together with the viewer recipe so nothing re-attaches to the daemon being killed; the tab and its mapping stay for the wake to re-attach in place.
+        */
+        let reloading_shell_session_ids = self
+            .gx_store
+            .reloading_sessions
+            .iter()
+            .filter_map(|session| {
+                self.local_workspace_session_mappings
+                    .get(&GpuiLocalWorkspaceSessionKey {
+                        project_id: session.project_id.clone(),
+                        session_id: session.session_id.clone(),
+                    })
+                    .copied()
+            })
+            .collect::<HashSet<_>>();
         for session_id in exited_session_ids {
             self.agents_gpui_engine_terminals.remove(&session_id);
+            if reloading_shell_session_ids.contains(&session_id) {
+                self.agents_gpui_terminal_viewer_recipes.remove(&session_id);
+                self.agents_terminal_chat_claims.remove(&session_id);
+                cx.notify();
+                continue;
+            }
             let Some(pane_id) = self.agents_workspace.pane_id_for_session(session_id) else {
                 continue;
             };
@@ -140,7 +171,7 @@ impl GhostexGpuiApp {
 
         let settings =
             shared_settings::shared_sidebar_settings_snapshot().gpui_terminal_engine_settings();
-        if settings.enabled {
+        if settings.enabled && !selection_settling {
             for slot_id in self.agents_workspace.rendered_terminal_body_mount_slots() {
                 if self
                     .agents_gpui_engine_terminals
@@ -164,6 +195,7 @@ impl GhostexGpuiApp {
                     continue;
                 };
                 if !self.agents_terminal_viewer_is_visible(slot_id.session_id)
+                    && self.agents_terminal_viewer_may_wait(slot_id.session_id)
                     && !self.terminal_bell_notifications_enabled()
                     && self.terminal_viewer_target_is_daemon_backed(
                         GpuiEngineTerminalEventTarget::Agents(slot_id.session_id),
@@ -275,6 +307,7 @@ impl GhostexGpuiApp {
             if self.terminal_viewer_target_is_daemon_backed(GpuiEngineTerminalEventTarget::Agents(
                 plan.shell_session_id,
             )) && !self.agents_terminal_viewer_is_visible(plan.shell_session_id)
+                && self.agents_terminal_viewer_may_wait(plan.shell_session_id)
                 && !self.terminal_bell_notifications_enabled()
                 && initial_input.as_deref().is_none_or(str::is_empty)
                 && command.is_some()
@@ -327,7 +360,7 @@ impl GhostexGpuiApp {
         user's shell exiting: the normal exit path removes the command tab and
         explicitly closes the daemon-owned gxserver/zmx session.
         */
-        if GPUI_APP_QUIT_IN_PROGRESS.load(Ordering::Acquire) {
+        if GPUI_APP_QUIT_IN_PROGRESS.load(Ordering::Acquire) || self.workspace_window_closing {
             return;
         }
         self.release_unused_command_gpui_terminal_viewers(cx);
@@ -620,16 +653,34 @@ impl GhostexGpuiApp {
         #[cfg(not(target_os = "macos"))]
         let mut engine_config =
             terminal_gpui_engine::GpuiTerminalEngineConfig::from_shared(settings);
-        engine_config.apply_color_scheme(settings, gpui_system_uses_light_appearance());
+        engine_config.apply_color_scheme(
+            settings,
+            gpui_system_uses_light_appearance(),
+            gpui_terminal_theme_background(settings),
+        );
         engine_config.view.scroll_to_bottom_when_typing = settings.scroll_to_bottom_when_typing;
         engine_config.view.background_image =
             terminal_gpui_engine::terminal_background_image_from_settings(settings);
+        engine_config.view.background_alpha = terminal_default_background_alpha();
         let viewer_recipe = GpuiTerminalViewerRecipe {
             runtime_session_id,
             working_directory: working_directory.clone(),
             command: command.clone(),
             env_vars: env_vars.clone(),
             wait_after_command,
+        };
+        // A local wmx viewer gets its own control pipe for the claims ConPTY would drop
+        // (terminal_model/zmx_control.rs); the recipe keeps no pipe name, each spawn mints one.
+        #[cfg(windows)]
+        let env_vars = {
+            let mut env_vars = env_vars;
+            if self.agents_terminal_is_local_wmx_viewer(target) && command.is_some() {
+                env_vars.push((
+                    terminal_model::WMX_ATTACH_CONTROL_ENV.to_string(),
+                    terminal_model::zmx_control::new_wmx_attach_control_pipe_name(),
+                ));
+            }
+            env_vars
         };
         let spawn_config = terminal_gpui_engine::gpui_engine_terminal_spawn_config(
             working_directory,
@@ -639,15 +690,29 @@ impl GhostexGpuiApp {
         );
         let font = terminal_gpui_engine::gpui_engine_terminal_font_config(&engine_config);
         let (sink, event_rx) = terminal_element::TerminalView::event_channel();
-        let spawn_started = Instant::now();
-        let mut model = terminal_model::TerminalModel::spawn(spawn_config, sink).ok()?;
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.remoteNewTerminal.engineProcessSpawned",
-            serde_json::json!({
-                "durationMs": spawn_started.elapsed().as_millis() as u64,
-            }),
-        );
+        let argument_utf16_length = spawn_config
+            .args
+            .iter()
+            .map(|argument| argument.encode_utf16().count() + 1)
+            .sum::<usize>();
+        let mut model = match terminal_model::TerminalModel::spawn(spawn_config, sink) {
+            Ok(model) => model,
+            Err(error) => {
+                let os_error = error
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                    .and_then(std::io::Error::raw_os_error);
+                support_logs::append(
+                    support_logs::GpuiSupportLog::TerminalFocus,
+                    "gpui.terminalEngine.spawnFailed",
+                    serde_json::json!({
+                        "osErrorCode": os_error,
+                        "argumentUtf16Length": argument_utf16_length,
+                    }),
+                );
+                return None;
+            }
+        };
         model.set_option_as_alt(engine_config.option_as_alt);
         if let Some(colors) = &engine_config.colors {
             model
@@ -688,7 +753,7 @@ impl GhostexGpuiApp {
                 cx,
             );
             view.apply_settings(view_settings);
-            view.set_copy_handler(Box::new(gpui_play_copy_sound));
+            view.set_copy_handler(Box::new(gpui_copy_feedback));
             if uses_zmx_visibility_claims {
                 view.enable_zmx_visibility_claims();
             }
@@ -759,17 +824,6 @@ impl GhostexGpuiApp {
         };
         match event {
             TerminalViewEvent::TitleChanged(title) => {
-                if title == TEMP_REMOTE_LOCAL_READY_TITLE || title == TEMP_REMOTE_SSH_READY_TITLE {
-                    support_logs::append_temporary(
-                        support_logs::GpuiSupportLog::TerminalFocus,
-                        if title == TEMP_REMOTE_LOCAL_READY_TITLE {
-                            "TEMP.remoteNewTerminal.localWrapperReady"
-                        } else {
-                            "TEMP.remoteNewTerminal.remoteCommandReady"
-                        },
-                        serde_json::json!({ "engine": "gpui" }),
-                    );
-                }
                 osc_states.entry(runtime_session_id).or_default().title = if title.is_empty() {
                     None
                 } else {
@@ -805,7 +859,12 @@ impl GhostexGpuiApp {
                 let working_directory = osc_states
                     .get(&runtime_session_id)
                     .and_then(|state| state.pwd.clone());
-                self.open_gpui_engine_terminal_action_url(url, working_directory.as_deref(), cx);
+                self.open_gpui_engine_terminal_action_url(
+                    url,
+                    working_directory.as_deref(),
+                    target,
+                    cx,
+                );
             }
             TerminalViewEvent::PasteRequested => {
                 let _ = self.paste_into_focused_terminal_from_clipboard(cx);
@@ -814,7 +873,7 @@ impl GhostexGpuiApp {
                 let _ = self.paste_image_or_send_control_v(cx);
             }
             TerminalViewEvent::PathsDropped(paths) => {
-                self.insert_paths_into_gpui_engine_terminal(target, paths, cx);
+                self.insert_paths_into_gpui_engine_terminal(target, runtime_session_id, paths, cx);
             }
             TerminalViewEvent::AttachPathsRequested => {
                 if let Some(attachment_target) =
@@ -832,25 +891,11 @@ impl GhostexGpuiApp {
             }
             TerminalViewEvent::EscapePressed => {
                 if let Some(shell_session_id) = agents_shell_session_id {
-                    support_logs::append_temporary(
-                        support_logs::GpuiSupportLog::TerminalFocus,
-                        "TEMP.gpui.sessionInterrupt.compositedEscapeRouted",
-                        serde_json::json!({
-                            "shellSessionId": format!("{:?}", shell_session_id),
-                        }),
-                    );
                     self.dispatch_gpui_workspace_terminal_escape_pressed(shell_session_id, cx);
                 }
             }
             TerminalViewEvent::FirstPromptTitleGenerationCancelRequested => {
                 if let Some(shell_session_id) = agents_shell_session_id {
-                    support_logs::append_temporary(
-                        support_logs::GpuiSupportLog::TerminalFocus,
-                        "TEMP.gpui.sessionInterrupt.titleCancelRouted",
-                        serde_json::json!({
-                            "shellSessionId": format!("{:?}", shell_session_id),
-                        }),
-                    );
                     self.dispatch_gpui_workspace_first_prompt_title_generation_cancel(
                         shell_session_id,
                         cx,
@@ -939,12 +984,26 @@ impl GhostexGpuiApp {
                 );
             }
             TerminalAgentActionRequest::DelayedActions => {
-                let _ = self.open_gpui_delayed_send_modal_for_focused_agents_session(cx);
+                let _ = self.open_gpui_delayed_send_modal_for_agents_session(session_id, cx);
             }
             TerminalAgentActionRequest::CloseAfterDone => {
                 let _ = self.toggle_gpui_close_after_done_for_agents_session(session_id, cx);
             }
+            // The chat's and the terminal bar's Fork run the store's fork, the one the sidebar
+            // row's Fork runs, so both switch to the fork the same way (CDXC:SessionFork
+            // 2026-09-24 in gx_store/sidebar_lifecycle.rs). A fork the store declines goes on to
+            // the session action route (gx_store/terminal_lifecycle/runtime_actions.rs), which runs
+            // the same store fork; until 2026-09-25 the runtime took the forks the store declined.
             TerminalAgentActionRequest::Fork => {
+                let key = self
+                    .local_workspace_session_mappings
+                    .iter()
+                    .find_map(|(key, mapped)| (*mapped == session_id).then(|| key.clone()));
+                if key.is_some_and(|key| {
+                    self.gx_store_run_workspace_session_fork(&key.project_id, &key.session_id, cx)
+                }) {
+                    return;
+                }
                 let _ = self.dispatch_gpui_workspace_terminal_runtime_action(
                     "forkSession",
                     session_id,
@@ -962,10 +1021,11 @@ impl GhostexGpuiApp {
             CDXC:TranscriptExport 2026-08-20:
             The transcript file only exists on the machine that runs the agent,
             so the export is a daemon call, not a local read. Route it through
-            the same sidebar-runtime lifecycle path Fork uses: the runtime owns
-            the gxserver client for the local daemon and the authenticated
-            tunnel for remote machines, and it opens the result dialog once the
-            daemon answers with the written path.
+            the same session action path Fork uses: the store
+            (gx_store/git/export_transcript.rs; the sidebar runtime until
+            2026-09-25) owns the gxserver client for the local daemon and the
+            authenticated tunnel for remote machines, and it opens the result
+            dialog once the daemon answers with the written path.
             */
             TerminalAgentActionRequest::ExportTranscript => {
                 let _ = self.dispatch_gpui_workspace_terminal_runtime_action(

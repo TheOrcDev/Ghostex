@@ -442,7 +442,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal_in_new_leaf(
     runtime_sessions: &mut AgentsTerminalRuntimeSessionRegistry,
     launch_payload_source: &mut AgentsTerminalLaunchPayloadSource,
     local_workspace_session_mappings: &mut HashMap<GpuiLocalWorkspaceSessionKey, TerminalSessionId>,
-    local_app_shot_session_mappings: &mut HashMap<String, TerminalSessionId>,
     requested_pane_id: WorkspacePaneId,
     placement: AgentsWorkspaceNewTerminalPlacement,
     key: GpuiLocalWorkspaceSessionKey,
@@ -497,7 +496,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal_in_new_leaf(
     let Some((pane_id, session_id)) = created else {
         return Err("GPUI could not create a workspace pane for the session.");
     };
-    let gxserver_session_id = key.session_id.clone();
     let Some(session) = workspace
         .terminal_sessions
         .iter_mut()
@@ -522,7 +520,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal_in_new_leaf(
         payload,
     );
     local_workspace_session_mappings.insert(key, session_id);
-    local_app_shot_session_mappings.insert(gxserver_session_id, session_id);
     Ok((pane_id, session_id))
 }
 
@@ -531,7 +528,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal(
     runtime_sessions: &mut AgentsTerminalRuntimeSessionRegistry,
     launch_payload_source: &mut AgentsTerminalLaunchPayloadSource,
     local_workspace_session_mappings: &mut HashMap<GpuiLocalWorkspaceSessionKey, TerminalSessionId>,
-    local_app_shot_session_mappings: &mut HashMap<String, TerminalSessionId>,
     requested_pane_id: WorkspacePaneId,
     force_requested_pane_placement: bool,
     key: GpuiLocalWorkspaceSessionKey,
@@ -566,7 +562,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal(
         .to_ghostty_launch_payload()
         .map_err(|_| "GPUI could not prepare the session attach terminal command.")?;
 
-    let gxserver_session_id = key.session_id.clone();
     if let Some(session_id) = local_workspace_session_mappings.get(&key).copied() {
         let existing_pane_id = workspace
             .pane_id_for_session(session_id)
@@ -604,13 +599,10 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal(
             );
             workspace.select_tab(pane_id, session_id);
             local_workspace_session_mappings.insert(key, session_id);
-            local_app_shot_session_mappings.insert(gxserver_session_id, session_id);
             return Ok((pane_id, session_id));
         }
 
         local_workspace_session_mappings.remove(&key);
-        local_app_shot_session_mappings
-            .retain(|_, mapped_session_id| *mapped_session_id != session_id);
     }
 
     if workspace.find_leaf(requested_pane_id).is_none() {
@@ -639,7 +631,6 @@ pub(crate) fn insert_gpui_local_workspace_attach_terminal(
         payload,
     );
     local_workspace_session_mappings.insert(key, session_id);
-    local_app_shot_session_mappings.insert(gxserver_session_id, session_id);
     Ok((pane_id, session_id))
 }
 
@@ -648,7 +639,6 @@ pub(crate) fn attach_gpui_surfaced_local_workspace_terminal(
     runtime_sessions: &mut AgentsTerminalRuntimeSessionRegistry,
     launch_payload_source: &mut AgentsTerminalLaunchPayloadSource,
     local_workspace_session_mappings: &HashMap<GpuiLocalWorkspaceSessionKey, TerminalSessionId>,
-    local_app_shot_session_mappings: &mut HashMap<String, TerminalSessionId>,
     pane_id: WorkspacePaneId,
     key: &GpuiLocalWorkspaceSessionKey,
     plan: GpuiLocalWorkspaceAttachTerminalPlan,
@@ -723,6 +713,5 @@ pub(crate) fn attach_gpui_surfaced_local_workspace_terminal(
         },
         payload,
     );
-    local_app_shot_session_mappings.insert(key.session_id.clone(), shell_session_id);
     Ok(shell_session_id)
 }

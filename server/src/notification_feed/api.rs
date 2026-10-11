@@ -12,8 +12,9 @@ use super::store::{
     dismiss_notification, insert_notification_feed_row, mark_all_notifications_read,
     mark_notification_read, mark_notification_unread, mark_session_notifications_read,
     notification_agent_icon, notification_exists, read_notification_feed_state,
-    NewNotificationFeedRow, NOTIFICATION_FEED_KIND_CUSTOM,
+    unread_notification_session_ids, NewNotificationFeedRow, NOTIFICATION_FEED_KIND_CUSTOM,
 };
+use super::thread_read::acknowledge_read_notification_sessions;
 
 pub(crate) const NOTIFICATION_FEED_READ_ENDPOINT: &str = "/api/readNotificationFeed";
 pub(crate) const NOTIFICATION_FEED_UPDATE_ENDPOINT: &str = "/api/updateNotificationFeed";
@@ -43,6 +44,7 @@ pub(crate) fn update_notification_feed_endpoint(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
+    let mut read_session_ids = Vec::new();
     match action {
         "markRead" | "markUnread" | "dismiss" => {
             let id = required_text(params, "notificationId")?;
@@ -52,7 +54,10 @@ pub(crate) fn update_notification_feed_endpoint(
                 )));
             }
             match action {
-                "markRead" => mark_notification_read(db, &id)?,
+                "markRead" => {
+                    read_session_ids = unread_notification_session_ids(db, Some(&id))?;
+                    mark_notification_read(db, &id)?
+                }
                 "markUnread" => mark_notification_unread(db, &id)?,
                 _ => dismiss_notification(db, &id)?,
             };
@@ -66,6 +71,7 @@ pub(crate) fn update_notification_feed_endpoint(
             defer_session_notification(db, &session_id)?;
         }
         "markAllRead" => {
+            read_session_ids = unread_notification_session_ids(db, None)?;
             mark_all_notifications_read(db)?;
         }
         "clearAll" => {
@@ -84,6 +90,7 @@ pub(crate) fn update_notification_feed_endpoint(
     }
     let feed = read_notification_feed_state(db)?;
     broadcast_notification_feed_changed(state);
+    acknowledge_read_notification_sessions(state, read_session_ids);
     Ok(feed)
 }
 

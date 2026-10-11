@@ -30,10 +30,10 @@ uses rather than the prompt-editor draft handshake: the text is already known
 here, so there is nothing to transfer, the burst is immediate where the
 handshake can hold for 16s, and it leaves no Saved Prompts residue.
 
-SEE-ALSO: session_chat_send.rs (interrupt endpoint, last-send registry calls),
-session_chat_queue_runtime.rs (registry, `sendCancelled`), session_chat_follower.rs
+SEE-ALSO: session_chat_send/send_http.rs (interrupt endpoint, last-send registry calls),
+session_chat_queue_runtime/send.rs (registry, `sendCancelled`), session_chat_follower/
 and session_chat_read.rs (row filter, `returnedPrompt` carriage),
-packages/core-ui/chat/session-chat-returned-prompt.ts (client apply-once).
+packages/gx-chat-core/src/composer/storage.rs (client apply-once).
 */
 
 use std::{
@@ -226,7 +226,7 @@ pub fn screen_shows_returned_session_chat_send(
     let Some(agent) = normalize_agent_id(agent) else {
         return false;
     };
-    if !matches!(agent.as_str(), "claude" | "openclaude" | "grok") {
+    if !matches!(agent.as_str(), "claude" | "openclaude" | "grok" | "cursor") {
         return false;
     }
     let Some(send) = last_sends()
@@ -341,6 +341,15 @@ pub fn filter_session_chat_returned_prompts(
     }
 }
 
+/// The transcript row of the prompt Claude handed back, for as long as the
+/// chat readers hide it.
+pub(crate) fn session_chat_returned_prompt_row(
+    project_id: &str,
+    session_id: &str,
+) -> Option<String> {
+    current(project_id, session_id)?.message_id
+}
+
 /// The retraction a follower still owes its clients, once.
 pub fn take_session_chat_returned_prompt_retraction(
     project_id: &str,
@@ -392,10 +401,16 @@ fn record_returned_prompt(
 // Detection
 // ---------------------------------------------------------------------------
 
+/// CDXC:SessionChat 2026-10-07 WHY: Cursor CLI also hands a prompt back to its input when chat Stop (Ctrl+C) cancels the turn before Cursor recorded it, and the chat kept the sent bubble and warned "Your message might not have reached the agent"; it joins the same flow as Claude Code and Grok Build.
 fn returned_prompt_composer_text(agent: &str, screen_text: &str) -> Option<String> {
     match agent {
         "claude" | "openclaude" => claude_composer_input_text(screen_text),
         "grok" => grok_composer_input_text(screen_text),
+        "cursor" => {
+            crate::session_chat_composer::session_chat_composer_input("cursor", screen_text)
+                .filter(|input| !input.is_empty())
+                .map(|input| input.text)
+        }
         _ => None,
     }
 }
@@ -454,6 +469,7 @@ fn message_text(message: &SessionChatMessage) -> String {
 fn transcript_row_for_send(
     messages: &[SessionChatMessage],
     send: &LastChatSend,
+    agent: &str,
 ) -> Result<Option<String>, ()> {
     // A reply after this send proves acceptance even if a rewind later paints
     // the same prompt in the composer. Inspect the matching user row, not just
@@ -485,7 +501,9 @@ fn transcript_row_for_send(
         // The newest row is the agent's own output or a harness row: whatever
         // this prompt was, Claude answered it or never recorded it. A trailing
         // interrupt marker means the same thing.
-        return if last.role == SessionChatRole::System {
+        // Cursor ends a turn its Ctrl+C cancelled with "User aborted/interrupted manually." and
+        // never records the prompt it handed back to its input.
+        return if last.role == SessionChatRole::System && agent != "cursor" {
             Err(())
         } else {
             Ok(None)
@@ -535,7 +553,7 @@ pub(crate) fn schedule_session_chat_returned_prompt_detection(
     let Some(agent) = normalize_agent_id(terminal_agent.as_deref()) else {
         return;
     };
-    if !matches!(agent.as_str(), "claude" | "openclaude" | "grok") {
+    if !matches!(agent.as_str(), "claude" | "openclaude" | "grok" | "cursor") {
         return;
     }
     let Some(transcript_agent) = resolve_session_chat_transcript_agent(Some(agent.as_str())) else {
@@ -633,7 +651,7 @@ pub(crate) fn schedule_session_chat_returned_prompt_detection(
                 .await;
                 match page {
                     Ok(Ok(SessionChatTailPage::Page { messages, .. })) => {
-                        match transcript_row_for_send(&messages, &send) {
+                        match transcript_row_for_send(&messages, &send, &agent) {
                             Ok(message_id) => message_id,
                             Err(()) => {
                                 log(

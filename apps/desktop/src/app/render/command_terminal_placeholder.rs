@@ -51,10 +51,17 @@ impl GhostexGpuiApp {
             settings_snapshot.terminal_pane_layout(
                 settings_snapshot.terminal_width_applies_to_command_pane_terminals(),
             );
-        let sleeping_wake_label = command_pane_sleeping_placeholder_wake_label(
-            active_session_is_sleeping,
-            command_pane_click_to_wake_sleeping_sessions_from_shared_settings(&settings_snapshot),
-        );
+        let sleeping_card_title = active_session_is_sleeping.then(|| {
+            (
+                self.command_pane
+                    .session(active_session_id)
+                    .map(|session| session.title.clone())
+                    .unwrap_or_else(|| "Terminal".to_string()),
+                command_pane_click_to_wake_sleeping_sessions_from_shared_settings(
+                    &settings_snapshot,
+                ),
+            )
+        });
         let delayed_send_remaining_label = mount_slot_id.and_then(|_| {
             self.gpui_command_delayed_send_remaining_label_for_session(active_session_id)
         });
@@ -81,11 +88,8 @@ impl GhostexGpuiApp {
         CDXC:SessionSleep 2026-06-25-14:27:
         A sleeping active command tab renders the same body placeholder but no Ghostty mount slot. Left-clicking that body wakes the command session; tab selection, right-click menus, and placeholder paint do not wake it.
 
-        CDXC:SessionSleep 2026-06-25-14:49:
-        The sleeping command body paints the native centered wake label only while click-to-wake placeholders are enabled. Mounting command placeholders stay blank, while the normal body element continues to own click wake, drag/drop, and any future terminal mount slot.
-
-        CDXC:SessionSleep 2026-06-27-00:22:
-        Render the sleeping wake label as paint-only canvas chrome using this exact body element's prepaint bounds. Do not add flex overlays, input-owning label elements, root/window routing, persistent geometry, or fallback dimensions; the body remains the sole layout and wake interaction owner.
+        CDXC:SessionSleep 2026-09-23:
+        The sleeping command body shows the shared sleeping card (`render/sleeping_card.rs`) with the tab's title. The card holds no input, so the body stays the sole click-wake and drag/drop owner. Supersedes the 2026-06 paint-only wake label.
 
         CDXC:DelayedSend 2026-06-25-15:42:
         Active command Delayed Send timers also paint a centered countdown badge inside the same body element. This is visual-only child chrome so command body focus, mouse forwarding, wake, drag/drop, and native host bounds stay owned by the normal command body layout.
@@ -179,28 +183,10 @@ impl GhostexGpuiApp {
                     }),
                 )
             })
-            .when_some(sleeping_wake_label, |this, label| {
-                this.child(
-                    canvas(
-                        move |bounds, window, _| {
-                            command_pane_sleeping_placeholder_wake_label_prepaint(
-                                bounds, label, window,
-                            )
-                        },
-                        move |bounds, paint_state, window, cx| {
-                            if let Some(paint_state) = paint_state {
-                                command_pane_sleeping_placeholder_wake_label_paint(
-                                    bounds,
-                                    paint_state,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
+            .when_some(sleeping_card_title, |this, (title, click_to_wake)| {
+                this.child(crate::app::render::sleeping_card::sleeping_card_layer(
+                    crate::app::render::sleeping_card::sleeping_card(None, title, click_to_wake),
+                ))
             })
             .when_some(delayed_send_remaining_label, |this, label| {
                 this.child(
@@ -442,6 +428,10 @@ impl GhostexGpuiApp {
             .top_0()
             .left_0()
             .size_full();
+        let splits = self
+            .command_pane
+            .dock_for_group(group_id)
+            .is_some_and(|dock| command_pane_drop_zone_splits(dock, zone));
 
         match zone {
             WorkspaceDropZone::Left => feedback
@@ -458,6 +448,22 @@ impl GhostexGpuiApp {
                         .right_0()
                         .top_0()
                         .bottom_0(),
+                )
+                .into_any_element(),
+            WorkspaceDropZone::Top if splits => feedback
+                .child(
+                    self.render_agents_workspace_drop_edge_band(zone)
+                        .top_0()
+                        .left_0()
+                        .right_0(),
+                )
+                .into_any_element(),
+            WorkspaceDropZone::Bottom if splits => feedback
+                .child(
+                    self.render_agents_workspace_drop_edge_band(zone)
+                        .bottom_0()
+                        .left_0()
+                        .right_0(),
                 )
                 .into_any_element(),
             WorkspaceDropZone::Center | WorkspaceDropZone::Top | WorkspaceDropZone::Bottom => {

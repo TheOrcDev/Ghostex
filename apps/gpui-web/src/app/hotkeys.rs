@@ -1,0 +1,1 @@
+../../../desktop/src/app/hotkeys.rs

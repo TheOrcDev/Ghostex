@@ -5,7 +5,7 @@
 //! Only clicks fed the physical truths back into the model; every programmatic focus change had to remember to arm its own per-surface handoff slot, and the ones that forgot (hiding the command pane, closing its last tab, closing the floating companion) left the keyboard on the previous owner.
 //! Now `focus_shell_target` is the only way to move focus programmatically, `shell_keyboard_owner` is the only place that decides which surface occupies the focused target, and `drain_pending_keyboard_handoff` is the only code that performs the physical handoff.
 //! Physical focus changes the model in one place only: `reconcile_shell_focus_with_first_responder_target`, fed by the AppKit first-responder observer after a user click.
-//! SEE-ALSO: model/focus_and_keyboard.rs (`PendingKeyboardHandoff`, `ShellKeyboardOwner`), focus.rs (`set_shell_focus_with_terminal_handoff` staleness), terminal_input.rs (`focus_gpui_engine_terminal_view`), helpers/os_cli/keyboard_router.rs.
+//! SEE-ALSO: model/focus_and_keyboard.rs (`PendingKeyboardHandoff`, `ShellKeyboardOwner`), focus/shell_focus.rs (`set_shell_focus_with_terminal_handoff` staleness), terminal_input/text_input_handoff.rs (`focus_gpui_engine_terminal_view`), helpers/os_cli/keyboard_router.rs.
 
 use gpui::Focusable as _;
 use gpui::Window;
@@ -24,6 +24,7 @@ impl GhostexGpuiApp {
     ) {
         self.set_shell_focus(target);
         self.request_keyboard_handoff_for_shell_focus(cx);
+        self.schedule_untouched_agent_chat_review(cx);
     }
 
     /// `focus_shell_target` for callers that already hold the window: the handoff runs immediately instead of on the next render.
@@ -50,6 +51,7 @@ impl GhostexGpuiApp {
             }),
         );
         self.pending_keyboard_handoff = Some(request);
+        self.pending_keyboard_handoff_returns_from_modal = false;
     }
 
     /// Ask for the keyboard to follow the current shell focus. The occupant is resolved when the handoff runs, not now, so a pane that is still mounting or a chat page that is still loading is waited for rather than skipped.
@@ -61,11 +63,6 @@ impl GhostexGpuiApp {
             ShellFocusTarget::AgentsPane(pane_id) => PendingKeyboardHandoff {
                 target: self.shell_focus,
                 session_id: self.agents_workspace.active_session_in_pane(pane_id),
-                command_session_id: None,
-            },
-            ShellFocusTarget::ProjectEditorCompanion(_) => PendingKeyboardHandoff {
-                target: self.shell_focus,
-                session_id: self.project_editor_companion_focused_terminal_session_id(),
                 command_session_id: None,
             },
             ShellFocusTarget::CommandPane => PendingKeyboardHandoff {
@@ -97,18 +94,10 @@ impl GhostexGpuiApp {
 
     /// Ask for the keyboard to reach a specific session once its pane shows it (chat launch, chat mode switch). Drops silently when the session's pane is not the shell-focused one by the time the handoff runs.
     pub(crate) fn request_keyboard_handoff_for_session(&mut self, session_id: TerminalSessionId) {
-        let target = if self.active_mode == TitlebarMode::Agents {
-            self.agents_workspace
-                .pane_id_for_session(session_id)
-                .map(ShellFocusTarget::AgentsPane)
-        } else if self.active_mode.is_project_editor_mode()
-            && (self.project_editor_companion_terminal_session_id == Some(session_id)
-                || self.project_editor_companion_secondary_terminal_session_id == Some(session_id))
-        {
-            Some(ShellFocusTarget::ProjectEditorCompanion(self.active_mode))
-        } else {
-            None
-        };
+        let target = self
+            .agents_workspace
+            .pane_id_for_session(session_id)
+            .map(ShellFocusTarget::AgentsPane);
         let Some(target) = target else {
             return;
         };
@@ -143,12 +132,6 @@ impl GhostexGpuiApp {
         {
             match self.first_responder_target {
                 FirstResponderTarget::TerminalSurface(FirstResponderTerminalSurface::Agents(
-                    session_id,
-                ))
-                | FirstResponderTarget::TerminalSurface(
-                    FirstResponderTerminalSurface::ProjectEditorCompanion(session_id),
-                )
-                | FirstResponderTarget::CefSurface(FirstResponderCefSurface::SessionChat(
                     session_id,
                 )) => return Some(KeyboardOwnerSession::Agents(session_id)),
                 FirstResponderTarget::TerminalSurface(FirstResponderTerminalSurface::Command(
@@ -201,12 +184,6 @@ impl GhostexGpuiApp {
             ShellFocusTarget::AgentsPane(_) => {
                 matches!(self.shell_focus, ShellFocusTarget::AgentsPane(_))
             }
-            ShellFocusTarget::ProjectEditorCompanion(_) => {
-                matches!(
-                    self.shell_focus,
-                    ShellFocusTarget::ProjectEditorCompanion(_)
-                )
-            }
             ShellFocusTarget::BrowserSurface
             | ShellFocusTarget::BrowserPane(_)
             | ShellFocusTarget::ProjectEditorSurface(_) => self.shell_focus == target,
@@ -250,7 +227,7 @@ impl GhostexGpuiApp {
     pub(crate) fn shell_keyboard_owner(&self) -> ShellKeyboardOwner {
         match self.shell_focus {
             ShellFocusTarget::AgentsPane(pane_id) => {
-                if self.active_mode != TitlebarMode::Agents {
+                if !self.agents_workspace_visible() {
                     return ShellKeyboardOwner::Nothing;
                 }
                 let Some(session_id) = self.agents_workspace.active_session_in_pane(pane_id) else {
@@ -262,22 +239,6 @@ impl GhostexGpuiApp {
                     {
                         Some(mount)
                     }
-                    _ => None,
-                };
-                self.agents_session_keyboard_owner(session_id, mount)
-            }
-            ShellFocusTarget::ProjectEditorCompanion(mode) => {
-                if self.active_mode != mode || !self.project_editor_companion_is_visible() {
-                    return ShellKeyboardOwner::Nothing;
-                }
-                let Some(session_id) = self.project_editor_companion_focused_terminal_session_id()
-                else {
-                    return ShellKeyboardOwner::Nothing;
-                };
-                let mount = match self.focused_terminal_text_mount_target() {
-                    Some(
-                        mount @ FocusedTerminalTextMountTarget::ProjectEditorCompanion(slot_id),
-                    ) if slot_id.session_id == session_id => Some(mount),
                     _ => None,
                 };
                 self.agents_session_keyboard_owner(session_id, mount)
@@ -326,10 +287,25 @@ impl GhostexGpuiApp {
                 }
             }
             ShellFocusTarget::ProjectEditorSurface(mode) => {
-                if self.active_mode == mode {
+                if mode == TitlebarMode::Agents {
+                    // The view panel with no view in it: the picker owns the keys, or nothing does.
+                    if self.view_picker_open() {
+                        ShellKeyboardOwner::GpuiViewPanelSurface
+                    } else {
+                        ShellKeyboardOwner::Nothing
+                    }
+                } else if self.active_mode != mode {
+                    ShellKeyboardOwner::Nothing
+                } else if self.website_home_setup_visible(mode)
+                    || mode == TitlebarMode::Kanban
+                    || mode == TitlebarMode::Manage
+                {
+                    // Kanban and Files are drawn natively: no page to hand keys to.
+                    ShellKeyboardOwner::GpuiViewPanelSurface
+                } else if mode.is_project_editor_mode() {
                     ShellKeyboardOwner::WorkareaPage(mode)
                 } else {
-                    ShellKeyboardOwner::Nothing
+                    ShellKeyboardOwner::GpuiViewPanelSurface
                 }
             }
         }
@@ -375,9 +351,6 @@ impl GhostexGpuiApp {
                 FocusedTerminalTextMountTarget::Agents(slot_id) => {
                     self.agents_terminal_ghostty_surface_matches(slot_id)
                 }
-                FocusedTerminalTextMountTarget::ProjectEditorCompanion(slot_id) => {
-                    self.project_editor_companion_terminal_ghostty_surface_matches(slot_id)
-                }
                 FocusedTerminalTextMountTarget::Command(_) => false,
             };
             if native_surface_matches {
@@ -386,6 +359,17 @@ impl GhostexGpuiApp {
         }
         let _ = mount;
         ShellKeyboardOwner::TerminalMounting
+    }
+
+    /// Whether a GPUI text field of the main window's own chrome holds the keyboard.
+    fn main_window_text_field_owns_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.native_sidebar_input_owns_focus(window, cx)
+            || self.terminal_search_input_owns_keyboard_focus(window, cx)
+            || self.browser_find_input_owns_keyboard_focus(window, cx)
+            || self
+                .browser_address_inputs
+                .values()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
     /// The render-time handoff. Runs once per request: it is dropped when shell focus moved or the requested tab is no longer in front, kept while the occupant is still mounting or loading, and executed exactly once otherwise.
@@ -397,29 +381,32 @@ impl GhostexGpuiApp {
         let Some(pending) = self.pending_keyboard_handoff else {
             return;
         };
-        if pending.target != self.shell_focus {
+        // CDXC:FocusRouting 2026-09-25 WHY:
+        // An open dialog owns the keyboard. A handoff asked for before it opened (a new browser tab
+        // whose page was still being created, a pane still mounting) used to land when its surface
+        // arrived, focusing that surface under the dialog: typing into Add Worktree went nowhere
+        // until the pane was hidden. It waits for the dialog to close, then lands as it would have.
+        if self.native_app_modal.is_some() || self.app_modal_window.is_some() {
+            return;
+        }
+        /*
+        CDXC:FocusRouting 2026-09-26 WHY:
+        Quick Access and the new-thread picker close when they lose activation, through the same path as Escape. A click into a main-window text field (sidebar rename, terminal search, browser find or address bar) dismisses them, and the modal's return handoff must not pull the keyboard back out of that field.
+        */
+        if std::mem::take(&mut self.pending_keyboard_handoff_returns_from_modal)
+            && self.main_window_text_field_owns_focus(window, cx)
+        {
             self.pending_keyboard_handoff = None;
             return;
         }
-        #[cfg(target_os = "macos")]
-        if self.companion_reveal.is_some() {
-            // The floating companion is its own native window; each window drains only the targets it hosts.
-            let host = if matches!(pending.target, ShellFocusTarget::ProjectEditorCompanion(_)) {
-                self.companion_native_parent()
-            } else {
-                self.parent_ns_view
-            };
-            if cef_parent_native_view(window).ok() != Some(host) {
-                return;
-            }
+        if pending.target != self.shell_focus {
+            self.pending_keyboard_handoff = None;
+            return;
         }
         if let Some(session_id) = pending.session_id {
             let still_in_front = match pending.target {
                 ShellFocusTarget::AgentsPane(pane_id) => {
                     self.agents_workspace.active_session_in_pane(pane_id) == Some(session_id)
-                }
-                ShellFocusTarget::ProjectEditorCompanion(_) => {
-                    self.project_editor_companion_focused_terminal_session_id() == Some(session_id)
                 }
                 _ => true,
             };
@@ -464,22 +451,15 @@ impl GhostexGpuiApp {
                     FocusedTerminalTextMountTarget::Command(_) => {
                         self.sync_command_terminal_ghostty_surface_focus_with_appkit_handoff(true);
                     }
-                    FocusedTerminalTextMountTarget::ProjectEditorCompanion(slot_id) => {
-                        self.sync_project_editor_companion_terminal_ghostty_surface_focus_with_appkit_handoff(true);
-                        self.deliver_pending_session_terminal_composer_insert(
-                            slot_id.session_id,
-                            cx,
-                        );
-                    }
                 }
             }
-            ShellKeyboardOwner::TerminalMounting => {}
+            ShellKeyboardOwner::TerminalMounting => {
+                self.hold_unfocused_keyboard_on_root(window, cx);
+            }
             ShellKeyboardOwner::ChatComposer(session_id) => {
-                if !self
-                    .session_chat_composer_ready_sessions
-                    .contains(&session_id)
-                {
-                    // Completed by the page's composerReady report.
+                if !self.native_chat_views.contains_key(&session_id) {
+                    // Native input can take focus before its background runtime restores the draft.
+                    self.hold_unfocused_keyboard_on_root(window, cx);
                     return;
                 }
                 self.pending_keyboard_handoff = None;
@@ -515,36 +495,78 @@ impl GhostexGpuiApp {
                 focus_handle.focus(window, cx);
                 surface.update(cx, |surface, _| surface.focus());
             }
+            ShellKeyboardOwner::GpuiViewPanelSurface => {
+                self.pending_keyboard_handoff = None;
+                // The page is GPUI's own drawing, so the keys come back to the root view; the
+                // terminal surface sync releases a Ghostty first responder in the same pass,
+                // because shell focus no longer names an Agents pane.
+                self.reclaim_gpui_root_for_chrome_input_focus();
+            }
             ShellKeyboardOwner::Nothing => {
                 self.pending_keyboard_handoff = None;
+                self.hold_unfocused_keyboard_on_root(window, cx);
             }
         }
     }
 
-    /// Physical half of a chat handoff: GPUI handle, native CEF focus, the page's composer, then any draft waiting for that composer.
+    /// CDXC:FocusRouting 2026-10-10 WHY:
+    /// GPUI sends keys along the focused element's path, and with no live focus (the focused terminal's tab was closed, or a hidden one was released) only the window's outermost element sees them, above the root that holds every app hotkey and the wake-on-type and terminal forwarding listeners. A handoff with nothing to focus yet (a sleeping or empty pane, a terminal still mounting, a chat still loading) therefore parks the keyboard on that root's own handle, so hotkeys keep working until the surface arrives and the pending handoff moves it there. A focus that is still live (a sidebar rename, a search field) is left alone.
+    pub(crate) fn hold_unfocused_keyboard_on_root(
+        &self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if window.focused(cx).is_none() {
+            window.focus(&self.root_action_focus_handle, cx);
+        }
+    }
+
+    /// Makes the main window key again once an app modal's window is gone.
+    ///
+    /// CDXC:FocusRouting 2026-09-30 DECISION:
+    /// User: after Cmd+P then Escape, or closing a modal with its X, typing did not reach the chat and Cmd+P did nothing until they clicked the window; "we need to focus the main window of the app automatically in all these cases".
+    /// The modal is its own key window, and AppKit does not hand key status back to the main window when it closes, so the in-window handoff focused the composer of a window that received no keys.
+    /// Skipped while another modal is up (a Quick Access action that opens one) and when Ghostex is no longer the active app (the modal closed because the user switched apps), so it never pulls Ghostex forward.
+    pub(crate) fn activate_main_window_after_app_modal(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(main) = self.main_window_handle else {
+            return;
+        };
+        let app = cx.weak_entity();
+        cx.defer(move |cx| {
+            let another_modal_open = app.read_with(cx, |app, _| {
+                app.native_app_modal.is_some() || app.app_modal_window.is_some()
+            });
+            if another_modal_open.unwrap_or(true) || !ghostex_application_is_active() {
+                return;
+            }
+            let _ = main.update(cx, |_, window, _| {
+                if !window.is_window_active() {
+                    window.activate_window();
+                }
+            });
+        });
+    }
+
+    /// Physical half of a chat handoff: the chat view's composer, then any draft waiting for that composer.
     pub(crate) fn focus_session_chat_composer(
         &mut self,
         session_id: TerminalSessionId,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.cancel_session_chat_eviction_probe(session_id);
-        let Some(surface) = self.agents_chat_surfaces.get(&session_id).cloned() else {
+        let Some(view) = self.native_chat_views.get(&session_id).cloned() else {
             return;
         };
-        let focus_handle = surface.read(cx).focus_handle.clone();
-        focus_handle.focus(window, cx);
-        surface.update(cx, |surface, _| {
-            surface.focus();
-            surface.execute_app_owned_script(
-                "(function(){var ns=window.ghostexGpui;if(ns&&typeof ns.onSessionChatFocusComposerRequested==='function'){ns.onSessionChatFocusComposerRequested();}})(); undefined;",
-            );
+        self.reclaim_gpui_root_for_native_chat_composer(window);
+        view.update(cx, |view, cx| {
+            view.focus_requested = true;
+            view.ensure_input(window, cx);
         });
         if let Some(content) = self
             .pending_session_chat_composer_insert
             .remove(&session_id)
         {
-            let _ = self.insert_prompt_into_session_chat(session_id, &content, cx);
+            self.insert_prompt_into_session_chat(session_id, &content, cx);
         }
     }
 
@@ -560,7 +582,7 @@ impl GhostexGpuiApp {
             focus_handle.focus(window, cx);
             surface.update(cx, |surface, _| surface.focus());
         } else {
-            window.blur();
+            window.blur(cx);
         }
     }
 
@@ -574,26 +596,19 @@ impl GhostexGpuiApp {
                 if self.agents_chat_mode_sessions.contains(&session_id) {
                     return false;
                 }
-                if self.active_mode == TitlebarMode::Agents {
-                    return self
+                self.agents_workspace_visible()
+                    && self
                         .agents_workspace
                         .rendered_terminal_body_mount_slots()
                         .iter()
-                        .any(|slot_id| slot_id.session_id == session_id);
-                }
-                self.active_mode.is_project_editor_mode()
-                    && self.project_editor_companion_is_visible()
-                    && (self.project_editor_companion_terminal_session_id == Some(session_id)
-                        || self.project_editor_companion_secondary_terminal_session_id
-                            == Some(session_id))
+                        .any(|slot_id| slot_id.session_id == session_id)
             }
             GpuiEngineTerminalEventTarget::Command(session_id) => {
-                self.command_pane.is_expanded()
-                    && self
-                        .command_pane
-                        .rendered_terminal_body_mount_slots()
-                        .iter()
-                        .any(|slot_id| slot_id.session_id == session_id)
+                // Rendered slots are already limited to the docks on screen.
+                self.command_pane
+                    .rendered_terminal_body_mount_slots()
+                    .iter()
+                    .any(|slot_id| slot_id.session_id == session_id)
             }
         }
     }
@@ -622,10 +637,12 @@ impl GhostexGpuiApp {
         );
         #[cfg(not(target_os = "macos"))]
         let _ = root;
+        // Onto the root's handle rather than nowhere (`hold_unfocused_keyboard_on_root`): a blur
+        // left only the window's outermost element on the key path, so hotkeys stopped working.
         if let Some(view) = self.gpui_engine_terminal_view_for_target(target)
             && view.read(cx).focus_handle(cx).is_focused(window)
         {
-            window.blur();
+            window.focus(&self.root_action_focus_handle, cx);
         }
         support_logs::append(
             support_logs::GpuiSupportLog::TerminalFocus,
@@ -636,4 +653,19 @@ impl GhostexGpuiApp {
             }),
         );
     }
+}
+
+/// Whether Ghostex is the frontmost app. Only macOS leaves the main window un-keyed after a modal
+/// closes, so other platforms never re-activate it.
+#[cfg(target_os = "macos")]
+fn ghostex_application_is_active() -> bool {
+    unsafe extern "C" {
+        fn GhostexGpuiApplicationIsActive() -> bool;
+    }
+    unsafe { GhostexGpuiApplicationIsActive() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ghostex_application_is_active() -> bool {
+    false
 }

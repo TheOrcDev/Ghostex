@@ -11,7 +11,12 @@ import {
   packDependencies,
   resolveAmendIntent,
 } from './amend-existing-lib.mjs';
-import { customerDownloadUrl, IOS_DISCORD_URL, renderIosAvailabilityNotes } from './customer-downloads.mjs';
+import {
+  customerDownloadUrl,
+  DOWNLOADS_START,
+  IOS_DISCORD_URL,
+  renderIosAvailabilityNotes,
+} from './customer-downloads.mjs';
 import { releaseProvenanceAssetName } from './provenance.mjs';
 
 const VERSION = '7.7.1';
@@ -171,35 +176,51 @@ describe('live gxserver alignment', () => {
 });
 
 describe('release notes merge', () => {
-  test('appends customer download links without checksums or provenance', () => {
+  test('puts customer download links above the notes without checksums or provenance', () => {
     const installer = 'ghostex-7.7.1-windows-x64.exe';
     const merged = mergeReleaseNotes({
       assetNames: [installer],
       liveBody: '## 7.7.1 - 2026-08-13\n\n- Fixed chat view\n',
       version: VERSION,
     });
-    expect(merged).toContain('## 7.7.1 - 2026-08-13');
-    expect(merged).toContain('## Download Ghostex 7.7.1');
-    expect(merged).toContain(customerDownloadUrl(VERSION, installer));
+    expect(merged.startsWith(DOWNLOADS_START)).toBe(true);
+    expect(merged.indexOf(customerDownloadUrl(VERSION, installer))).toBeLessThan(merged.indexOf('## 7.7.1 - 2026-08-13'));
     expect(merged).not.toContain('SHA256');
     expect(merged).not.toContain('Build provenance');
   });
 
-  test('replaces legacy checksum and provenance sections with customer links', () => {
+  test('regenerates the top block in place as more platforms publish', () => {
+    const dmg = 'ghostex-7.7.1-arm64.dmg';
+    const apk = 'ghostex-android.apk';
+    const deb = 'ghostex_7.7.1_amd64.deb';
+    const first = mergeReleaseNotes({ assetNames: [dmg], liveBody: '## 7.7.1\n\n- Notes\n', version: VERSION });
+    const second = mergeReleaseNotes({ assetNames: [dmg, apk, deb], liveBody: first, version: VERSION });
+    const again = mergeReleaseNotes({ assetNames: [dmg, apk, deb], liveBody: second, version: VERSION });
+    expect(again).toBe(second);
+    expect(second.split(DOWNLOADS_START)).toHaveLength(2);
+    expect(second).toContain(customerDownloadUrl(VERSION, apk));
+    expect(second).toContain(customerDownloadUrl(VERSION, deb));
+    const block = second.slice(0, second.indexOf('## 7.7.1'));
+    expect(block.trim().split('\n').length).toBeLessThanOrEqual(5);
+  });
+
+  test('replaces legacy checksum, provenance and bottom download sections with the top block', () => {
     const dmg = 'ghostex-7.7.1-arm64.dmg';
     const apk = 'ghostex-android.apk';
     const liveBody = [
       '## 7.7.1',
+      '',
+      '## Download Ghostex 7.7.1',
+      '',
+      '### macOS ARM',
+      '',
+      `- [Download DMG](${customerDownloadUrl(VERSION, dmg)})`,
       '',
       '## Downloads',
       '',
       '### macos-arm64',
       '',
       `- \`${dmg}\` — SHA256 \`${'c'.repeat(64)}\``,
-      '',
-      '### provenance',
-      '',
-      `- \`release-provenance-7.7.1.json\` — SHA256 \`${'d'.repeat(64)}\``,
       '',
       '## Build provenance',
       '',
@@ -210,11 +231,13 @@ describe('release notes merge', () => {
       liveBody,
       version: VERSION,
     });
+    expect(merged.startsWith(DOWNLOADS_START)).toBe(true);
     expect(merged).toContain(customerDownloadUrl(VERSION, dmg));
     expect(merged).toContain(customerDownloadUrl(VERSION, apk));
     expect(merged).toContain(renderIosAvailabilityNotes());
     expect(merged).toContain(`[Discord](${IOS_DISCORD_URL})`);
-    expect(merged.indexOf('### Android')).toBeLessThan(merged.indexOf('### iOS'));
+    expect(merged.indexOf('**Android:**')).toBeLessThan(merged.indexOf('iOS:'));
+    expect(merged).not.toContain('## Download Ghostex');
     expect(merged).not.toContain('SHA256');
     expect(merged).not.toContain('Build provenance');
     expect(merged).not.toContain('release-provenance-7.7.1.json');

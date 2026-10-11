@@ -1,3 +1,4 @@
+import { formatSidebarHotkeyLabel } from '@/packages/core-ui/hotkey-label';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { SessionChatLexicalInput } from '@/packages/core-ui/chat/session-chat-lexical-input';
@@ -167,9 +168,7 @@ function applyConfigureMessage(message: GhostexEditorConfigureMessage): boolean 
 }
 
 function editorShortcutHint(): string {
-  return /mac/iu.test(navigator.platform || navigator.userAgent)
-    ? 'F1 for commands - CMD + S or CTRL + G to Save'
-    : 'F1 for commands - CTRL + S or CTRL + G to Save';
+  return `F1 for commands - ${formatSidebarHotkeyLabel('cmd+s')} or ${formatSidebarHotkeyLabel('ctrl+g')} to Save`;
 }
 
 getRequiredElement('editor-hint').textContent = editorShortcutHint();

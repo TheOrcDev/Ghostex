@@ -66,6 +66,7 @@ export function normalizedAssetDigest(digest) {
   return digest.startsWith('sha256:') ? digest.slice('sha256:'.length) : digest;
 }
 
+/** @param {Record<string, any>} options */
 export function buildProductProvenance({
   action,
   algorithmRevision = FINGERPRINT_ALGORITHM_REVISION,
@@ -110,6 +111,10 @@ export function buildProductProvenance({
   return validateProductProvenance(record);
 }
 
+/**
+ * @param {unknown} input
+ * @param {{ expect?: Record<string, any> }} [options]
+ */
 export function validateProductProvenance(input, { expect = {} } = {}) {
   const record = requireObject(input, 'product record');
   if (record.schemaVersion !== PROVENANCE_SCHEMA_VERSION) fail('schemaVersion must equal 1');

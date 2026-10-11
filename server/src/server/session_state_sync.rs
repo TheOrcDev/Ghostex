@@ -224,10 +224,16 @@ pub(crate) fn sync_live_zmx_process_identities(
             }
         })
         .filter_map(|session| {
+            let project_id = read_session_text(session, "projectId")?;
+            let session_id = read_session_text(session, "sessionId")?;
+            if crate::agents::draft_agent_switch_in_progress(&project_id, &session_id) {
+                return None;
+            }
             Some((
-                read_session_text(session, "projectId")?,
-                read_session_text(session, "sessionId")?,
+                project_id,
+                session_id,
                 read_session_text(session, "zmxName")?,
+                read_session_text(session, "agentId"),
             ))
         })
         .collect::<Vec<_>>();
@@ -236,7 +242,7 @@ pub(crate) fn sync_live_zmx_process_identities(
     }
     let session_names = candidates
         .iter()
-        .map(|(_, _, zmx_name)| zmx_name.clone())
+        .map(|(_, _, zmx_name, _)| zmx_name.clone())
         .collect::<Vec<_>>();
     let Ok(identities) =
         read_cached_zmx_session_process_identities(&session_names, &state.paths.home_dir)
@@ -245,11 +251,16 @@ pub(crate) fn sync_live_zmx_process_identities(
     };
     let mut changed_any = false;
     let codex_hook_identities = read_codex_hook_session_identities(&state.paths);
-    for (candidate_project_id, candidate_session_id, _) in candidates {
+    for (candidate_project_id, candidate_session_id, _, candidate_agent_id) in candidates {
         let Some(current) = repository.get_session(&candidate_project_id, &candidate_session_id)?
         else {
             continue;
         };
+        // CDXC:Drafts 2026-09-16 WHY:
+        // A process scan started before a CLI switch can finish after it. Its old observation must not undo the selected agent and clear the new account.
+        if read_session_text(&current, "agentId") != candidate_agent_id {
+            continue;
+        }
         if !should_sync_live_zmx_process_identity(&current) {
             continue;
         }
@@ -314,6 +325,37 @@ pub(crate) fn sync_live_zmx_process_identities(
             agent_session_id = None;
             agent_session_path = None;
         }
+        let launch_argv_identity = (identity.agent_session_path.is_none()
+            && hook_identity.is_none())
+        .then(|| identity.process_id.zip(agent_session_id.clone()))
+        .flatten();
+        let launch_argv_identity_is_new =
+            launch_argv_identity
+                .as_ref()
+                .is_some_and(|(process_id, argv_agent_session_id)| {
+                    !crate::agents::launch_argv_identity_already_applied(
+                        &current,
+                        *process_id,
+                        argv_agent_session_id,
+                    )
+                });
+        if launch_argv_identity.is_some() && !launch_argv_identity_is_new {
+            agent_session_id = None;
+        }
+        if identity.agent_id.as_deref() == Some("freebuff")
+            && agent_session_id.is_none()
+            && read_runtime_text(&current, "agentSessionId").is_none()
+        {
+            // See CDXC:SessionIdentity in session_chat_freebuff.rs.
+            if let Some((id, path)) =
+                crate::session_chat_freebuff::discover_freebuff_chat_for_session(
+                    repository, &current, sessions,
+                )
+            {
+                agent_session_id = Some(id);
+                agent_session_path = Some(path.to_string_lossy().into_owned());
+            }
+        }
         /*
         CDXC:SessionIdentity 2026-06-21-18:25:
         Rust must copy TypeScript gxserver's live zmx process repair before sidebar list/snapshot responses. A running zmx terminal whose foreground process is Codex/Claude/etc. must be promoted to the matching agent row in durable state so macOS shows the same session identity after the server cutover.
@@ -327,6 +369,17 @@ pub(crate) fn sync_live_zmx_process_identities(
             agent_session_id,
             agent_session_path,
         )?;
+        if let Some((process_id, argv_agent_session_id)) =
+            launch_argv_identity.filter(|_| launch_argv_identity_is_new)
+        {
+            crate::agents::record_applied_launch_argv_identity(
+                repository,
+                &candidate_project_id,
+                &candidate_session_id,
+                process_id,
+                &argv_agent_session_id,
+            )?;
+        }
         let reconciled = if changed {
             reconcile_agent_metadata_title_for_session(
                 repository,

@@ -18,6 +18,9 @@ use super::{
     start_tailcat_from_persisted_state, TailcatRuntime,
 };
 
+/// CDXC:RemotePairing 2026-09-15 SEE-ALSO:
+/// apps/mobile/tailcat-bridge/go.mod pins the tailcat library the phone app tunnels with; keep it at least as new as this helper.
+/// v0.6.0 serves addresses with a WireGuard pre-shared key that clients v0.5.0 and older cannot complete a handshake with, which is exactly the skew that broke phone pairing on 2026-09-15.
 const TAILCAT_MODULE: &str = "github.com/tailscale/tailcat/cmd/tailcat@v0.6.0";
 static INSTALLATION: Mutex<InstallationStatus> = Mutex::new(InstallationStatus {
     running: false,
@@ -229,11 +232,6 @@ fn run_command(command: &mut Command, directory: &Path, timeout: Duration) -> Re
     let output_path = directory.join("build-output.txt");
     let output = File::create(&output_path)?;
     super::supervisor::configure_process_group(command);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0000_0200 | 0x0800_0000);
-    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)

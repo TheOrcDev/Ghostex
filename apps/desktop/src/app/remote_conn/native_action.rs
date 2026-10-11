@@ -79,7 +79,22 @@ impl GhostexGpuiApp {
         match message.action {
             GpuiSidebarNativeProjectPathAction::OpenRemoteSessionTerminal => {
                 let remote_key = GpuiRemoteAttachSessionKey::from(&reference);
-                if message.preferred_interface == GpuiPreferredAgentInterface::Chat {
+                // CDXC:SessionChat 2026-09-20 WHY:
+                // A remote session click now carries the agent's Default Agent View like a local one, so the same rule
+                // applies: a session that already has a tab owns its recorded view, and only one without a tab yet
+                // takes the launch intent (see `focus_local_workspace_terminal_from_message`).
+                let session_has_tab = self
+                    .remote_attach_sessions
+                    .get(&remote_key)
+                    .copied()
+                    .is_some_and(|shell_session_id| {
+                        self.agents_workspace
+                            .pane_id_for_session(shell_session_id)
+                            .is_some()
+                    });
+                if message.preferred_interface == GpuiPreferredAgentInterface::Chat
+                    && !session_has_tab
+                {
                     self.pending_agents_chat_launch_intents
                         .insert(GpuiWorkspaceTerminalSessionKey::Remote(remote_key.clone()));
                 }
@@ -90,81 +105,14 @@ impl GhostexGpuiApp {
                 } else {
                     self.pending_keep_view_remote_focus.remove(&remote_key);
                 }
-                let placement = match message.placement {
-                    GpuiWorkspaceTerminalFocusPlacement::Tab => {
-                        AgentsWorkspaceNewTerminalPlacement::Tab
-                    }
-                    GpuiWorkspaceTerminalFocusPlacement::SplitRight => {
-                        AgentsWorkspaceNewTerminalPlacement::SplitRight
-                    }
-                };
                 self.begin_gpui_remote_attach_terminal_open(
-                    reference, config, target, None, placement, cx,
+                    reference,
+                    config,
+                    target,
+                    None,
+                    AgentsWorkspaceNewTerminalPlacement::Tab,
+                    cx,
                 );
-            }
-            GpuiSidebarNativeProjectPathAction::CopyRemoteAttachCommand => {
-                let background = cx.background_executor().clone();
-                cx.spawn(async move |this, cx| {
-                    let result = background
-                        .spawn(async move {
-                            gpui_prepare_remote_attach_terminal_plan(
-                                &config, &target, &reference, false, false,
-                            )
-                        })
-                        .await;
-                    let _ = this.update(cx, |this, cx| match result {
-                        Ok(plan) => {
-                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                plan.clipboard_command,
-                            ));
-                            gpui_play_copy_sound();
-                            this.dispatch_gpui_app_modal_toast(
-                                "info",
-                                "Remote attach command copied",
-                                "SSH attach command copied to the clipboard.",
-                                cx,
-                            );
-                        }
-                        Err(message) => this.dispatch_gpui_app_modal_toast(
-                            "warning",
-                            "Remote attach unavailable",
-                            message.as_str(),
-                            cx,
-                        ),
-                    });
-                })
-                .detach();
-            }
-            GpuiSidebarNativeProjectPathAction::CopyRemoteResumeCommand => {
-                let background = cx.background_executor().clone();
-                cx.spawn(async move |this, cx| {
-                    let result = background
-                        .spawn(async move {
-                            gpui_prepare_remote_resume_clipboard_command(
-                                &config, &target, &reference,
-                            )
-                        })
-                        .await;
-                    let _ = this.update(cx, |this, cx| match result {
-                        Ok(command) => {
-                            cx.write_to_clipboard(ClipboardItem::new_string(command));
-                            gpui_play_copy_sound();
-                            this.dispatch_gpui_app_modal_toast(
-                                "info",
-                                "Remote resume command copied",
-                                "SSH resume command copied to the clipboard.",
-                                cx,
-                            );
-                        }
-                        Err(message) => this.dispatch_gpui_app_modal_toast(
-                            "warning",
-                            "Remote resume unavailable",
-                            message.as_str(),
-                            cx,
-                        ),
-                    });
-                })
-                .detach();
             }
             _ => {}
         }
@@ -211,8 +159,7 @@ impl GhostexGpuiApp {
                         .await;
                     let _ = this.update(cx, |this, cx| match result {
                         Ok(path) => {
-                            cx.write_to_clipboard(ClipboardItem::new_string(path));
-                            gpui_play_copy_sound();
+                            gpui_copy_to_clipboard(ClipboardItem::new_string(path), cx);
                             this.dispatch_gpui_workspace_action_toast(
                                 "info",
                                 "Remote project path copied",
@@ -273,9 +220,7 @@ impl GhostexGpuiApp {
                                 cx,
                             );
                             this.refresh_gpui_remote_gxserver_presentation_in_background(
-                                remote_machine_id,
-                                false,
-                                cx,
+                                &remote_machine_id,
                             );
                         }
                         Err(message) => this.dispatch_gpui_workspace_action_toast(

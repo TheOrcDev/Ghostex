@@ -1,0 +1,517 @@
+//! The top level of the list: which groups are drawn, the Space buttons, the collections, the
+//! machine tab counts, and the empty state.
+//!
+//! SEE-ALSO: the deleted sidebar page's `model.ts` (`createNativeSidebarSnapshot`),
+//! collections.ts, empty-state.ts, and space-navigation.ts.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::collections::{project_sidebar_collections, CollectionItem, CollectionsState};
+use super::daemon_wait::{DaemonWait, TRY_NOW_LABEL};
+use super::groups::{group_summary, GroupBuild, GroupKind, GroupPlan};
+use super::inputs::{
+    effective_sidebar_mode, SidebarHostInputs, SidebarMode, SidebarSettings, SidebarUiState,
+    UnavailableState, LOCAL_MACHINE_ID,
+};
+use super::projects::ProjectMeta;
+use super::spaces::{
+    resolve_selected_space, selection_shows_project, space_for_group, SpaceSelection, SpacesState,
+    OTHER_SPACE_ICON, OTHER_SPACE_ID, OTHER_SPACE_LABEL,
+};
+use super::view::{
+    CollectionView, EmptyState, GroupView, MachineSummary, MachineTabView, OrderItem, OrderKind,
+    SidebarView, SpaceProject, SpaceView,
+};
+use crate::keys::{parse_workspace_subgroup_id, MachineId};
+
+/// Everything the top level reads.
+pub(crate) struct AssembleInput<'a> {
+    pub(crate) plans: &'a [GroupPlan],
+    pub(crate) builds: &'a BTreeMap<String, GroupBuild>,
+    pub(crate) meta: &'a ProjectMeta,
+    pub(crate) ui: &'a SidebarUiState,
+    pub(crate) settings: &'a SidebarSettings,
+    pub(crate) host: &'a SidebarHostInputs,
+    pub(crate) spaces: Option<SpacesState>,
+    /// The section's machine shows Spaces (`machine_spaces::spaces_enabled_on`).
+    pub(crate) spaces_enabled: bool,
+    pub(crate) collections: CollectionsState,
+    /// THIS COMPUTER's first snapshot has arrived, which is what `ready` and the loading and error
+    /// branches of the empty state are about on every tab.
+    pub(crate) local_machine_loaded: bool,
+    /// The badge counts of every machine tab.
+    pub(crate) machine_summaries: &'a BTreeMap<MachineId, MachineSummary>,
+    /// Whether ANY machine draws a project group. Asked only when the two cheaper inventory tests
+    /// both say no, so it is a closure rather than a value.
+    pub(crate) any_machine_draws_a_project: &'a dyn Fn() -> bool,
+    pub(crate) now_ms: u64,
+}
+
+/// Builds the whole list from the groups that were already built.
+pub(crate) fn assemble(input: AssembleInput<'_>) -> SidebarView {
+    let section_key = input.ui.section_key();
+    let group_ids: Vec<String> = input
+        .plans
+        .iter()
+        .map(|plan| plan.group_id.clone())
+        .collect();
+    // Both are asked once per group per Space, so the lookup is a map rather than a scan.
+    let mut projects_by_group: BTreeMap<&str, (&str, Option<&str>)> = BTreeMap::new();
+    // The bot groups, which only Bots mode draws and no Space shows or counts.
+    let mut bot_groups: BTreeSet<&str> = BTreeSet::new();
+    let mut bot_runs_today = 0;
+    for plan in input.plans {
+        if let Some(project) = &plan.project {
+            projects_by_group.insert(
+                plan.group_id.as_str(),
+                (
+                    project.project_id.as_str(),
+                    project
+                        .worktree
+                        .as_ref()
+                        .map(|worktree| worktree.parent_project_id.as_str()),
+                ),
+            );
+            if project.bot_profile.is_some() {
+                bot_groups.insert(plan.group_id.as_str());
+                bot_runs_today += project.bot_runs_today;
+            }
+        }
+    }
+    let project_of_group = |group_id: &str| -> Option<String> {
+        projects_by_group
+            .get(group_id)
+            .map(|(project_id, _)| (*project_id).to_string())
+    };
+    let parent_project_of_group = |group_id: &str| -> Option<String> {
+        projects_by_group
+            .get(group_id)
+            .and_then(|(_, parent)| *parent)
+            .map(str::to_string)
+    };
+    let collection_id_by_project = input.collections.collection_id_by_project(
+        &group_ids,
+        &project_of_group,
+        &parent_project_of_group,
+    );
+    // CDXC:Spaces 2026-09-28 WHY:
+    // A user-made session group has no project of its own, and the ported rule showed such a group
+    // only in Other, so New Group and Move to New Group looked like they did nothing in any Space.
+    // It is filed under the project it was made in: it shows, counts and reveals in that project's
+    // Space.
+    let space_project_of_group = |group_id: &str| -> Option<SpaceProject> {
+        let (project_id, parent_project_id) =
+            projects_by_group.get(group_id).copied().or_else(|| {
+                let (project, _) = parse_workspace_subgroup_id(group_id)?;
+                projects_by_group
+                    .get(project.to_sidebar_group_id().as_str())
+                    .copied()
+            })?;
+        Some(SpaceProject {
+            project_id: project_id.to_string(),
+            parent_project_id: parent_project_id.map(str::to_string),
+            collection_id: collection_id_by_project.get(project_id).cloned(),
+        })
+    };
+    let bots_mode = effective_sidebar_mode(input.settings, input.ui) == SidebarMode::Bots;
+    let is_bot_group = |group_id: &str| bot_groups.contains(group_id);
+
+    // A section has a Space row only when its machine has Spaces on and its daemon published a
+    // Space document at all; an older daemon has no Spaces and is never filtered.
+    let spaces_document = input.spaces.clone().filter(|_| input.spaces_enabled);
+    let spaces_state = spaces_document.clone().unwrap_or_default();
+    let selection = spaces_document.as_ref().map(|state| {
+        resolve_selected_space(
+            state,
+            input
+                .ui
+                .collapse
+                .selected_space_by_section
+                .get(&section_key)
+                .map(String::as_str),
+        )
+    });
+    // Bots belong to no Space: a Space only ever shows and counts projects.
+    let shows_group = |selection: &SpaceSelection, group_id: &str| -> bool {
+        if is_bot_group(group_id) {
+            return false;
+        }
+        let project = space_project_of_group(group_id);
+        selection_shows_project(
+            selection,
+            &spaces_state,
+            project.as_ref().map(|project| project.project_id.as_str()),
+            project
+                .as_ref()
+                .and_then(|project| project.collection_id.as_deref()),
+            project
+                .as_ref()
+                .and_then(|project| project.parent_project_id.as_deref()),
+        )
+    };
+
+    // The group that owns the focused row, in section order.
+    let active_group_id = group_ids.iter().find(|group_id| {
+        input
+            .builds
+            .get(*group_id)
+            .is_some_and(GroupBuild::contains_focused_session)
+    });
+    let active_space_id = match (&selection, active_group_id) {
+        (Some(selection), Some(group_id)) if !is_bot_group(group_id) => {
+            let project = space_project_of_group(group_id);
+            Some(space_for_group(
+                &spaces_state,
+                selection,
+                project.as_ref().map(|project| project.project_id.as_str()),
+                project
+                    .as_ref()
+                    .and_then(|project| project.collection_id.as_deref()),
+                project
+                    .as_ref()
+                    .and_then(|project| project.parent_project_id.as_deref()),
+            ))
+        }
+        _ => None,
+    };
+
+    let mut spaces: Vec<SpaceView> = Vec::new();
+    if let Some(selection) = &selection {
+        let mut rows: Vec<SpaceView> = spaces_state
+            .ordered()
+            .into_iter()
+            .map(|space| SpaceView {
+                id: space.space_id.clone(),
+                name: space.name.clone(),
+                icon: space.icon.clone(),
+                color: space.color.clone(),
+                ..SpaceView::default()
+            })
+            .collect();
+        rows.push(SpaceView {
+            id: OTHER_SPACE_ID.to_string(),
+            name: OTHER_SPACE_LABEL.to_string(),
+            icon: OTHER_SPACE_ICON.to_string(),
+            color: String::new(),
+            ..SpaceView::default()
+        });
+        for row in &mut rows {
+            let view = if row.id == OTHER_SPACE_ID {
+                SpaceSelection::Other
+            } else {
+                SpaceSelection::Space(row.id.clone())
+            };
+            let mut session_ids: BTreeSet<&str> = BTreeSet::new();
+            let mut working_count = 0;
+            let mut attention_count = 0;
+            let mut background_work_count = 0;
+            for group_id in group_ids
+                .iter()
+                .filter(|group_id| shows_group(&view, group_id))
+            {
+                let Some(build) = input.builds.get(group_id) else {
+                    continue;
+                };
+                for session in &build.store_rows {
+                    if !session_ids.insert(session.row.sidebar_session_id.as_str()) {
+                        continue;
+                    }
+                    if session.row.activity == "working" {
+                        working_count += 1;
+                    }
+                    if session.row.activity == "attention" || session.row.pending_question_count > 0
+                    {
+                        attention_count += 1;
+                    }
+                    if session.row.shows_background_work() {
+                        background_work_count += 1;
+                    }
+                }
+            }
+            // The Hermes button is the selected slot while Bots is showing.
+            row.selected = !bots_mode && selection.space_id() == row.id;
+            row.contains_active_session = active_space_id.as_deref() == Some(row.id.as_str());
+            row.working_count = working_count;
+            row.attention_count = attention_count;
+            row.background_work_count = background_work_count;
+        }
+        spaces = rows;
+    }
+
+    let mut groups: Vec<GroupView> = Vec::new();
+    for plan in input.plans {
+        if plan.kind == GroupKind::Chats {
+            continue;
+        }
+        let Some(build) = input.builds.get(&plan.group_id) else {
+            continue;
+        };
+        if is_bot_group(&plan.group_id) != bots_mode {
+            continue;
+        }
+        if let Some(selection) = selection.as_ref().filter(|_| !bots_mode) {
+            if !shows_group(selection, &plan.group_id) {
+                continue;
+            }
+        }
+        if !input.ui.show_hidden && input.ui.hidden_items.group_ids.contains(&plan.group_id) {
+            continue;
+        }
+        if build.tag_filtered_out {
+            continue;
+        }
+        groups.push(GroupView {
+            core: build.core.clone(),
+            collection_color: None,
+            collection_id: project_of_group(&plan.group_id)
+                .and_then(|project_id| collection_id_by_project.get(&project_id).cloned()),
+            space_project: space_project_of_group(&plan.group_id),
+        });
+    }
+
+    let rendered_ids: Vec<String> = groups
+        .iter()
+        .map(|group| group.core.group_id.clone())
+        .collect();
+    let mut collections: Vec<CollectionView> = Vec::new();
+    let mut order: Vec<OrderItem> = Vec::new();
+    // Collections group projects; the bots are one flat list.
+    let collection_items = if bots_mode {
+        rendered_ids
+            .iter()
+            .map(|group_id| CollectionItem::Project {
+                group_id: group_id.clone(),
+            })
+            .collect()
+    } else {
+        project_sidebar_collections(
+            &rendered_ids,
+            &input.collections,
+            &project_of_group,
+            &parent_project_of_group,
+        )
+    };
+    for item in collection_items {
+        match item {
+            CollectionItem::Project { group_id } => order.push(OrderItem {
+                kind: OrderKind::Project,
+                id: group_id,
+            }),
+            CollectionItem::Collection {
+                collection,
+                group_ids,
+            } => {
+                let storage_id = format!("{section_key}:{}", collection.collection_id);
+                if !input.ui.show_hidden
+                    && input.ui.hidden_items.collection_keys.contains(&storage_id)
+                {
+                    continue;
+                }
+                for group in &mut groups {
+                    if group_ids.contains(&group.core.group_id) {
+                        group.collection_color = Some(collection.color.clone());
+                    }
+                }
+                let sessions: Vec<_> = group_ids
+                    .iter()
+                    .filter_map(|group_id| {
+                        groups
+                            .iter()
+                            .find(|group| group.core.group_id == *group_id)
+                            .map(|group| group.core.sessions.clone())
+                    })
+                    .flatten()
+                    .collect();
+                let summary = group_summary(&sessions);
+                collections.push(CollectionView {
+                    collection_id: collection.collection_id.clone(),
+                    storage_id,
+                    title: collection.title.clone(),
+                    color: collection.color.clone(),
+                    group_ids,
+                    collapsed: input
+                        .ui
+                        .collapse
+                        .collapsed_collections
+                        .contains(&format!("{section_key}:{}", collection.collection_id)),
+                    contains_active_session: sessions.iter().any(|session| session.is_focused),
+                    working_count: summary.working_count,
+                    attention_count: summary.attention_count,
+                    background_work_count: summary.background_work_count,
+                    awake_count: summary.awake_count,
+                });
+                order.push(OrderItem {
+                    kind: OrderKind::Collection,
+                    id: collection.collection_id,
+                });
+            }
+        }
+    }
+
+    let mut machine_summary = MachineSummary::default();
+    for build in group_ids
+        .iter()
+        .filter_map(|group_id| input.builds.get(group_id))
+    {
+        for session in &build.store_rows {
+            if session.row.activity == "working" {
+                machine_summary.working_count += 1;
+            }
+            if session.row.activity == "attention" || session.row.pending_question_count > 0 {
+                machine_summary.attention_count += 1;
+            }
+            if session.row.shows_background_work() {
+                machine_summary.background_work_count += 1;
+            }
+        }
+    }
+    // The selected machine's tab draws the counts of the list just built; every other tab draws the
+    // ones counted off the store, which is the same number by another route.
+    let machines: Vec<MachineTabView> = input
+        .host
+        .machines
+        .iter()
+        .map(|machine| {
+            let counts = if machine.machine_id == input.ui.selected_machine_id {
+                machine_summary
+            } else {
+                input
+                    .machine_summaries
+                    .get(&machine_key(&machine.machine_id))
+                    .copied()
+                    .unwrap_or_default()
+            };
+            MachineTabView {
+                id: machine.machine_id.clone(),
+                label: machine.label.clone(),
+                state: machine.state.clone(),
+                message: machine.message.clone(),
+                working_count: counts.working_count,
+                attention_count: counts.attention_count,
+                background_work_count: counts.background_work_count,
+            }
+        })
+        .collect();
+
+    SidebarView {
+        // `state.hasReceivedSnapshot` is this computer's, whichever machine tab is selected, and
+        // the host's unavailable clock stands in for it once it has been seen down.
+        ready: input.local_machine_loaded || input.host.unavailable.since_ms.is_some(),
+        // This computer always, and a remote machine while the host feeds its presentation into
+        // the store. A tab this says `false` for keeps whatever the caller drew.
+        supported: input.host.feeds(&input.ui.selected_machine_id),
+        selected_machine_id: input.ui.selected_machine_id.clone(),
+        machines,
+        scroll_scope: format!(
+            "{}|{}",
+            input.ui.selected_machine_id,
+            match &selection {
+                _ if bots_mode => "bots",
+                Some(selection) => selection.space_id(),
+                None => "all",
+            }
+        ),
+        machine: machine_summary,
+        spaces_enabled: selection.is_some(),
+        spaces,
+        bots_enabled: input.settings.bots_enabled,
+        bots_mode,
+        automations_row: bots_mode && input.settings.bot_automations_enabled,
+        automations_today: bot_runs_today,
+        groups,
+        collections,
+        order,
+        machine_notice: super::machine_connection::machine_notice(
+            input.host.machine(&input.ui.selected_machine_id),
+        ),
+        empty_state: {
+            let empty = empty_state(&input, selection.as_ref());
+            // Bots changes only the copy of a loaded, empty list; loading and a load failure read
+            // the same in both modes.
+            if bots_mode && !empty.loading && !empty.error {
+                EmptyState {
+                    copy: "No Hermes profiles found.".to_string(),
+                    ..EmptyState::default()
+                }
+            } else {
+                empty
+            }
+        },
+    }
+}
+
+/// `createNativeEmptyState`.
+fn empty_state(input: &AssembleInput<'_>, selection: Option<&SpaceSelection>) -> EmptyState {
+    let is_local = input.ui.selected_machine_id == LOCAL_MACHINE_ID;
+    // Adding a project needs somewhere to add it: this computer always, a remote machine while its
+    // connection is up. That is a fact of the remote transport, which is why it comes from the host
+    // rather than from the store.
+    let can_add_project = is_local
+        || input
+            .host
+            .machine(&input.ui.selected_machine_id)
+            .is_some_and(super::inputs::MachineTabInput::is_connected);
+    if !is_local && !can_add_project {
+        // A machine tab that is not connected never says "No projects": its `machine_notice`
+        // explains the connection instead.
+        return EmptyState::default();
+    }
+    // `unavailable` is the local placeholder group, so the loading and waiting branches are this
+    // computer's on every tab.
+    let unavailable = !input.local_machine_loaded;
+    let wait = unavailable.then(|| DaemonWait::at(input.host.unavailable, input.now_ms));
+    let error = wait.is_some_and(|wait| wait != DaemonWait::Skeleton);
+    let loading = wait == Some(DaemonWait::Skeleton);
+    if let Some(wait) = wait.filter(|_| error) {
+        let (copy, detail) = wait.copy();
+        return EmptyState {
+            loading,
+            error,
+            can_add_project,
+            copy: copy.to_string(),
+            detail: detail.to_string(),
+            action_label: TRY_NOW_LABEL.to_string(),
+        };
+    }
+    // `hasKnownSidebarProjectInventory` reads `workspaceGroupIds`, which spans every machine, so a
+    // user whose only projects are on a remote machine is not shown first-run copy.
+    let known = input.meta.project_settings_count > 0
+        || input.host.recent_project_count > 0
+        || input.plans.iter().any(|plan| plan.kind != GroupKind::Chats)
+        || (input.any_machine_draws_a_project)();
+    let copy = if !known {
+        "No projects added yet."
+    } else if selection.is_some_and(|selection| !selection.is_other()) {
+        "No projects in this Space."
+    } else {
+        "No projects"
+    };
+    EmptyState {
+        loading,
+        error,
+        can_add_project,
+        copy: copy.to_string(),
+        ..EmptyState::default()
+    }
+}
+
+/// The next host time the empty state's waiting copy moves on its own, while this computer has not
+/// loaded.
+pub(crate) fn empty_state_deadline_ms(
+    local_machine_loaded: bool,
+    unavailable: UnavailableState,
+    now_ms: u64,
+) -> Option<u64> {
+    (!local_machine_loaded)
+        .then(|| DaemonWait::next_change_ms(unavailable, now_ms))
+        .flatten()
+}
+
+/// The store's key for a machine tab id.
+fn machine_key(machine_id: &str) -> MachineId {
+    if machine_id == LOCAL_MACHINE_ID {
+        MachineId::Local
+    } else {
+        MachineId::Remote(machine_id.to_string())
+    }
+}

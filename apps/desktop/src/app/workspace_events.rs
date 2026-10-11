@@ -4,8 +4,8 @@
 //
 // Cluster: project-workarea + sidebar bridge events, agents chat/find surfaces
 
+use crate::app::helpers::web_bridge_types::AppModalHostBridgeEvent;
 use std::rc::Rc;
-use std::time::Instant;
 
 // RefCell backs cross-platform runtime state (window frame persistence), not
 // just the macOS-only shims that first introduced the import.
@@ -59,13 +59,13 @@ impl GhostexGpuiApp {
                     .as_deref()
                     == Some("playCopySound") =>
             {
-                gpui_play_copy_sound();
+                gpui_copy_feedback(cx);
             }
             (
                 ProjectWorkareaCefSurfaceSlotKey::Manage,
                 cef::ProjectWorkareaBridgeEvent::ManageFilesRequest(payload),
             ) => {
-                // CDXC:Docs 2026-09-06 SEE-ALSO: The shared Mermaid viewer opens through the same native child-window route as chat (packages/core-ui/mermaid/mermaid-diagram.tsx).
+                // CDXC:Docs 2026-09-06 SEE-ALSO: The shared Mermaid viewer opens through the same native child-window route as chat (packages/core-ui/mermaid/mermaid-diagram.tsx (deleted 2026-10-01)).
                 if let Ok(request) = serde_json::from_str::<serde_json::Value>(&payload)
                     && request.get("action").and_then(serde_json::Value::as_str)
                         == Some("openMermaidDiagram")
@@ -73,7 +73,7 @@ impl GhostexGpuiApp {
                     if let Some(source) = request.get("source").and_then(serde_json::Value::as_str)
                     {
                         self.receive_app_modal_host_bridge_event(
-                            cef::AppModalHostBridgeEvent::Message(
+                            AppModalHostBridgeEvent::Message(
                                 serde_json::json!({
                                     "type": "open", "modal": "mermaidDiagram", "source": source,
                                 })
@@ -82,6 +82,28 @@ impl GhostexGpuiApp {
                             window,
                             cx,
                         );
+                    }
+                    return;
+                }
+                // Native Docs' browser area: a link in an HTML file opens that file in Docs.
+                if let Ok(request) = serde_json::from_str::<serde_json::Value>(&payload)
+                    && manage_request_string(&request, "action").as_deref() == Some("openDocsFile")
+                {
+                    if let Some(path) = manage_request_string(&request, "path") {
+                        // A link inside an outside file names a file beside it on the resource
+                        // origin; it opens by its real path, through a grant of its own.
+                        let outside = self.native_docs.project.as_ref().and_then(|project| {
+                            manage_chat_file_real_path(&project.project_id, &path)
+                        });
+                        match outside {
+                            Some(real) => {
+                                self.native_docs_open_absolute_path(
+                                    std::path::Path::new(&real),
+                                    cx,
+                                );
+                            }
+                            None => self.native_docs_open_external(path, cx),
+                        }
                     }
                     return;
                 }
@@ -113,102 +135,33 @@ impl GhostexGpuiApp {
                     }
                     return;
                 }
-                /*
-                CDXC:Docs 2026-07-11:
-                This arm previously ran synchronously inside the bridge event
-                handler, but manage_files_bridge_result shells out to `git`
-                (rev-parse/check-ignore/cat-file, up to six calls, no timeout)
-                and reads files/directories — all on the main thread. A stuck
-                git (index.lock, network filesystem, slow hook) beach-balled
-                the app. Run it on the background executor like the Beads and
-                automation-board arms, then dispatch the response from the
-                follow-up update.
-                */
-                let snapshot = self.latest_sidebar_project_snapshot.clone();
-                let additional_docs_folders_text = gpui_manage_additional_docs_folders_text(
-                    &self.sidebar_runtime_settings_snapshot,
-                );
-                let global_docs_directory_text =
-                    gpui_global_docs_directory_text(&self.sidebar_runtime_settings_snapshot);
-                let chat_docs_authorization = snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.active_project_id.as_ref())
-                    .and_then(|project_id| {
-                        self.session_chat_docs_file_authorization
-                            .lock()
-                            .ok()
-                            .and_then(|authorization| {
-                                authorization
-                                    .as_ref()
-                                    .filter(|authorization| {
-                                        authorization.project_id == project_id.0
-                                    })
-                                    .cloned()
-                            })
-                    });
-                let remote_context = snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.active_project_id.as_ref())
-                    .and_then(|project_id| {
-                        gpui_remote_project_reference_from_project_id(project_id.0.as_str())
+                let page_save = serde_json::from_str::<serde_json::Value>(&payload)
+                    .ok()
+                    .filter(|request| {
+                        manage_request_string(request, "action").as_deref() == Some("save")
                     })
-                    .map(|reference| {
-                        let target = self.gpui_remote_gxserver_request_target(
-                            reference.remote_machine_id.as_str(),
-                        );
-                        (reference, target)
-                    });
-                let background = cx.background_executor().clone();
-                cx.spawn(async move |this, cx| {
-                    let outcome = background
-                        .spawn(async move {
-                            match remote_context {
-                                Some((reference, target)) => {
-                                    run_remote_manage_files_bridge_request_for_project_snapshot(
-                                        &payload,
-                                        snapshot.as_ref(),
-                                        &additional_docs_folders_text,
-                                        &reference,
-                                        target.as_ref(),
-                                    )
-                                }
-                                None => run_manage_files_bridge_request_for_project_snapshot(
-                                    &payload,
-                                    snapshot.as_ref(),
-                                    &additional_docs_folders_text,
-                                    &global_docs_directory_text,
-                                    chat_docs_authorization
-                                        .as_ref()
-                                        .map(|authorization| authorization.root.clone()),
-                                    chat_docs_authorization
-                                        .map(|authorization| authorization.file_name),
-                                ),
-                            }
-                        })
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        let ManageFilesBridgeOutcome {
-                            action,
-                            request_id,
-                            mut response,
-                            side_effect,
-                        } = outcome;
-                        if let Some(side_effect) = side_effect
-                            && let Err(error) =
-                                this.perform_manage_files_bridge_side_effect(side_effect, cx)
-                        {
-                            response =
-                                manage_files_bridge_error_response(&action, &request_id, &error);
-                        }
-                        this.dispatch_project_workarea_json_event(
-                            slot_key,
-                            "ghostex-manage-files-response",
-                            &response.to_string(),
-                            cx,
-                        );
-                    });
-                })
-                .detach();
+                    .and_then(|request| manage_request_string(&request, "path"));
+                if let Some(path) = page_save.as_deref() {
+                    self.native_docs_begin_page_save(path);
+                }
+                self.run_docs_files_request(payload, cx, move |this, response, cx| {
+                    if let Some(path) = page_save.as_deref() {
+                        this.native_docs_finish_page_save(path, &response);
+                    }
+                    this.dispatch_project_workarea_json_event(
+                        slot_key,
+                        "ghostex-manage-files-response",
+                        &response.to_string(),
+                        cx,
+                    );
+                });
+            }
+            // The Work page's requests (app/work_view/bridge.rs).
+            (
+                ProjectWorkareaCefSurfaceSlotKey::Work,
+                cef::ProjectWorkareaBridgeEvent::ProjectBoardRequest(payload),
+            ) => {
+                self.receive_work_view_request(payload, cx);
             }
             (
                 ProjectWorkareaCefSurfaceSlotKey::Kanban
@@ -321,11 +274,11 @@ impl GhostexGpuiApp {
                 if gpui_project_board_conversation_action_forwarded(&action) {
                     /*
                     macOS parity ownership: board conversation actions (state,
-                    startWork, links, jumps, toasts) live in the sidebar
-                    runtime — the GPUI equivalent of `native-sidebar.tsx` —
-                    which owns agents, presentation state, focus routing, and
-                    the gxserver client. Rust forwards the first-party page
-                    request and later routes the runtime's response back to
+                    startWork, links, jumps, toasts) live in the Rust store
+                    (gx_store/create/board.rs; the sidebar runtime until
+                    2026-09-25), which owns agents, presentation state, focus
+                    routing, and the gxserver client. Rust bounds the first-party
+                    page request and later routes the store's response back to
                     the originating tasks CEF page.
                     */
                     if !self.dispatch_gpui_project_board_conversation_request(&request, cx) {
@@ -392,19 +345,40 @@ impl GhostexGpuiApp {
                 | ProjectWorkareaCefSurfaceSlotKey::Automate,
                 cef::ProjectWorkareaBridgeEvent::ProjectBoardImageRequest(payload),
             ) => {
-                let clipboard_item = if project_board_image_request_needs_clipboard(&payload) {
-                    cx.read_from_clipboard()
-                } else {
-                    None
-                };
-                let response =
-                    project_board_image_bridge_response_for_payload(&payload, clipboard_item);
-                self.dispatch_project_workarea_json_event(
-                    slot_key,
-                    "ghostex-project-board-image-response",
-                    &response.to_string(),
-                    cx,
-                );
+                // The clipboard read and the image file it saves both stay off the UI thread
+                // (CDXC:Clipboard in helpers/clipboard_read.rs).
+                let read = project_board_image_request_needs_clipboard(&payload)
+                    .then(|| gpui_read_clipboard(cx, "projectBoardImagePaste"));
+                let background = cx.background_executor().clone();
+                cx.spawn(async move |this, cx| {
+                    let clipboard_item = match read {
+                        Some(read) => read.await,
+                        None => None,
+                    };
+                    let response = background
+                        .spawn(async move {
+                            project_board_image_bridge_response_for_payload(
+                                &payload,
+                                clipboard_item,
+                            )
+                        })
+                        .await;
+                    this.update(cx, |this, cx| {
+                        this.dispatch_project_workarea_json_event(
+                            slot_key,
+                            "ghostex-project-board-image-response",
+                            &response.to_string(),
+                            cx,
+                        );
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+            // Same rule as a clicked chat link (CDXC:SessionChat 2026-09-09 in
+            // cef/shell/request_handling.rs).
+            (_, cef::ProjectWorkareaBridgeEvent::RefusedPageNavigation(url)) => {
+                self.open_session_chat_link(&url, None, false, false, window, cx);
             }
             _ => {}
         }
@@ -454,118 +428,13 @@ impl GhostexGpuiApp {
         );
     }
 
-    pub(crate) fn receive_sidebar_bridge_event(
-        &mut self,
-        event: cef::SidebarBridgeEvent,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:Navigation 2026-07-29:
-        Backstop for the coalescer: a project-scoped sidebar command must never
-        overtake a project switch that is still queued behind the settle
-        window, or it would act on the outgoing project's runtime. Land the
-        trailing switch first. Project-agnostic and high-frequency telemetry
-        events pass through so they cannot defeat the debounce.
-        */
-        if !self.project_switch_pending_requests.is_empty()
-            && gpui_sidebar_bridge_event_must_follow_pending_project_switch(&event)
-        {
-            self.flush_coalesced_project_switch_requests(window, cx);
-        }
-        match event {
-            cef::SidebarBridgeEvent::ActiveProjectContext(payload) => {
-                self.receive_sidebar_project_context_payload(&payload, window, cx);
-            }
-            cef::SidebarBridgeEvent::GxserverPresentationFocusState(payload) => {
-                self.receive_sidebar_gxserver_presentation_focus_state_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::CreateProjectAgent(payload) => {
-                self.receive_sidebar_create_project_agent_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::CreateProjectTerminal(payload) => {
-                self.receive_sidebar_create_project_terminal_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::WorkspaceTerminalFocus(payload) => {
-                self.receive_sidebar_workspace_terminal_focus_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::WorkspaceTerminalRenameCommand(payload) => {
-                self.receive_sidebar_workspace_terminal_rename_command_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::WorkspaceTerminalEnter(payload) => {
-                self.receive_sidebar_workspace_terminal_enter_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::WorkspaceTerminalLifecycleResult(payload) => {
-                self.receive_sidebar_workspace_terminal_lifecycle_result_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::SourceWorkareaReadiness(_)
-            | cef::SidebarBridgeEvent::BrowserWorkareaReadiness(_)
-            | cef::SidebarBridgeEvent::ProjectWorkareaReadiness(_)
-            | cef::SidebarBridgeEvent::ManageFileWorkareaOperationRequest(_) => {
-                /*
-                CDXC:Workarea 2026-06-29-00:02:
-                Legacy sidebar readiness/proof messages stay accepted as compatibility no-ops. Source, Kanban, Automate, and Manage mounting now follows only the current runtime URL gate plus owned CEF surface map, and first-party Kanban/Automate/Manage CEF requests still flow through the separate project-workarea bridge.
-                */
-            }
-            cef::SidebarBridgeEvent::NativeProjectPathAction(payload) => {
-                self.receive_sidebar_native_project_path_action_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::NativeAppShotPrompt(payload) => {
-                self.receive_sidebar_native_app_shot_prompt_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::ResourcesSnapshotRequest(payload) => {
-                self.receive_sidebar_resources_snapshot_request_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::SidebarCommandAction(payload) => {
-                self.receive_sidebar_command_action_payload(&payload, window, cx);
-            }
-            cef::SidebarBridgeEvent::SidebarCommandRunEnd(payload) => {
-                self.receive_sidebar_command_run_end_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::GhostexHotkeyAction(payload) => {
-                self.receive_sidebar_ghostex_hotkey_action_payload(&payload, window, cx);
-            }
-            cef::SidebarBridgeEvent::SessionCompletionSound(payload) => {
-                self.receive_sidebar_session_completion_sound_payload(&payload);
-            }
-            cef::SidebarBridgeEvent::SessionStatusIndicators(payload) => {
-                self.receive_sidebar_session_status_indicators_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::PetOverlayState(payload) => {
-                self.receive_sidebar_pet_overlay_state_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::GlobalActions(payload) => {
-                self.receive_sidebar_global_actions_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::TitlebarGitMenuState(payload) => {
-                self.receive_sidebar_titlebar_git_menu_state_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::OpenBrowserUrl(payload) => {
-                self.receive_sidebar_open_browser_url_payload(&payload, window, cx);
-            }
-            cef::SidebarBridgeEvent::BrowserTabFocus(payload) => {
-                self.receive_sidebar_browser_tab_focus_payload(&payload, window, cx);
-            }
-            cef::SidebarBridgeEvent::ProjectBoardConversationResponse(payload) => {
-                self.receive_sidebar_project_board_conversation_response_payload(&payload, cx);
-            }
-            cef::SidebarBridgeEvent::RefusedPageNavigation(url) => {
-                // Same rule as a clicked transcript link: embedded Browser
-                // while "Open links in embedded browser" is on, else the
-                // system browser (CDXC:SessionChat 2026-09-09 in
-                // cef/shell/request_handling.rs).
-                self.open_session_chat_link(&url, false, false, window, cx);
-            }
-        }
-    }
-
     pub(crate) fn receive_sidebar_project_board_conversation_response_payload(
         &mut self,
         payload: &str,
         cx: &mut gpui::Context<Self>,
     ) {
         /*
-        The sidebar runtime answers forwarded board conversation requests
+        The store (gx_store/create/board.rs) answers board conversation requests
         here; the validated response object travels back to any tasks CEF
         workarea as the standard `ghostex-project-board-response` event,
         matched by the page on its own requestId.
@@ -596,6 +465,12 @@ impl GhostexGpuiApp {
         if !request_id_valid {
             return;
         }
+        if self.route_native_automate_board_response(response, cx) {
+            return;
+        }
+        if self.native_kanban_receive_conversation_response(response, cx) {
+            return;
+        }
         let response_json = response.to_string();
         for slot_key in [
             ProjectWorkareaCefSurfaceSlotKey::Kanban,
@@ -610,153 +485,30 @@ impl GhostexGpuiApp {
         }
     }
 
-    pub(crate) fn receive_sidebar_open_browser_url_payload(
-        &mut self,
-        payload: &str,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Ok(message) = gpui_sidebar_open_browser_url_from_json(payload) else {
-            return;
-        };
-        self.open_browser_url_from_renderer_command(message, window, cx);
-    }
-
-    pub(crate) fn receive_sidebar_browser_tab_focus_payload(
-        &mut self,
-        payload: &str,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
-            return;
-        };
-        let Some(object) = value.as_object() else {
-            return;
-        };
-        if json_string_field(object, "type") != Some(GPUI_SIDEBAR_BROWSER_TAB_FOCUS_MESSAGE_TYPE)
-            || object.get("version").and_then(serde_json::Value::as_u64) != Some(1)
-        {
-            return;
-        }
-        let Some(project_id) = json_string_field(object, "projectId")
-            .map(str::trim)
-            .filter(|project_id| gpui_browser_tabs_project_key_allowed(project_id))
-        else {
-            return;
-        };
-        let Some(tab_id) = object.get("tabId").and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
-        }) else {
-            return;
-        };
-        let message = GpuiSidebarBrowserTabFocusMessage {
-            project_id: project_id.to_string(),
-            tab_id: BrowserTabId(tab_id),
-        };
-        /*
-        CDXC:Browser 2026-07-12:
-        The sidebar lists browser rows for every project (parked local and
-        machine-scoped remote models included), so this bridge must reach
-        beyond the active browser project: close edits the parked model
-        directly, and focus swaps the browser workarea to the owning project
-        first — but only when that parked model really contains the tab, so
-        stale rows cannot park the live project into an empty default model.
-
-        CDXC:Browser 2026-08-26:
-        A parked project's tabs do own live CEF surfaces now, so close and
-        sleep reach the parked bundle too: both drop that tab's parked page, the
-        same teardown the mounted project gets, instead of leaving an orphaned
-        browser behind a row that says it is asleep.
-        */
-        let is_active_browser_project =
-            self.browser_tabs_project_id.as_deref() == Some(message.project_id.as_str());
-        if object.get("close").and_then(serde_json::Value::as_bool) == Some(true) {
-            if is_active_browser_project {
-                self.close_browser_tab(message.tab_id, window, cx);
-                return;
-            }
-            self.close_parked_browser_tab(&message.project_id, message.tab_id, cx);
-            return;
-        }
-        if object.get("sleeping").and_then(serde_json::Value::as_bool) == Some(true) {
-            if !is_active_browser_project {
-                self.sleep_parked_browser_tab(&message.project_id, message.tab_id, cx);
-                return;
-            }
-            if find_browser_leaf_id_for_tab(&self.browser_tabs.root, message.tab_id).is_none() {
-                return;
-            }
-            self.remove_browser_surface(message.tab_id, cx);
-            self.browser_find_states.remove(&message.tab_id);
-            self.browser_find_inputs.remove(&message.tab_id);
-            self.browser_find_input_subscriptions
-                .remove(&message.tab_id);
-            if self.pending_browser_find_focus == Some(message.tab_id) {
-                self.pending_browser_find_focus = None;
-            }
-            self.update_active_mode_cef_child_visibility(cx);
-            cx.notify();
-            return;
-        }
-        /*
-        CDXC:Extensions 2026-08-23:
-        Close and sleep above are housekeeping the sidebar may still need for
-        tabs that already exist, but everything past this point focuses the
-        Browser workarea. With Browser turned off in Settings → Customize a
-        stale sidebar tab row must not be able to drag the shell back into it.
-
-        CDXC:Browser 2026-08-26:
-        Availability is decided by the tab's own project, not by whichever
-        project the shell is currently showing. A row of another project is
-        exactly the click that has to switch projects, and its active-project
-        context is still in flight — the sidebar publishes it first, but the
-        project-switch coalescer can hold it for the settle window — so
-        answering the arriving payload from the outgoing context dropped those
-        clicks silently. Every payload here carries a validated real project
-        key, and a real project always has the Browser workarea, so this
-        matches `open_browser_url_from_renderer_command`: an explicit project
-        target skips the context-scoped predicate and only the
-        project-independent Customize refusal still applies.
-        */
-        if gpui_titlebar_mode_hidden_from_settings(TitlebarMode::Browser) {
-            return;
-        }
-        if !is_active_browser_project {
-            let parked_model_has_tab = self
-                .parked_browser_tabs_by_project
-                .get(&message.project_id)
-                .is_some_and(|parked_tabs| {
-                    find_browser_leaf_id_for_tab(&parked_tabs.root, message.tab_id).is_some()
-                });
-            if !parked_model_has_tab {
-                return;
-            }
-            self.swap_browser_tabs_to_project_id(Some(message.project_id.clone()), cx);
-        }
-        let Some(pane_id) = find_browser_leaf_id_for_tab(&self.browser_tabs.root, message.tab_id)
-        else {
-            return;
-        };
-        if !self
-            .browser_tabs
-            .select_tab_in_pane(pane_id, message.tab_id)
-        {
-            return;
-        }
-        self.change_active_mode_with_pane_state(TitlebarMode::Browser, cx);
-        self.mark_project_editor_mode_awake(TitlebarMode::Browser, cx);
-        self.focus_shell_target(ShellFocusTarget::BrowserPane(pane_id), cx);
-        self.sync_active_browser_tab_to_surface(window, cx);
-        self.persist_shell_layout_state();
-        cx.notify();
-    }
-
     pub(crate) fn open_browser_url_from_renderer_command(
         &mut self,
         message: GpuiSidebarOpenBrowserUrlMessage,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let remote_machine_id = match message.project_id.as_deref() {
+            Some(project_id) => gpui_remote_project_reference_from_project_id(project_id)
+                .map(|reference| reference.remote_machine_id),
+            None if !message.from_quick_header => self.browser_project_remote_machine_id(),
+            None => None,
+        };
+        self.open_browser_url_from_renderer_command_with_machine(
+            message,
+            remote_machine_id,
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn open_browser_url_from_renderer_command_with_machine(
+        &mut self,
+        message: GpuiSidebarOpenBrowserUrlMessage,
+        remote_machine_id: Option<String>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -789,6 +541,17 @@ impl GhostexGpuiApp {
             self.copy_path_for_disabled_project_workarea(&message.url, "Browser", cx);
             return;
         }
+        /*
+        CDXC:CefRuntime 2026-09-28 WHY:
+        Without the optional web runtime a link opened here would land on the Browser's install prompt, so it opens in the system browser instead; the Open links in setting keeps its value and applies again once the runtime is installed. A remote computer's own localhost is the exception: the system browser cannot reach it, so that link still opens the Browser, which offers the install.
+        */
+        if remote_machine_id.is_none() && !crate::app::helpers::web_runtime::web_runtime_available()
+        {
+            if let Some(url) = normalize_address(&message.url) {
+                let _ = gpui_open_external_http_url(&url);
+            }
+            return;
+        }
         if let Some(project_id) = message.project_id.as_deref() {
             if self.browser_tabs_project_id.as_deref() != Some(project_id) {
                 self.swap_browser_tabs_to_project_id(Some(project_id.to_string()), cx);
@@ -800,10 +563,11 @@ impl GhostexGpuiApp {
         let Some(url) = normalize_address(&message.url) else {
             return;
         };
-        if let Some((pane_id, tab_id)) = self
-            .browser_tabs
-            .find_renderer_open_reuse_tab(&url, message.reuse)
-        {
+        if let Some((pane_id, tab_id)) = self.browser_tabs.find_renderer_open_reuse_tab(
+            &url,
+            message.reuse,
+            remote_machine_id.as_deref(),
+        ) {
             self.browser_tabs.select_tab_in_pane(pane_id, tab_id);
             self.change_active_mode_with_pane_state(TitlebarMode::Browser, cx);
             self.focus_shell_target(
@@ -815,7 +579,11 @@ impl GhostexGpuiApp {
             self.scroll_focused_browser_pane_active_tab();
             return;
         }
-        let created_tab_id = self.browser_tabs.add_loaded_popup_tab(
+        /*
+        CDXC:Browser 2026-10-10 DECISION:
+        User: "when i click on this button to open in a new github tab or on the linear button to open on linear tab in the embedded browser we're opening a useless empty new browser tab pls fix", then "pls fix this for all similar cases in the app". Every project's Browser carries an empty "New Tab" placeholder even if it never opened the Browser, and appending here left it beside the page once the Browser came on screen. Every open through this door therefore loads the link into that sole placeholder, as page popups already do (`open_loaded_popup_tab`).
+        */
+        let created_tab_id = self.browser_tabs.open_loaded_popup_tab(
             url,
             self.browser_profiles.active_profile_id(),
             cef::BrowserPopupPlacement::Selected,
@@ -823,7 +591,15 @@ impl GhostexGpuiApp {
         let Some(created_tab_id) = created_tab_id else {
             return;
         };
-        self.request_sidebar_browser_tab_reveal(created_tab_id);
+        if let Some(tab) = self
+            .browser_tabs
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == created_tab_id)
+        {
+            tab.remote_machine_id = remote_machine_id;
+        }
+        self.reveal_new_browser_tab(created_tab_id);
         self.change_active_mode_with_pane_state(TitlebarMode::Browser, cx);
         self.mark_project_editor_mode_awake(TitlebarMode::Browser, cx);
         self.focus_shell_target(
@@ -834,94 +610,6 @@ impl GhostexGpuiApp {
         self.scroll_focused_browser_pane_active_tab();
         self.persist_shell_layout_state();
         cx.notify();
-    }
-
-    pub(crate) fn receive_sidebar_titlebar_git_menu_state_payload(
-        &mut self,
-        payload: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Some(state) = gpui_titlebar_git_menu_state_from_payload(payload) else {
-            return;
-        };
-        if self.titlebar_git_menu_state.as_ref() == Some(&state) {
-            return;
-        }
-        self.titlebar_git_menu_state = Some(state);
-        cx.notify();
-    }
-
-    pub(crate) fn receive_sidebar_gxserver_presentation_focus_state_payload(
-        &mut self,
-        payload: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:FocusRouting 2026-06-24-21:07:
-        React may return only the gxserver presentation session ids it already owns from daemon create/focus/fork/restore flows. Store the parsed focus state in runtime memory, refresh only the sidebar bootstrap bridge on changes, and ignore malformed payloads without logging raw renderer JSON or deriving ids from terminal tabs, labels, paths, project names, or command text.
-        */
-        let Ok(next_state) =
-            gpui_gxserver_presentation_focus_state_from_sidebar_contract_json(payload)
-        else {
-            return;
-        };
-        self.set_sidebar_gxserver_presentation_focus_state(next_state, cx);
-    }
-
-    pub(crate) fn receive_sidebar_workspace_terminal_focus_payload(
-        &mut self,
-        payload: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:FocusRouting 2026-06-26-06:08:
-        A local SidebarApp session click is a real workspace selection request, not only a sidebar highlight. Parse the fixed project/session payload, select an existing mapped Agents tab when possible, or ask gxserver for attach metadata before creating an awake Running tab through the exact mount-slot launch source. Renderer labels, commands, paths, titles, daemon responses, and terminal content are not accepted by this bridge.
-        */
-        let Ok(message) = gpui_sidebar_workspace_terminal_focus_from_json(payload) else {
-            return;
-        };
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.sessionSwitchLatency.bridgeReceived",
-            serde_json::json!({
-                "activeProjectId": self.agents_workspace_project_id,
-                "epochMs": support_logs::temporary_epoch_ms(),
-                "projectId": message.project_id,
-                "sessionId": message.session_id,
-                "settleWindowActive": self
-                    .project_switch_settling_until
-                    .is_some_and(|until| Instant::now() < until),
-            }),
-        );
-        /*
-        CDXC:Navigation 2026-07-29:
-        The sidebar posts the presentation snapshot before this imperative
-        focus request, so when the snapshot is collapsed into the trailing
-        switch this request must ride with it. Running it now would attach the
-        clicked session into the outgoing project's workspace, which the
-        trailing swap would then tear down.
-        */
-        if self.project_switch_request_is_coalesced(
-            Some(message.project_id.as_str()),
-            GpuiProjectSwitchRequestKind::WorkspaceTerminalFocus,
-        ) {
-            support_logs::append_temporary(
-                support_logs::GpuiSupportLog::TerminalFocus,
-                "TEMP.gpui.sessionSwitchLatency.coalescedDeferred",
-                serde_json::json!({
-                    "epochMs": support_logs::temporary_epoch_ms(),
-                    "projectId": message.project_id,
-                    "sessionId": message.session_id,
-                }),
-            );
-            self.enqueue_coalesced_project_switch_request(
-                Some(message.project_id.clone()),
-                GpuiPendingProjectSwitchPayload::WorkspaceTerminalFocus(message),
-                cx,
-            );
-            return;
-        }
-        self.focus_local_workspace_terminal_from_message(&message, cx);
     }
 
     /*
@@ -941,12 +629,16 @@ impl GhostexGpuiApp {
         /*
         CDXC:Navigation 2026-09-04 DECISION:
         User: restart must restore the last active project, the last active view, and the last visible sessions.
-        The restored shell state already put this session on its pane as the active tab, `attach_surfaced_local_workspace_terminals` attaches it there, and in a project-editor mode with the companion open the focus-state handler retargets the companion to it.
-        When the user quit on Code, Browser, Kanban, Automate, or Docs with no companion, the ordinary focus path below would switch the app to Agents and move keyboard focus to the pane, replacing the restored view with a different one.
-        The replay therefore stops here in that case; `local_workspace_latest_focus_key` stays untouched so the pending surfaced-restore attach completes as a silent restore rather than being promoted to a click.
+        The restored shell state already put this session on its pane as the active tab, and `attach_surfaced_local_workspace_terminals` attaches it there.
+        The replay stops here while a view panel is open; `local_workspace_latest_focus_key` stays untouched so the pending surfaced-restore attach completes as a silent restore rather than being promoted to a click.
+
+        CDXC:Workarea 2026-09-20 WHY:
+        The clause about the ordinary focus path switching the app to Agents no longer applies: opening
+        a session cannot close the view panel any more. The early return is kept for the other half of
+        the rule, which is that a restore must not be promoted to a click.
         */
         if message.startup_restore
-            && self.active_mode != TitlebarMode::Agents
+            && self.view_panel_open()
             && !self.should_keep_project_editor_open_for_local_workspace_terminal_focus(&key)
         {
             support_logs::append(
@@ -959,7 +651,24 @@ impl GhostexGpuiApp {
             );
             return;
         }
-        if message.preferred_interface == GpuiPreferredAgentInterface::Chat {
+        /*
+        CDXC:SessionChat 2026-09-20 WHY:
+        Every sidebar focus now carries the session's effective Default Agent View, not only the creation flows, so a
+        restore can open its chat surface while the wake and attach run behind it instead of showing the terminal until
+        the runtime is live. A session that already has a tab carries its own recorded view in
+        `agents_chat_mode_sessions`, and arming the launch intent for it would pull a tab the user deliberately put back
+        in Terminal into Chat on the next click, so only a session with no tab yet takes the intent.
+        */
+        let session_has_tab = self
+            .local_workspace_session_mappings
+            .get(&key)
+            .copied()
+            .is_some_and(|shell_session_id| {
+                self.agents_workspace
+                    .pane_id_for_session(shell_session_id)
+                    .is_some()
+            });
+        if message.preferred_interface == GpuiPreferredAgentInterface::Chat && !session_has_tab {
             self.pending_agents_chat_launch_intents
                 .insert(GpuiWorkspaceTerminalSessionKey::Local(key.clone()));
         }
@@ -967,13 +676,25 @@ impl GhostexGpuiApp {
         CDXC:Navigation 2026-09-11 DECISION:
         User: landing on another project keeps that project's remembered view; only a session click inside the active project still opens Agents.
         The project swap that preceded this focus already restored the destination's view, so a keep-view focus must not overwrite it: the tab is selected in the background and attached silently when it has no live terminal yet.
-        A remembered Agents view, or a Code/Docs companion that can show the session, takes the ordinary path below.
+        A project with no view panel open takes the ordinary path below.
+
+        CDXC:Workarea 2026-09-20 WHY:
+        The decision's second clause has no object any more: a session click inside the active project
+        never opens or closes the view panel, because the sessions are on screen beside it. What
+        survives is its first clause, which this branch still implements — landing on another project
+        selects the session in the background and leaves that project's remembered view alone.
         */
-        if message.keep_view
-            && self.active_mode != TitlebarMode::Agents
-            && !self.should_keep_project_editor_open_for_local_workspace_terminal_focus(&key)
+        let keeps_view = message.keep_view
+            && self.view_panel_open()
+            && !self.should_keep_project_editor_open_for_local_workspace_terminal_focus(&key);
+        if message.keep_sleeping
+            && !message.force_remount
+            && self.select_sleeping_local_workspace_tab(&key, keeps_view, cx)
         {
-            self.select_local_workspace_terminal_keeping_view(&key, cx);
+            return;
+        }
+        if keeps_view {
+            self.select_local_workspace_terminal_keeping_view(&key, message.wake_sleeping, cx);
             return;
         }
         // macOS TerminalFocusDebugLog parity (scenario native.terminal.focus):
@@ -1009,73 +730,9 @@ impl GhostexGpuiApp {
         let requested_pane_id =
             placement_target_pane_id.unwrap_or(self.agents_workspace.focused_pane);
         let force_requested_pane_placement = placement_target_pane_id.is_some();
-        let mapped_shell_session_id = self.local_workspace_session_mappings.get(&key).copied();
-        let mapped_pane_id = mapped_shell_session_id.and_then(|shell_session_id| {
-            self.agents_workspace.pane_id_for_session(shell_session_id)
-        });
-        let mapped_slot_id =
-            mapped_shell_session_id
-                .zip(mapped_pane_id)
-                .map(
-                    |(shell_session_id, pane_id)| AgentsTerminalBodyMountSlotId {
-                        pane_id,
-                        session_id: shell_session_id,
-                    },
-                );
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.sessionSwitchLatency.focusDecision",
-            serde_json::json!({
-                "alreadyActiveInMappedPane": mapped_shell_session_id.zip(mapped_pane_id).is_some_and(
-                    |(shell_session_id, pane_id)| self
-                        .agents_workspace
-                        .active_session_in_pane(pane_id)
-                        == Some(shell_session_id),
-                ),
-                "attachAlreadyPending": self.local_workspace_attach_pending.contains(&key),
-                "epochMs": support_logs::temporary_epoch_ms(),
-                "liveTerminalOwner": mapped_slot_id.is_some_and(|slot_id| {
-                    self.local_workspace_terminal_has_live_terminal_owner(slot_id)
-                }),
-                "mappedPanePresent": mapped_pane_id.is_some(),
-                "mappedSessionPresent": mapped_shell_session_id.is_some(),
-                "pendingAttachPayload": mapped_slot_id.is_some_and(|slot_id| {
-                    self.local_workspace_terminal_has_pending_attach_payload(slot_id)
-                }),
-                "presentationRunning": mapped_shell_session_id.is_some_and(|shell_session_id| {
-                    self.agents_workspace.session(shell_session_id).is_some_and(|session| {
-                        session.presentation_state == TerminalSessionPresentationState::Running
-                    })
-                }),
-                "projectId": key.project_id,
-                "sessionId": key.session_id,
-            }),
-        );
         self.begin_sidebar_focus_border_handoff(cx);
         self.local_workspace_latest_focus_key = Some(key.clone());
         self.refresh_sidebar_gxserver_bootstrap_if_changed(cx);
-        /*
-        CDXC:Workarea 2026-09-04 DECISION:
-        User: Advanced > Split Right opens the session in a pane to the right of
-        the focused agents pane. A session that already has a tab is moved into
-        a new right-hand leaf here, then the ordinary focus below selects it; a
-        session with no tab yet is attached into a new leaf at completion.
-        Splitting the lone tab of the focused pane is a no-op inside the model,
-        so that case degrades to a plain focus.
-        */
-        if message.placement == GpuiWorkspaceTerminalFocusPlacement::SplitRight
-            && let Some((shell_session_id, source_pane_id)) =
-                mapped_shell_session_id.zip(mapped_pane_id)
-            && self.agents_workspace.split_tab_to_pane(
-                source_pane_id,
-                requested_pane_id,
-                shell_session_id,
-                WorkspaceDropZone::Right,
-            )
-        {
-            self.persist_shell_layout_state();
-            cx.notify();
-        }
         /*
         CDXC:CefRuntime 2026-07-12:
         Full reload kills the zmx daemon before this focus arrives, so the
@@ -1094,36 +751,46 @@ impl GhostexGpuiApp {
                 self.agents_gpui_engine_terminals.remove(&shell_session_id);
                 cx.notify();
             }
-        } else if self.focus_existing_gpui_local_workspace_terminal(&key, cx) {
-            support_logs::append_temporary(
-                support_logs::GpuiSupportLog::TerminalFocus,
-                "TEMP.gpui.sessionSwitchLatency.focusExistingCompleted",
-                serde_json::json!({
-                    "epochMs": support_logs::temporary_epoch_ms(),
-                    "projectId": key.project_id,
-                    "sessionId": key.session_id,
-                }),
-            );
+        /*
+        CDXC:FocusRouting 2026-09-20 WHY:
+        A session the sidebar reports asleep never reuses its mapped tab in place: the daemon behind that tab is dead,
+        so reusing it shows a terminal nothing is attached to. It goes to the attach plan below, whose Wake intent
+        revives the provider and rebuilds the attach payload for the same tab. This is what the sidebar's own wake used
+        to guarantee by running before this message was ever posted.
+        */
+        } else if !message.wake_sleeping
+            && self.focus_existing_gpui_local_workspace_terminal(&key, cx)
+        {
             self.reconcile_preferred_agents_chat_launch_intents(cx);
             return;
         }
-        let attach_intent = self.local_workspace_attach_intent_for_key(&key);
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.sessionSwitchLatency.attachPlanRequired",
-            serde_json::json!({
-                "epochMs": support_logs::temporary_epoch_ms(),
-                "projectId": key.project_id,
-                "sessionId": key.session_id,
-            }),
-        );
+        let mapped_attach_intent = self.local_workspace_attach_intent_for_key(&key);
+        // A session the sidebar knows is asleep wakes through this one plan (`wake_sleeping` on the message), whether
+        // or not it still has a mapped tab to read a Sleeping presentation state from.
+        let attach_intent = if message.wake_sleeping {
+            GpuiLocalWorkspaceAttachIntent::Wake
+        } else {
+            mapped_attach_intent
+        };
+        // A mapped tab with nothing live behind it is re-attached where it is, so it is brought to
+        // the focused pane first, as the focus-existing path above does (session_pane_placement.rs).
+        if !force_requested_pane_placement
+            && let Some(shell_session_id) = self.local_workspace_session_mappings.get(&key).copied()
+            && let Some(pane_id) = self.agents_workspace.pane_id_for_session(shell_session_id)
+        {
+            self.pull_workspace_session_into_focused_pane(pane_id, shell_session_id);
+        }
+        let created_here = self.gx_store_is_created_attach(&key);
         self.spawn_local_workspace_attach_plan(
             key,
             attach_intent,
             requested_pane_id,
             force_requested_pane_placement,
-            message.placement,
-            GpuiLocalWorkspaceAttachOrigin::SidebarFocus,
+            match message.placement_target_session_id {
+                Some(_) => GpuiLocalWorkspaceAttachOrigin::Fork,
+                None if created_here => GpuiLocalWorkspaceAttachOrigin::Fork,
+                None => GpuiLocalWorkspaceAttachOrigin::SidebarFocus,
+            },
             cx,
         );
     }
@@ -1176,7 +843,7 @@ impl GhostexGpuiApp {
                     .await;
                 let _ = this.update(cx, |this, cx| match result {
                     Ok((key, plan)) => {
-                        this.swap_agents_workspace_to_project_id(Some(key.project_id.clone()), cx);
+                        this.gx_store_take_created_session(&key, cx);
                         let requested_pane_id = this.agents_workspace.focused_pane;
                         this.local_workspace_latest_focus_key = Some(key.clone());
                         let cleanup_key = key.clone();
@@ -1185,26 +852,16 @@ impl GhostexGpuiApp {
                             this.pending_agents_chat_launch_intents
                                 .insert(workspace_key.clone());
                         }
-                        let opened = if this.active_mode == TitlebarMode::Agents
-                            || this
-                                .should_keep_project_editor_open_for_local_workspace_terminal_focus(
-                                    &key,
-                                ) {
-                            this.open_gpui_local_workspace_terminal(
-                                key,
-                                plan,
-                                requested_pane_id,
-                                false,
-                                cx,
-                            )
-                        } else {
-                            this.open_gpui_local_workspace_terminal_keeping_view(
-                                key,
-                                plan,
-                                requested_pane_id,
-                                cx,
-                            )
-                        };
+                        // CDXC:Workarea 2026-09-20 WHY:
+                        // A newly created agent lands in the Agents column, which is beside whatever
+                        // the view panel shows, so there is no longer a keep-view variant to choose.
+                        let opened = this.open_gpui_local_workspace_terminal(
+                            key,
+                            plan,
+                            requested_pane_id,
+                            false,
+                            cx,
+                        );
                         if !opened {
                             this.pending_agents_chat_launch_intents
                                 .remove(&workspace_key);
@@ -1279,7 +936,7 @@ impl GhostexGpuiApp {
                     .await;
                 let _ = this.update(cx, |this, cx| match result {
                     Ok((key, plan)) => {
-                        this.swap_agents_workspace_to_project_id(Some(key.project_id.clone()), cx);
+                        this.gx_store_take_created_session(&key, cx);
                         let requested_pane_id = this.agents_workspace.focused_pane;
                         this.local_workspace_latest_focus_key = Some(key.clone());
                         let cleanup_key = key.clone();
@@ -1331,7 +988,6 @@ impl GhostexGpuiApp {
         attach_intent: GpuiLocalWorkspaceAttachIntent,
         requested_pane_id: WorkspacePaneId,
         force_requested_pane_placement: bool,
-        placement: GpuiWorkspaceTerminalFocusPlacement,
         origin: GpuiLocalWorkspaceAttachOrigin,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -1339,11 +995,10 @@ impl GhostexGpuiApp {
             return;
         }
 
-        let attach_started_at = Instant::now();
-        let open_chat_early = placement == GpuiWorkspaceTerminalFocusPlacement::Tab
-            && self
-                .pending_agents_chat_launch_intents
-                .contains(&GpuiWorkspaceTerminalSessionKey::Local(key.clone()));
+        let focused_at_request = self.gx_store_focused_session();
+        let open_chat_early = self
+            .pending_agents_chat_launch_intents
+            .contains(&GpuiWorkspaceTerminalSessionKey::Local(key.clone()));
         let background = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             if open_chat_early {
@@ -1383,24 +1038,12 @@ impl GhostexGpuiApp {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.local_workspace_attach_pending.remove(&key);
-                support_logs::append_temporary(
-                    support_logs::GpuiSupportLog::TerminalFocus,
-                    "TEMP.gpui.sessionSwitchLatency.attachPlanCompleted",
-                    serde_json::json!({
-                        "elapsedMs": attach_started_at.elapsed().as_millis() as u64,
-                        "epochMs": support_logs::temporary_epoch_ms(),
-                        "planReady": result.is_ok(),
-                        "projectId": key.project_id,
-                        "sessionId": key.session_id,
-                    }),
-                );
+                // The store's newest selection, not the workspace's focus state copy, which lags
+                // it while a project switch is coalesced (gx_store_selection_names_local_session).
+                let selected = this.gx_store_selection_names_local_session(&key);
                 let completion_origin = if origin == GpuiLocalWorkspaceAttachOrigin::SurfacedRestore
                     && this.local_workspace_latest_focus_key.as_ref() == Some(&key)
-                    && this
-                        .sidebar_gxserver_presentation_focus_state
-                        .focused_session_id
-                        .as_deref()
-                        == Some(key.session_id.as_str())
+                    && selected
                 {
                     GpuiLocalWorkspaceAttachOrigin::SidebarFocus
                 } else {
@@ -1408,14 +1051,24 @@ impl GhostexGpuiApp {
                 };
                 match completion_origin {
                     GpuiLocalWorkspaceAttachOrigin::SidebarFocus => {
-                        if this.local_workspace_latest_focus_key.as_ref() != Some(&key) {
+                        if this.local_workspace_latest_focus_key.as_ref() != Some(&key) || !selected {
                             return;
                         }
-                        if this
-                            .sidebar_gxserver_presentation_focus_state
-                            .focused_session_id
-                            .as_deref()
-                            != Some(key.session_id.as_str())
+                    }
+                    GpuiLocalWorkspaceAttachOrigin::Fork => {
+                        // A newer focus request, a project switch, or a selection the store took
+                        // since the fork was requested wins over it. The runtime's focus copy is
+                        // not consulted: it still names the source session until it is told.
+                        let focused = this.gx_store_focused_session();
+                        if this.local_workspace_latest_focus_key.as_ref() != Some(&key)
+                            || this.agents_workspace_project_id.as_deref()
+                                != Some(key.project_id.as_str())
+                            || (focused != focused_at_request
+                                && focused.as_ref().is_none_or(|focused| {
+                                    !focused.machine.is_local()
+                                        || focused.project_id != key.project_id
+                                        || focused.session_id != key.session_id
+                                }))
                         {
                             return;
                         }
@@ -1458,11 +1111,7 @@ impl GhostexGpuiApp {
                         // wrong workspace or override a newer selection.
                         if this.agents_workspace_project_id.as_deref()
                             != Some(key.project_id.as_str())
-                            || this
-                                .sidebar_gxserver_presentation_focus_state
-                                .focused_session_id
-                                .as_deref()
-                                != Some(key.session_id.as_str())
+                            || !selected && !this.gx_store_is_created_attach(&key)
                         {
                             return;
                         }
@@ -1476,7 +1125,6 @@ impl GhostexGpuiApp {
                                 &mut this.agents_terminal_runtime_sessions,
                                 &mut this.agents_terminal_launch_payload_source,
                                 &this.local_workspace_session_mappings,
-                                &mut this.local_app_shot_session_mappings,
                                 requested_pane_id,
                                 &key,
                                 plan,
@@ -1496,30 +1144,15 @@ impl GhostexGpuiApp {
                             );
                         }
                         GpuiLocalWorkspaceAttachOrigin::SidebarFocus
+                        | GpuiLocalWorkspaceAttachOrigin::Fork
                         | GpuiLocalWorkspaceAttachOrigin::WakeRecovery => {
-                            // A Split Right request whose tab already exists was
-                            // moved into its right-hand leaf when the focus arrived;
-                            // the ordinary open reuses that tab in place. Only a
-                            // session without a tab is attached into a new leaf here.
-                            if placement == GpuiWorkspaceTerminalFocusPlacement::SplitRight
-                                && !this.local_workspace_session_mappings.contains_key(&key)
-                            {
-                                let _ = this.open_gpui_local_workspace_terminal_in_new_leaf(
-                                    key,
-                                    plan,
-                                    requested_pane_id,
-                                    AgentsWorkspaceNewTerminalPlacement::SplitRight,
-                                    cx,
-                                );
-                            } else {
-                                let _ = this.open_gpui_local_workspace_terminal(
-                                    key,
-                                    plan,
-                                    requested_pane_id,
-                                    force_requested_pane_placement,
-                                    cx,
-                                );
-                            }
+                            let _ = this.open_gpui_local_workspace_terminal(
+                                key,
+                                plan,
+                                requested_pane_id,
+                                force_requested_pane_placement,
+                                cx,
+                            );
                         }
                     },
                     Err(message) => {

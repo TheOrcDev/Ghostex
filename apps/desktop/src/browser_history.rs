@@ -6,7 +6,6 @@ use std::{
 
 use futures::channel::oneshot;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub(crate) struct HistoryPage {
@@ -16,6 +15,25 @@ pub(crate) struct HistoryPage {
     pub(crate) title: String,
     pub(crate) favicon_url: Option<String>,
     pub(crate) remote_machine_id: Option<String>,
+}
+
+/// One visit as the history modal lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HistoryEntry {
+    pub(crate) id: i64,
+    pub(crate) project_name: String,
+    pub(crate) url: String,
+    pub(crate) title: String,
+    pub(crate) favicon_url: Option<String>,
+    /// Milliseconds since the Unix epoch; 0 for pages imported from tab history.
+    pub(crate) visited_at: i64,
+}
+
+/// One page of visits, newest first, and whether older ones remain.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct HistoryQueryResult {
+    pub(crate) entries: Vec<HistoryEntry>,
+    pub(crate) has_more: bool,
 }
 
 enum Command {
@@ -29,7 +47,7 @@ enum Command {
         project_id: Option<String>,
         query: String,
         before: Option<(i64, i64)>,
-        reply: oneshot::Sender<Result<Value, String>>,
+        reply: oneshot::Sender<Result<HistoryQueryResult, String>>,
     },
     Get {
         id: i64,
@@ -183,19 +201,34 @@ fn query_visits(
     project_id: Option<String>,
     query: String,
     before: Option<(i64, i64)>,
-) -> rusqlite::Result<Value> {
-    let mut statement = db.prepare("SELECT id, project_id, project_name, url, title, favicon_url, visited_at FROM visits
+) -> rusqlite::Result<HistoryQueryResult> {
+    let mut statement = db.prepare("SELECT id, project_name, url, title, favicon_url, visited_at FROM visits
         WHERE (?1 IS NULL OR project_id = ?1) AND (?2 = '' OR instr(lower(title || ' ' || url || ' ' || project_name), lower(?2)) > 0)
         AND (?3 IS NULL OR visited_at < ?3 OR (visited_at = ?3 AND id < ?4))
         ORDER BY visited_at DESC, id DESC LIMIT 101")?;
-    let mut rows = statement.query_map(params![project_id, query, before.map(|(time, _)| time), before.map(|(_, id)| id)], |row| Ok(json!({
-        "id": row.get::<_, i64>(0)?.to_string(), "projectId": row.get::<_, String>(1)?, "projectName": row.get::<_, String>(2)?,
-        "url": row.get::<_, String>(3)?, "title": row.get::<_, String>(4)?, "faviconUrl": row.get::<_, Option<String>>(5)?,
-        "visitedAt": row.get::<_, i64>(6)?,
-    })))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let has_more = rows.len() > 100;
-    rows.truncate(100);
-    Ok(json!({ "entries": rows, "hasMore": has_more }))
+    let mut entries = statement
+        .query_map(
+            params![
+                project_id,
+                query,
+                before.map(|(time, _)| time),
+                before.map(|(_, id)| id)
+            ],
+            |row| {
+                Ok(HistoryEntry {
+                    id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    url: row.get(2)?,
+                    title: row.get(3)?,
+                    favicon_url: row.get(4)?,
+                    visited_at: row.get(5)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let has_more = entries.len() > 100;
+    entries.truncate(100);
+    Ok(HistoryQueryResult { entries, has_more })
 }
 
 pub(crate) fn record(key: (u64, u64), page: HistoryPage, navigation: bool) {
@@ -221,7 +254,7 @@ pub(crate) async fn query(
     project_id: Option<String>,
     query: String,
     before: Option<(i64, i64)>,
-) -> Result<Value, String> {
+) -> Result<HistoryQueryResult, String> {
     let (reply, response) = oneshot::channel();
     sender()
         .send(Command::Query {

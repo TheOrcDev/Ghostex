@@ -49,12 +49,24 @@ pub struct CefBrowser {
     pub(crate) _request_context: cef::RequestContext,
     pub(crate) last_bounds: RefCell<Option<(f32, f32, f32, f32, f32)>>,
     pub(crate) last_visible: Cell<Option<bool>>,
+    motion_hidden: Cell<bool>,
     pub(crate) uses_system_page_appearance: bool,
     pub(crate) extension_bridge_installed: bool,
-    session_chat_activation: StdRc<RefCell<Option<SessionChatActivation>>>,
-    session_chat_zoom: StdRc<SessionChatZoom>,
-    session_chat_bootstrap: StdRc<RefCell<Option<SidebarGxserverBootstrap>>>,
-    trusted_gxserver_entry_identity: Option<String>,
+    /// CDXC:Browser 2026-09-23 WHY:
+    /// Remote reconnect disposes CEF surfaces while retaining their tabs. Mark app-owned disposal before releasing the native view so synchronous or deferred DoClose callbacks cannot turn that teardown into a user-requested tab close.
+    app_initiated_close: StdRc<Cell<bool>>,
+}
+
+/// The Files embed page (`manage.html?embed=1&path=…`) showing an Excalidraw drawing.
+#[cfg(target_os = "macos")]
+fn files_embed_shows_drawing(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.query_pairs()
+            .any(|(key, value)| key == "embed" && value == "1")
+            && url.query_pairs().any(|(key, value)| {
+                key == "path" && value.to_ascii_lowercase().ends_with(".excalidraw")
+            })
+    })
 }
 
 impl CefBrowser {
@@ -68,13 +80,8 @@ impl CefBrowser {
         popup_open_handler: Option<BrowserPopupOpenHandler>,
         page_metadata_handler: Option<BrowserPageMetadataHandler>,
         media_access_handler: Option<BrowserMediaAccessHandler>,
-        sidebar_runtime_settings: Option<SidebarRuntimeSettingsSnapshot>,
-        sidebar_gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-        sidebar_bridge_event_handler: Option<SidebarBridgeEventHandler>,
         project_workarea_bridge_event_handler: Option<ProjectWorkareaBridgeEventHandler>,
         manage_docs_resource_scope: Option<ManageDocsResourceScope>,
-        app_modal_host_bridge_surface: Option<AppModalHostBridgeSurface>,
-        app_modal_host_bridge_event_handler: Option<AppModalHostBridgeEventHandler>,
         extension_bridge_surface: Option<ExtensionBridgeSurfaceSpec>,
         extension_bridge_event_handler: Option<ExtensionBridgeEventHandler>,
         page_load_end_handler: Option<PageLoadEndHandler>,
@@ -96,19 +103,19 @@ impl CefBrowser {
         same fallible "not yet" that callers already retry on their next pass.
         */
         if !context_initialized() {
+            request_runtime();
             return Err("CEF runtime is not initialized yet".into());
         }
-        let keyboard_zoom_enabled = page_metadata_handler.is_some()
-            || project_workarea_bridge_event_handler.is_some()
-            || app_modal_host_bridge_surface == Some(AppModalHostBridgeSurface::SessionChat);
+        let keyboard_zoom_enabled =
+            page_metadata_handler.is_some() || project_workarea_bridge_event_handler.is_some();
         /*
-        CDXC:CefRuntime 2026-09-09 DECISION:
-        User: disable two-finger zoom in every built-in CEF view and modal, including Code, but preserve it in browser pages and custom views.
-        Browser pages and custom views use system page appearance; extension payloads also keep their own gesture behavior.
+        CDXC:CefRuntime 2026-10-01 DECISION:
+        User: disable two-finger zoom in every built-in CEF view and modal, including Code, but preserve it in browser pages and custom views (2026-09-09); and "please allow me to pinch zoom in/out in Excalidraw" (2026-10-01). The Files embed showing a drawing lets the pinch reach the page, which cancels the browser's page zoom and leaves the pinch to Excalidraw's own canvas zoom (apps/desktop/views/manage/embed.tsx). Browser pages and custom views use system page appearance; extension payloads also keep their own gesture behavior.
         */
         #[cfg(target_os = "macos")]
-        let pinch_zoom_disabled =
-            !uses_system_page_appearance && extension_bridge_surface.is_none();
+        let pinch_zoom_disabled = !uses_system_page_appearance
+            && extension_bridge_surface.is_none()
+            && !(manage_docs_resource_scope.is_some() && files_embed_shows_drawing(url));
         /*
         CDXC:CefRuntime 2026-07-11:
         CreateBrowserSync returns null when the per-profile request context's
@@ -138,23 +145,12 @@ impl CefBrowser {
         let trusted_clipboard_origin = trusted_clipboard_origin
             .as_deref()
             .and_then(cef_normalized_origin);
-        let allow_first_party_loopback_requests =
-            sidebar_bridge_installed_for_handler(sidebar_bridge_event_handler.is_some())
-                || sidebar_gxserver_bootstrap.is_some();
         let mut browser_settings = cef::BrowserSettings::default();
         if trusted_clipboard_origin.is_some() {
             browser_settings.javascript_access_clipboard = State::ENABLED;
             browser_settings.javascript_dom_paste = State::ENABLED;
         }
         let requested_url = url.to_string();
-        let trusted_gxserver_entry_identity = (allow_first_party_loopback_requests
-            && app_modal_host_bridge_surface_for_frame_url(&requested_url).is_some())
-        .then(|| sidebar_page_entry_identity(&requested_url));
-        if let Some(expected_surface) = app_modal_host_bridge_surface
-            && app_modal_host_bridge_surface_for_frame_url(&requested_url) != Some(expected_surface)
-        {
-            return Err("app-modal CEF surface does not match its first-party entry URL".into());
-        }
         /*
         CDXC:Extensions 2026-08-28:
         A `server.url` extension's surface is pinned to a third-party HTTPS
@@ -187,24 +183,26 @@ impl CefBrowser {
             background_color
         };
         /*
-        CDXC:Browser 2026-07-27:
-        The permission handler now serves independent surfaces: the
-        code-server clipboard grant (trusted origin only) and Browser-pane
-        microphone/camera prompts, plus bundled sidebar/session-chat loopback
-        access. Install it when any is in play, and keep the decisions
-        independent inside the handler.
+        CDXC:Browser 2026-10-03:
+        The permission handler serves independent decisions: the code-server
+        clipboard grant (trusted origin only), Browser-pane microphone/camera
+        prompts, and the Local Network Access prompt every page can raise
+        (CDXC:Browser 2026-10-03 in site_requests.rs), which is why every
+        browser gets one now. Keep the decisions independent inside it.
         */
-        let permission_handler = (allow_first_party_loopback_requests
-            || trusted_clipboard_origin.is_some()
-            || media_access_handler.is_some())
-        .then(|| {
-            GhostexGpuiPermissionHandler::new(
-                trusted_gxserver_entry_identity.clone(),
-                trusted_clipboard_origin.clone(),
-                media_access_handler,
-            )
-        });
-        let context_menu_handler = GhostexGpuiContextMenuHandler::new(popup_open_handler.clone());
+        let permission_handler = Some(GhostexGpuiPermissionHandler::new(
+            trusted_clipboard_origin.clone(),
+            media_access_handler,
+            profile.to_string(),
+        ));
+        let context_menu_handler = GhostexGpuiContextMenuHandler::new(
+            popup_open_handler.clone(),
+            page_metadata_handler.clone(),
+        );
+        // Browser pages only: other surfaces keep Alloy's cancel-every-download default.
+        let download_handler = page_metadata_handler
+            .as_ref()
+            .map(|_| GhostexGpuiDownloadHandler::new());
         let display_handler = page_metadata_handler.as_ref().map(|handler| {
             GhostexGpuiDisplayHandler::new(handler.clone(), Cell::new(uses_system_page_appearance))
         });
@@ -214,87 +212,59 @@ impl CefBrowser {
         let manage_docs_resource_base_url = manage_docs_resource_scope
             .as_ref()
             .map(|scope| scope.base_url().to_string());
-        let is_shared_sidebar_surface =
-            sidebar_bridge_installed_for_handler(sidebar_bridge_event_handler.is_some());
         let request_handler = manage_docs_resource_scope
             .as_ref()
-            .map(ManageDocsResourceScope::request_handler)
-            .or_else(|| {
-                sidebar_bridge_event_handler
-                    .clone()
-                    .filter(|_| is_shared_sidebar_surface)
-                    .map(|handler| {
-                        GhostexGpuiSidebarRendererRequestHandler::new(
-                            sidebar_page_entry_identity(url),
-                            handler,
-                        )
-                    })
+            .map(|scope| {
+                scope.request_handler(
+                    &requested_url,
+                    project_workarea_bridge_event_handler.clone(),
+                )
             })
             .or_else(|| {
-                // Browser panes are the only surface with a shell popup path,
-                // so they are the only ones that turn middle-click and
-                // Cmd/Ctrl-click link opens into Browser tabs.
-                popup_open_handler
-                    .clone()
-                    .map(GhostexGpuiBrowserRequestHandler::new)
-            });
+                // Browser panes and project website views use the same shell popup
+                // route for middle-click and Cmd/Ctrl-click links.
+                popup_open_handler.clone().map(|popup_open_handler| {
+                    GhostexGpuiBrowserRequestHandler::new(
+                        popup_open_handler,
+                        page_metadata_handler.clone(),
+                    )
+                })
+            })
+            // Every other page still hands app links to the OS (site_requests.rs).
+            .or_else(|| Some(GhostexGpuiExternalAppRequestHandler::new()));
         let keyboard_handler =
             surface_keyboard_handler(keyboard_zoom_enabled, page_metadata_handler.clone());
         let browser_lifecycle_handler = page_metadata_handler.clone();
-        let session_chat_activation = StdRc::new(RefCell::new(None));
-        let session_chat_zoom = StdRc::new(SessionChatZoom::default());
-        let session_chat_bootstrap = StdRc::new(RefCell::new(sidebar_gxserver_bootstrap.clone()));
+        let app_initiated_close = StdRc::new(Cell::new(false));
         let load_handler = if let Some(surface) = extension_bridge_surface
             .clone()
             .filter(|_| extension_bridge_installed)
         {
-            Some(GhostexGpuiExtensionBridgeLoadHandler::new(surface))
-        } else if let Some(page_load_end_handler) = page_load_end_handler {
-            /*
-            CDXC:Onboarding 2026-08-18:
-            Only bridge-less third-party surfaces (the tutorial video modal)
-            pass this handler, so it can never displace the sidebar,
-            session-chat, workarea, or Browser load handlers below.
-            */
-            Some(GhostexGpuiPageLoadEndHandler::new(page_load_end_handler))
-        } else if sidebar_bridge_installed_for_handler(sidebar_bridge_event_handler.is_some()) {
-            Some(GhostexGpuiSidebarProjectContextLoadHandler::new(
-                sidebar_runtime_settings.unwrap_or_default(),
-                sidebar_gxserver_bootstrap,
-            ))
-        } else if sidebar_gxserver_bootstrap.is_some() {
-            /*
-            CDXC:SessionChat 2026-07-31:
-            A bootstrap without the sidebar bridge handler identifies the
-            per-session Session Chat surface: it gets only the bootstrap
-            install message so the bundled chat page can reach the local
-            gxserver, while Browser, workarea, and modal clients keep passing
-            no bootstrap at all.
-            */
-            Some(GhostexGpuiSessionChatGxserverBootstrapLoadHandler::new(
-                session_chat_bootstrap.clone(),
-                session_chat_activation.clone(),
-                session_chat_zoom.clone(),
-                trusted_gxserver_entry_identity.clone(),
+            Some(GhostexGpuiExtensionBridgeLoadHandler::new(
+                surface,
+                page_load_end_handler,
             ))
         } else if project_workarea_bridge_event_handler.is_some() {
             Some(GhostexGpuiProjectWorkareaBridgeLoadHandler::new(
                 manage_docs_resource_base_url,
+                page_load_end_handler,
+            ))
+        } else if page_metadata_handler.is_some() || trusted_clipboard_origin.is_some() {
+            Some(GhostexGpuiBrowserPageLoadHandler::new(
+                page_metadata_handler,
+                trusted_clipboard_origin.clone(),
+                page_load_end_handler,
             ))
         } else {
-            (page_metadata_handler.is_some() || trusted_clipboard_origin.is_some()).then(|| {
-                GhostexGpuiBrowserPageLoadHandler::new(
-                    page_metadata_handler,
-                    trusted_clipboard_origin.clone(),
-                )
-            })
+            /*
+            CDXC:Onboarding 2026-08-18:
+            The handler for a surface with no bridge of its own (the tutorial
+            video modal). Every bridged surface above reports the same edge
+            from inside its own handler, because the client has one LoadHandler
+            slot and a second handler would displace the bridge install.
+            */
+            page_load_end_handler.map(GhostexGpuiPageLoadEndHandler::new)
         };
-        // Session Chat pages resolve local drops to real absolute paths
-        // published by the shell at drag-enter (Chromium hides them from the
-        // page); every other surface keeps CEF's default drag behavior.
-        let drag_handler = (app_modal_host_bridge_surface
-            == Some(AppModalHostBridgeSurface::SessionChat))
-        .then(GhostexGpuiSessionChatDragHandler::new);
         // Every GPUI CEF browser needs the client's life-span handler so
         // DoClose is always handled and CEF can never close the host GPUI
         // window when a browser is dropped.
@@ -303,21 +273,20 @@ impl CefBrowser {
                 popup_open_handler,
                 browser_lifecycle_handler,
                 false,
+                app_initiated_close.clone(),
             )),
             Some(context_menu_handler),
             display_handler,
             find_handler,
             load_handler,
-            sidebar_bridge_event_handler,
             project_workarea_bridge_event_handler,
-            app_modal_host_bridge_event_handler,
             extension_bridge_surface,
             extension_bridge_event_handler,
             request_handler,
             permission_handler,
             Some(GhostexGpuiCefFocusHandler::new()),
             keyboard_handler,
-            drag_handler,
+            download_handler,
         ));
         let mut request_context = cef_request_context_for_profile(profile)
             .map_err(|error| format!("failed to create GPUI CEF request context: {error}"))?;
@@ -347,33 +316,20 @@ impl CefBrowser {
             platform::prepare_native_view_for_focus(native_view);
             #[cfg(target_os = "macos")]
             platform::set_native_view_pinch_zoom_disabled(native_view, pinch_zoom_disabled);
-            /*
-            CDXC:FocusRouting 2026-07-22:
-            The shared sidebar is chrome, not a work surface: clicking its
-            background must never pull the keyboard away from the active
-            terminal/pane. Mark exactly this surface mouse-focus passive so
-            the AppKit focus subclass stops claiming first responder on its
-            mouse-downs; keyboard focus arrives only through the fixed
-            editable-focus bridge grant when the page focuses a text input.
-            */
-            if is_shared_sidebar_surface {
-                platform::set_native_view_mouse_focus_passive(native_view, true);
-            }
             register_native_view_browser(
                 native_view,
                 &browser,
                 uses_system_page_appearance,
                 keyboard_zoom_enabled,
             );
-            if (profile == "session-chat" || is_shared_sidebar_surface || profile == "app-modal")
-                && !native_view.is_null()
-            {
+            if (profile == "session-chat" || profile == "app-modal") && !native_view.is_null() {
                 SYSTEM_APP_PAGE_APPEARANCE_CEF_NATIVE_VIEWS.with(|views| {
                     views.borrow_mut().insert(native_view as usize);
                 });
                 apply_page_color_scheme(&browser, BrowserPageAppearance::System);
             }
         }
+        install_page_input_tracker(&browser);
         if uses_system_page_appearance {
             apply_browser_page_appearance(&browser);
             if let Some(frame) = browser.main_frame() {
@@ -387,12 +343,10 @@ impl CefBrowser {
             _request_context: request_context,
             last_bounds: RefCell::new(None),
             last_visible: Cell::new(None),
+            motion_hidden: Cell::new(false),
             uses_system_page_appearance,
             extension_bridge_installed,
-            session_chat_activation,
-            session_chat_zoom,
-            session_chat_bootstrap,
-            trusted_gxserver_entry_identity,
+            app_initiated_close,
         })
     }
 
@@ -473,12 +427,44 @@ impl CefBrowser {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn native_view(&self) -> Option<*mut c_void> {
         let browser = self.browser.borrow();
         browser
             .host()
             .map(|host| platform::native_view_ptr(host.window_handle()))
+    }
+
+    /// Whether `bounds` differs from the frame the native view last took.
+    pub fn bounds_differ(&self, bounds: Bounds<Pixels>, scale_factor: f32) -> bool {
+        let raw_bounds = (
+            bounds.origin.x.as_f32(),
+            bounds.origin.y.as_f32(),
+            bounds.size.width.as_f32().max(0.0),
+            bounds.size.height.as_f32().max(0.0),
+            scale_factor,
+        );
+        self.last_bounds.borrow().as_ref() != Some(&raw_bounds)
+    }
+
+    /// Makes the page transparent for the frames a panel slides (app/panel_motion.rs), keeping its
+    /// last frame. Unlike `set_visible(false)` this neither blurs the page nor hides its view, which
+    /// would hand the window's keyboard focus elsewhere. Coming back, the page fades in over
+    /// `fade_in` (macOS), so it arrives the way the panel's other content does.
+    pub fn set_motion_hidden(&self, hidden: bool, fade_in: std::time::Duration) {
+        if self.motion_hidden.get() == hidden {
+            return;
+        }
+        self.motion_hidden.set(hidden);
+        let browser = self.browser.borrow();
+        let Some(host) = browser.host() else {
+            return;
+        };
+        platform::set_native_view_motion_hidden(
+            platform::native_view_ptr(host.window_handle()),
+            hidden,
+            fade_in.as_secs_f64(),
+        );
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -522,6 +508,7 @@ impl CefBrowser {
         enabled: bool,
         width: f64,
         titlebar_height: f64,
+        background_color: u32,
         companion_hidden: bool,
         requested: bool,
         keep_under_pointer: bool,
@@ -533,6 +520,7 @@ impl CefBrowser {
                 enabled,
                 width,
                 titlebar_height,
+                background_color,
                 companion_hidden,
                 requested,
                 keep_under_pointer,
@@ -580,12 +568,6 @@ impl CefBrowser {
         host.set_focus(1);
     }
 
-    pub fn paste(&self) -> bool {
-        self.focus();
-        let browser = self.browser.borrow();
-        edit_command_in_browser(&browser, CefEditCommand::Paste)
-    }
-
     pub fn blur(&self) {
         let browser = self.browser.borrow();
         let Some(host) = browser.host() else {
@@ -605,54 +587,6 @@ impl CefBrowser {
         self.focus();
         let browser = self.browser.borrow();
         select_all_in_browser(&browser);
-    }
-
-    /*
-    CDXC:Onboarding 2026-08-18:
-    The tutorial modal loads the YouTube watch page as its own top-level CEF
-    document, so the app cannot put its player in fullscreen from injected
-    JavaScript: Chromium's Fullscreen API requires a transient user
-    activation, and app-owned `execute_java_script` runs without one (the
-    `requestFullscreen()` promise is rejected outright). Sending the key
-    through the browser host instead feeds Chromium's real input pipeline, so
-    the page sees a trusted keydown with user activation and runs its own "f"
-    shortcut. "f" toggles, so callers must send this exactly once per loaded
-    page. This carries no page data and does not persist or log anything.
-    */
-    pub fn send_fullscreen_toggle_key(&self) {
-        // Windows virtual key code for F; Chromium derives DOM `code`/`key`
-        // from this plus the platform-native code below.
-        const VK_F: c_int = 0x46;
-        #[cfg(target_os = "macos")]
-        const NATIVE_F_KEY_CODE: c_int = 3; // kVK_ANSI_F
-        #[cfg(target_os = "linux")]
-        const NATIVE_F_KEY_CODE: c_int = 41; // X11 keycode for F
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        const NATIVE_F_KEY_CODE: c_int = 0;
-
-        let browser = self.browser.borrow();
-        let Some(host) = browser.host() else {
-            return;
-        };
-        let mut event = cef::KeyEvent {
-            size: std::mem::size_of::<cef::sys::cef_key_event_t>(),
-            type_: cef::KeyEventType::RAWKEYDOWN,
-            modifiers: 0,
-            windows_key_code: VK_F,
-            native_key_code: NATIVE_F_KEY_CODE,
-            is_system_key: 0,
-            character: b'f' as u16,
-            unmodified_character: b'f' as u16,
-            focus_on_editable_field: 0,
-        };
-        host.send_key_event(Some(&event));
-        // CEF's char event carries the produced character in the key code.
-        event.type_ = cef::KeyEventType::CHAR;
-        event.windows_key_code = b'f' as c_int;
-        host.send_key_event(Some(&event));
-        event.type_ = cef::KeyEventType::KEYUP;
-        event.windows_key_code = VK_F;
-        host.send_key_event(Some(&event));
     }
 
     pub fn load_url(&self, url: &str) {
@@ -685,100 +619,6 @@ impl CefBrowser {
             1,
         );
         true
-    }
-
-    pub fn refresh_sidebar_runtime_settings(
-        &self,
-        runtime_settings: SidebarRuntimeSettingsSnapshot,
-    ) {
-        let browser = self.browser.borrow();
-        let Some(mut frame) = browser.main_frame() else {
-            return;
-        };
-        send_sidebar_runtime_settings_process_message(
-            &mut frame,
-            SIDEBAR_RUNTIME_SETTINGS_UPDATE_MESSAGE_NAME,
-            runtime_settings,
-        );
-    }
-
-    pub fn refresh_sidebar_gxserver_bootstrap(
-        &self,
-        gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-    ) {
-        let browser = self.browser.borrow();
-        let Some(mut frame) = browser.main_frame() else {
-            return;
-        };
-        send_sidebar_gxserver_bootstrap_process_message(&mut frame, gxserver_bootstrap);
-    }
-
-    pub fn activate_session_chat(
-        &self,
-        url: &str,
-        generation: &str,
-        bootstrap: SidebarGxserverBootstrap,
-        initial_snapshot: Option<serde_json::Value>,
-        initial_presentation: Option<serde_json::Value>,
-    ) {
-        if !is_gpui_first_party_cef_entry_url(url, "chat.html")
-            || self.trusted_gxserver_entry_identity.as_deref()
-                != Some(sidebar_page_entry_identity(url).as_str())
-        {
-            return;
-        }
-        self.session_chat_zoom.refresh(&self.browser.borrow(), true);
-        *self.session_chat_bootstrap.borrow_mut() = Some(bootstrap.clone());
-        *self.session_chat_activation.borrow_mut() = Some(SessionChatActivation {
-            url: url.to_string(),
-            generation: generation.to_string(),
-            bootstrap: Some(bootstrap.clone()),
-            initial_snapshot: initial_snapshot.clone(),
-            initial_presentation: initial_presentation.clone(),
-        });
-        let browser = self.browser.borrow();
-        let Some(mut frame) = browser.main_frame() else {
-            return;
-        };
-        send_session_chat_activation_process_message(
-            &mut frame,
-            url,
-            generation,
-            Some(bootstrap),
-            initial_snapshot,
-            initial_presentation,
-        );
-    }
-
-    pub fn refresh_session_chat_gxserver_bootstrap(
-        &self,
-        gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-    ) {
-        /*
-        CDXC:SessionChat 2026-07-31:
-        Session Chat surfaces refresh through their dedicated bootstrap
-        message because the sidebar update path refuses pages without the
-        installed sidebar bridge. Same scope rules as the sidebar refresh:
-        app-owned snapshot only, main frame only, never logged or persisted.
-        */
-        // CDXC:SessionChat 2026-09-12 WHY:
-        // Revocation must replace the load-replay snapshot too; keeping its old token made a later reload silently reauthenticate.
-        *self.session_chat_bootstrap.borrow_mut() = gxserver_bootstrap.clone();
-        if let Some(activation) = self.session_chat_activation.borrow_mut().as_mut() {
-            activation.bootstrap = gxserver_bootstrap.clone();
-        }
-        let Some(entry_identity) = self.trusted_gxserver_entry_identity.as_deref() else {
-            return;
-        };
-        let browser = self.browser.borrow();
-        let Some(mut frame) = browser.main_frame() else {
-            return;
-        };
-        send_session_chat_gxserver_bootstrap_process_message(
-            &mut frame,
-            entry_identity,
-            gxserver_bootstrap,
-        );
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -841,11 +681,6 @@ impl CefBrowser {
         host.stop_finding(clear_selection as c_int);
     }
 
-    pub fn refresh_session_chat_zoom(&self) {
-        self.session_chat_zoom
-            .refresh(&self.browser.borrow(), false);
-    }
-
     pub fn zoom_level(&self) -> f64 {
         let browser = self.browser.borrow();
         let Some(host) = browser.host() else {
@@ -901,6 +736,9 @@ impl CefBrowser {
 
 impl Drop for CefBrowser {
     fn drop(&mut self) {
+        self.app_initiated_close.set(true);
+        forget_page_keep_awake_probe(self.identifier());
+        site_prompts_browser_closed(self.identifier());
         #[cfg(target_os = "macos")]
         if let Some(view) = self.native_view() {
             platform::dispose_sidebar_hover_reveal(view);
@@ -928,12 +766,13 @@ impl Drop for CefBrowser {
 
             CDXC:CefRuntime 2026-08-24:
             release_native_view above destroys the CEF child view/window
-            (removeFromSuperview on macOS, DestroyWindow on Windows, embed-host
-            destroy on Linux), which can complete the whole browser close
+            (removeFromSuperview on macOS, DestroyWindow on Windows), which can complete the whole browser close
             synchronously before close_browser(1) even runs — in that case CEF
             skips DoClose and close_browser is a no-op backstop. Callbacks that
             can fire synchronously in that window (on_before_close) touch only
             thread-local registries, never the gpui App.
+            On Linux release_native_view only unmaps and reparents the embed
+            host; CEF closes its child before on_before_close removes the host.
             */
             platform::schedule_message_pump_work(0);
         }
@@ -958,13 +797,18 @@ pub(crate) fn cef_request_context_for_profile(profile: &str) -> Result<cef::Requ
     if profile.starts_with("remote-") {
         return super::remote_browser::remote_browser_request_context(profile);
     }
+    if cef_profile_is_workspace(profile) {
+        return super::workspace_browser::workspace_browser_request_context(profile);
+    }
     /*
     CDXC:Browser 2026-07-16:
     Browser profile ids are app-global rather than project- or tab-scoped. The
     built-in Default profile uses CEF's pre-initialized durable global context,
     so ordinary logins survive app restarts and are visible from every
     Default-profile tab/project. Generated profiles remain separate and
-    memory-backed.
+    memory-backed. Workspace profiles (`workspace-<id>`) are disk-backed and
+    only reach here after their context reported itself initialized
+    (workspace_browser.rs).
 
     CDXC:CefRuntime 2026-07-09-03:40:
     First-party app-UI surfaces (sidebar, app modal, titlebar panels, project workareas) need durable localStorage for UI state (collapse state, Show more/less, project order), matching how the macOS sidebar WKWebViews use the persistent default WKWebsiteDataStore. They and the built-in Default Browser profile use CEF's global persistent request context, which is initialized with the runtime before synchronous browser creation. Creating a new disk-backed request context here races its asynchronous initialization and causes CreateBrowserSync to return null during app startup. Generated Browser profiles stay memory-backed.
@@ -1081,6 +925,8 @@ pub(crate) fn unregister_native_view_browser(native_view: *mut c_void) {
     if native_view.is_null() {
         return;
     }
+    #[cfg(target_os = "linux")]
+    remove_pointer_focus_handler(native_view);
 
     CEF_BROWSERS_BY_NATIVE_VIEW.with(|browsers| {
         browsers.borrow_mut().remove(&(native_view as usize));
@@ -1096,12 +942,6 @@ pub(crate) fn unregister_native_view_browser(native_view: *mut c_void) {
     });
     set_cef_native_view_hidden(native_view, false);
     clear_active_native_view_if_matching(native_view);
-    let _ = SIDEBAR_EDITABLE_FOCUS_NATIVE_VIEW.compare_exchange(
-        native_view as usize,
-        0,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    );
 }
 
 pub(crate) fn refresh_system_page_appearance_for_native_view(native_view: *mut c_void) -> c_int {

@@ -1,9 +1,15 @@
 mod account_login;
 pub mod actions;
+pub mod agent_sync;
+mod agent_cli;
+mod agentbox_cli;
+mod agents;
+mod coordinator;
 pub mod args;
 pub mod attach;
 pub mod automations;
 pub mod board;
+mod built_in_extensions;
 pub mod browser_mcp;
 pub mod diagnostics;
 pub mod editors;
@@ -21,15 +27,25 @@ pub mod rpc;
 pub mod saved_prompts;
 pub mod selector;
 mod session_chat_model;
+mod session_chat_rpc;
+mod session_chat_transcript;
 mod session_parking;
 pub mod sessions;
+mod sessions_brief;
 pub mod settings;
+mod settings_hotkeys;
+mod show;
+mod visual;
 pub mod skills;
 pub mod tailcat;
 pub mod tailcat_tunnel;
 pub mod usage;
 pub mod wait;
 pub mod web;
+mod team;
+mod team_slack;
+mod work_mode;
+mod workspace;
 
 use rpc::{CliError, CliResult};
 
@@ -68,6 +84,11 @@ pub fn run() -> i32 {
 /// global help gate.
 const HELP_GATE_EXCLUDED: &[&str] = &[
     "account-login",
+    "agent-cli",
+    "agentbox",
+    "agents",
+    "orchestrator",
+    "coordinator",
     "automations",
     "bd",
     "beads",
@@ -75,16 +96,18 @@ const HELP_GATE_EXCLUDED: &[&str] = &[
     "browser",
     "browser-use",
     "computer-use",
+    "spaceo",
     "cli",
     "editor-daemon",
     "extensions",
     "f",
-    "fable-5.6-orchestration",
+    "agents-orchestration",
     "find",
     "generate-title",
     "guide",
     "manage-beads",
     "notify",
+    "visual",
     "h",
     "history",
     "move-codex-session",
@@ -93,6 +116,7 @@ const HELP_GATE_EXCLUDED: &[&str] = &[
     "resources",
     "quick-actions",
     "saved-prompts",
+    "session-chat-rpc",
     "server",
     "settings",
     "tailcat",
@@ -137,7 +161,7 @@ fn dispatch(argv: &[String]) -> CliResult<i32> {
     if !HELP_GATE_EXCLUDED.contains(&command_name)
         && args.iter().any(|arg| arg == "-h" || arg == "--help")
     {
-        println!("{}", usage::usage());
+        println!("{}", usage::command_usage(command_name));
         return Ok(0);
     }
     run_command(command_name, &args)?;
@@ -160,6 +184,11 @@ fn exit_code() -> i32 {
 fn is_known_command(name: &str) -> bool {
     const NAMES: &[&str] = &[
         "account-login",
+        "agent-cli",
+        "agentbox",
+        "agents",
+        "orchestrator",
+        "coordinator",
         "sessions",
         "s",
         "list-sessions",
@@ -177,6 +206,7 @@ fn is_known_command(name: &str) -> bool {
         "k",
         "sleep",
         "hold-sessions-awake",
+        "hold-session-chat-grid",
         "client-hello",
         "wake",
         "focus",
@@ -238,6 +268,11 @@ fn is_known_command(name: &str) -> bool {
         "paired-device-seen",
         "pin-session",
         "park-session",
+        "work-mode",
+        "workspace",
+        "team",
+        "slack",
+        "link-session",
         "delayed-send",
         "close-after-done",
         "send-text",
@@ -265,6 +300,7 @@ fn is_known_command(name: &str) -> bool {
         "interrupt-session-chat",
         "handoff-session-chat-draft",
         "read-session-chat-queue",
+        "session-chat-rpc",
         "queue-session-chat-prompt",
         "update-session-chat-queued-prompt",
         "remove-session-chat-queued-prompt",
@@ -294,12 +330,14 @@ fn is_known_command(name: &str) -> bool {
         "install-browser-mcp-skill",
         "install-browser-use-skill",
         "computer-use",
+        "spaceo",
         "cli",
         "automations",
         "install-computer-use-skill",
+        "install-spaceo-skill",
         "install-cli-skill",
-        "fable-5.6-orchestration",
-        "install-fable-5.6-orchestration-skill",
+        "agents-orchestration",
+        "install-agents-orchestration-skill",
         "manage-beads",
         "install-manage-beads-skill",
         "generate-title",
@@ -307,7 +345,10 @@ fn is_known_command(name: &str) -> bool {
         "move-codex-session",
         "install-move-codex-session-skill",
         "guide",
+        "agent-sync",
         "notify",
+        "show",
+        "visual",
         "install-help-skill",
         "settings",
         "toggle-sidebar",
@@ -337,6 +378,14 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
     };
     match name {
         "account-login" => account_login::run(args),
+        "agent-cli" => agent_cli::run(args),
+        "agentbox" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::CLOUD_BOXES)?;
+            agentbox_cli::run(args)
+        }
+        "agents" => agents::run(args),
+        // CDXC:Coordinators 2026-10-10 DECISION: user renamed Coordinator to Orchestrator; `coordinator` stays a hidden alias (see ghostex_cli/coordinator/command.rs).
+        "orchestrator" | "coordinator" => coordinator::run(args),
         "sessions" | "s" | "list-sessions" | "ls" => sessions::sessions_command(args),
         "find" | "f" => launchers::zehn_search_command(args),
         "history" | "h" => launchers::history_command(args),
@@ -384,11 +433,24 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         ),
         "create-agent" => run_bridge_action("createAgentSession", Parser::Agent, plain, args),
         "run-agent" => run_bridge_action("runAgent", Parser::Agent, plain, args),
-        "run-command" => run_bridge_action("runCommand", Parser::CommandButton, plain, args),
-        "run-action" => sessions::run_quick_action_command(args),
+        "run-command" => {
+            require_actions()?;
+            run_bridge_action("runCommand", Parser::CommandButton, plain, args)
+        }
+        "run-action" => {
+            require_actions()?;
+            sessions::run_quick_action_command(args)
+        }
         "quick-actions" => quick_actions_command(args),
-        "click-button" => run_bridge_action("clickButton", Parser::ClickButton, plain, args),
+        "click-button" => {
+            // `click-button command <id>` runs an Action; `click-button agent <id>` does not.
+            if args.first().map(String::as_str) == Some("command") {
+                require_actions()?;
+            }
+            run_bridge_action("clickButton", Parser::ClickButton, plain, args)
+        }
         "save-command" => {
+            require_actions()?;
             run_bridge_action("saveCommand", Parser::SaveCommand, fail_on_not_ok, args)
         }
         "save-agent" => run_bridge_action("saveAgent", Parser::SaveAgent, fail_on_not_ok, args),
@@ -460,14 +522,18 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
             args,
         ),
         "read-sidebar-spaces" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::SPACES)?;
             run_bridge_action("readSidebarSpaces", Parser::None, fail_on_not_ok, args)
         }
-        "update-sidebar-spaces" => run_bridge_action(
-            "updateSidebarSpaces",
-            Parser::SidebarSpacesState,
-            fail_on_not_ok,
-            args,
-        ),
+        "update-sidebar-spaces" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::SPACES)?;
+            run_bridge_action(
+                "updateSidebarSpaces",
+                Parser::SidebarSpacesState,
+                fail_on_not_ok,
+                args,
+            )
+        }
         "read-custom-session-tags" => {
             run_bridge_action("readCustomSessionTags", Parser::None, fail_on_not_ok, args)
         }
@@ -509,6 +575,13 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         */
         "hold-sessions-awake" => run_bridge_action(
             "holdSessionsAwake",
+            Parser::KeepSessionsAwake,
+            fail_on_not_ok,
+            args,
+        ),
+        // The chat grid claim lease (`session_chat_grid_claim.rs`), with the keep-awake verb's flags.
+        "hold-session-chat-grid" => run_bridge_action(
+            "holdSessionChatGrid",
             Parser::KeepSessionsAwake,
             fail_on_not_ok,
             args,
@@ -563,6 +636,26 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
             fail_on_not_ok,
             args,
         ),
+        "work-mode" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::WORKSPACES)?;
+            work_mode::work_mode_command(args)
+        }
+        "workspace" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::WORKSPACES)?;
+            workspace::workspace_command(args)
+        }
+        "team" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::WORKSPACES)?;
+            team::team_command(args)
+        }
+        "slack" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::WORKSPACES)?;
+            team_slack::slack_command(args)
+        }
+        "link-session" => {
+            require_built_in(ghostex_settings_catalog::built_in_extensions::WORKSPACES)?;
+            work_mode::link_session_command(args)
+        }
         "delayed-send" => {
             // `--cancel` clears the armed automation; otherwise the parser
             // accepts the timer and both agent-completion trigger modes.
@@ -618,6 +711,9 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
             fail_on_not_ok,
             args,
         ),
+        "read-session-chat" if session_chat_transcript::wants_transcript_reader(args) => {
+            session_chat_transcript::read_session_chat_transcript(args)
+        }
         "read-session-chat" => {
             run_bridge_action("readSessionChat", Parser::SessionChatRead, plain, args)
         }
@@ -688,6 +784,7 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         handed out, never by a list position, so a phone acting on a row minutes
         later still lands on the prompt it displayed.
         */
+        "session-chat-rpc" => session_chat_rpc::session_chat_rpc_command(args),
         "read-session-chat-queue" => {
             run_bridge_action("readSessionChatQueue", Parser::SessionSelector, plain, args)
         }
@@ -741,7 +838,7 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         ),
         "wait-for-text" => wait::wait_for_text_command(args),
         "rename-command" => {
-            run_resolved_session_bridge_action("renameCommand", Parser::Rename, plain, args)
+            run_resolved_session_bridge_action("renameCommand", Parser::RenameRequest, plain, args)
         }
         "set-visible-count" => {
             run_bridge_action("setVisibleCount", Parser::VisibleCount, plain, args)
@@ -755,6 +852,8 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         "bd" | "beads" => launchers::beads_command(args),
         "board" => board::board_command(args),
         "notify" => notify::notify_command(args),
+        "show" => show::show_command(args),
+        "visual" => visual::visual_command(args),
         "server" => server_command(args),
         "tailcat" => tailcat::tailcat_command(args),
         "web" => web::web_command(args),
@@ -766,12 +865,14 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         "install-browser-use-skill" => skills::install_browser_use_skill_command(args),
         "computer-use" => skills::computer_use_command(args),
         "install-computer-use-skill" => skills::install_computer_use_skill_command(args),
+        "spaceo" => skills::spaceo_command(args),
+        "install-spaceo-skill" => skills::install_spaceo_skill_command(args),
         "cli" => skills::cli_command(args),
         "install-cli-skill" => skills::install_cli_skill_command(args),
         "automations" => skills::automations_command(args),
-        "fable-5.6-orchestration" => skills::fable56_orchestration_command(args),
-        "install-fable-5.6-orchestration-skill" => {
-            skills::install_fable56_orchestration_skill_command(args)
+        "agents-orchestration" => skills::agents_orchestration_command(args),
+        "install-agents-orchestration-skill" => {
+            skills::install_agents_orchestration_skill_command(args)
         }
         "manage-beads" => skills::manage_beads_command(args),
         "install-manage-beads-skill" => skills::install_manage_beads_skill_command(args),
@@ -782,6 +883,7 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
             skills::install_move_codex_session_skill_command(args)
         }
         "guide" => guide::guide_command(args),
+        "agent-sync" => agent_sync::agent_sync_command(args),
         "install-help-skill" => skills::install_help_skill_command(args),
         "settings" => settings::settings_command(args),
         "toggle-sidebar" => run_bridge_action("toggleSidebarCollapsed", Parser::None, plain, args),
@@ -801,6 +903,16 @@ fn run_command(name: &str, args: &[String]) -> CliResult<()> {
         }
         other => Err(CliError::Other(format!("Unknown command: {other}"))),
     }
+}
+
+/// A verb of a built-in extension that is off (Actions, Spaces, Cloud Boxes, Workspaces) answers
+/// "turned off".
+fn require_built_in(id: &str) -> CliResult<()> {
+    built_in_extensions::require_built_in_extension(id)
+}
+
+fn require_actions() -> CliResult<()> {
+    require_built_in(ghostex_settings_catalog::built_in_extensions::ACTIONS)
 }
 
 fn quick_actions_command(args: &[String]) -> CliResult<()> {

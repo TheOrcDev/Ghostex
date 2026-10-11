@@ -156,10 +156,21 @@ impl GhostexGpuiApp {
         ) {
             return false;
         }
-        matches!(
-            self.keyboard_owner_session(),
-            Some(KeyboardOwnerSession::Command(_))
-        ) || self.shell_focus == ShellFocusTarget::CommandPane
+        // A Terminal view terminal is command focus too, but it is not this pane: typing there
+        // leaves the Commands pane free to minimize.
+        let owner_in_panel = match self.keyboard_owner_session() {
+            Some(KeyboardOwnerSession::Command(session_id)) => {
+                command_pane_group_for_session(&self.command_pane, session_id).is_some_and(
+                    |group_id| {
+                        self.command_pane.dock_for_group(group_id) == Some(CommandPaneDock::Panel)
+                    },
+                )
+            }
+            _ => false,
+        };
+        owner_in_panel
+            || (self.shell_focus == ShellFocusTarget::CommandPane
+                && self.command_pane.focused_group_in_panel())
     }
 
     fn command_pane_pointer_active(&self, _window: &Window) -> bool {

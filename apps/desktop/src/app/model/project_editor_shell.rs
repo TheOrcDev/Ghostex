@@ -51,7 +51,11 @@ impl ProjectEditorAutoSleepEpochs {
             TitlebarMode::Kanban => Some(self.kanban),
             TitlebarMode::Automate => Some(self.automate),
             TitlebarMode::Manage => Some(self.manage),
-            TitlebarMode::Agents | TitlebarMode::Extension(_) => None,
+            TitlebarMode::Agents
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed
+            | TitlebarMode::Work
+            | TitlebarMode::Extension(_) => None,
         }
     }
 
@@ -62,7 +66,13 @@ impl ProjectEditorAutoSleepEpochs {
             TitlebarMode::Kanban => &mut self.kanban,
             TitlebarMode::Automate => &mut self.automate,
             TitlebarMode::Manage => &mut self.manage,
-            TitlebarMode::Agents | TitlebarMode::Extension(_) => return None,
+            TitlebarMode::Agents
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed
+            | TitlebarMode::Work
+            | TitlebarMode::Extension(_) => {
+                return None;
+            }
         };
         *epoch = epoch.wrapping_add(1);
         Some(*epoch)
@@ -103,38 +113,48 @@ impl ProjectEditorAutoSleepPolicySnapshot {
             TitlebarMode::Kanban => self.kanban,
             TitlebarMode::Automate => self.automate,
             TitlebarMode::Manage => self.manage,
-            TitlebarMode::Agents | TitlebarMode::Extension(_) => None,
+            TitlebarMode::Agents
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed
+            | TitlebarMode::Work
+            | TitlebarMode::Extension(_) => None,
         }
     }
 }
 
 /*
 CDXC:Navigation 2026-08-07:
-The workarea a project was last shown in — and how that project's companion
-pane was arranged — is project-owned state, exactly like its Agents split
+The workarea a project was last shown in — and how wide its Agents column is
+beside that view — is project-owned state, exactly like its Agents split
 topology. Keyed by the same canonical workspace project key, so a remote
 project's view memory is machine-scoped and never collides with a same-named
-local project. Companion slot occupants are the project's own shell session
-ids, the identical vocabulary the parked workspace model already stores, so
-they are meaningful only alongside that model and are validated against it on
-restore.
+local project.
 */
 #[derive(Clone, PartialEq)]
 pub(crate) struct GpuiProjectViewState {
     pub(crate) active_mode: TitlebarMode,
-    pub(crate) companion_split_enabled: bool,
-    pub(crate) companion_width_ratio: f32,
-    pub(crate) companion_split_ratio: f32,
-    pub(crate) companion_top_session_id: Option<TerminalSessionId>,
-    pub(crate) companion_bottom_session_id: Option<TerminalSessionId>,
-    pub(crate) companion_focused_slot: ProjectEditorCompanionTerminalSlot,
+    /// CDXC:Workarea 2026-09-20 WHY:
+    /// The tab strip in the order the user left it. It is project-owned for the same reason the
+    /// active view is: two projects keep different sets of tabs open, and a project switch must put
+    /// back exactly the strip that project had. `active_mode` is always one of these, or `Agents`
+    /// when the list is empty and the panel is closed.
+    pub(crate) open_views: Vec<TitlebarMode>,
+    pub(crate) view_strip_layout: GpuiViewStripLayout,
+    /// The last view this project had open, kept even while the panel is closed so reopening it
+    /// comes back to the same view.
+    pub(crate) last_view_mode: Option<TitlebarMode>,
+    pub(crate) workarea_split_ratio: f32,
+    /// CDXC:Workarea 2026-09-26 DECISION:
+    /// User: going between Spaces must not sleep the side panel view; "it should stay active", just the currently active view. A view's awake flag is app-wide, so while another project is on screen the idle timer and the awake cap would count this project's active view as a hidden tab and sleep it. A project left with its active view awake keeps that view out of both (`view_modes_kept_awake_by_parked_projects`) until the user is back or sleeps it on purpose (Sleep Space clears this). Supersedes the 2026-09-25 rule that let it sleep and woke it on the way back in. Runtime only, never persisted: after a launch every view starts asleep (CDXC:Browser 2026-09-19).
+    pub(crate) active_view_awake: bool,
 }
 
 pub(crate) struct ProjectEditorShellModel {
-    pub(crate) left_companion_visible: bool,
-    pub(crate) left_companion_width_ratio: f32,
-    pub(crate) left_companion_split_enabled: bool,
-    pub(crate) left_companion_split_ratio: f32,
+    /// CDXC:Workarea 2026-09-20 WHY:
+    /// The share of the workarea the Agents column keeps while a view is open. It is the live value
+    /// for the active project only; every project keeps its own in `GpuiProjectViewState`, which is
+    /// captured on the way out of a project and restored on the way in.
+    pub(crate) workarea_split_ratio: f32,
     pub(crate) source_lifecycle: ProjectEditorModeLifecycle,
     pub(crate) browser_lifecycle: ProjectEditorModeLifecycle,
     pub(crate) kanban_lifecycle: ProjectEditorModeLifecycle,
@@ -175,10 +195,7 @@ impl ProjectEditorShellModel {
         The optional project-editor companion has explicit shell-owned hide and restore controls before real Source, Browser, Kanban, Automate, and Docs companion content exists. Hiding only toggles companion visibility and focus; it preserves the stored width ratio plus Browser tab/surface identity, placeholder editor identity, command-pane state, and terminal placeholder state.
         */
         Self {
-            left_companion_visible: true,
-            left_companion_width_ratio: PROJECT_EDITOR_COMPANION_WIDTH_RATIO,
-            left_companion_split_enabled: true,
-            left_companion_split_ratio: PROJECT_EDITOR_COMPANION_SPLIT_RATIO,
+            workarea_split_ratio: WORKAREA_SPLIT_DEFAULT_RATIO,
             source_lifecycle: ProjectEditorModeLifecycle::sleeping(),
             browser_lifecycle: ProjectEditorModeLifecycle {
                 state: ProjectEditorLifecycleState::Awake,
@@ -207,7 +224,10 @@ impl ProjectEditorShellModel {
                     },
                 ))
             }
-            TitlebarMode::Agents => None,
+            TitlebarMode::Agents
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed
+            | TitlebarMode::Work => None,
         }
     }
 
@@ -227,8 +247,24 @@ impl ProjectEditorShellModel {
                     recency: u64::MAX,
                 },
             )),
-            TitlebarMode::Agents => None,
+            TitlebarMode::Agents
+            | TitlebarMode::Terminal
+            | TitlebarMode::BotFeed
+            | TitlebarMode::Work => None,
         }
+    }
+
+    /// Every mode this model holds a lifecycle record for: the five built-ins plus whatever
+    /// extension views have been woken in this session.
+    pub(crate) fn lifecycle_modes(&self) -> Vec<TitlebarMode> {
+        let mut modes = project_editor_modes().to_vec();
+        modes.extend(
+            self.extension_lifecycles
+                .keys()
+                .copied()
+                .map(TitlebarMode::Extension),
+        );
+        modes
     }
 
     pub(crate) fn is_mode_awake(&self, mode: TitlebarMode) -> bool {
@@ -236,7 +272,12 @@ impl ProjectEditorShellModel {
             .is_some_and(|lifecycle| lifecycle.state == ProjectEditorLifecycleState::Awake)
     }
 
-    pub(crate) fn mark_mode_awake(&mut self, mode: TitlebarMode) -> bool {
+    /// `kept_awake` are the views the cap may not put to sleep besides `mode` itself.
+    pub(crate) fn mark_mode_awake(
+        &mut self,
+        mode: TitlebarMode,
+        kept_awake: &[TitlebarMode],
+    ) -> bool {
         if !mode.is_project_editor_mode() {
             return false;
         }
@@ -248,17 +289,27 @@ impl ProjectEditorShellModel {
         };
         lifecycle.state = ProjectEditorLifecycleState::Awake;
         lifecycle.recency = recency;
-        self.enforce_awake_mode_cap(mode);
+        self.enforce_awake_mode_cap(mode, kept_awake);
         true
     }
 
-    pub(crate) fn enforce_awake_mode_cap(&mut self, active_mode: TitlebarMode) {
-        let mut awake_modes = project_editor_modes()
-            .iter()
+    /// CDXC:Workarea 2026-09-20 WHY:
+    /// The cap used to look at the five built-in modes only, which was enough while exactly one view
+    /// could be on screen. A tab strip can hold extension views too, and an extension page is the
+    /// same live CEF child view as Kanban's, so the cap counts them: without this six tabs really
+    /// would mean six renderer processes.
+    pub(crate) fn enforce_awake_mode_cap(
+        &mut self,
+        active_mode: TitlebarMode,
+        kept_awake: &[TitlebarMode],
+    ) {
+        let mut awake_modes = self
+            .lifecycle_modes()
+            .into_iter()
             .filter_map(|mode| {
-                let lifecycle = self.lifecycle(*mode)?;
+                let lifecycle = self.lifecycle(mode)?;
                 if lifecycle.state == ProjectEditorLifecycleState::Awake {
-                    Some((*mode, lifecycle.recency))
+                    Some((mode, lifecycle.recency))
                 } else {
                     None
                 }
@@ -274,13 +325,25 @@ impl ProjectEditorShellModel {
             if modes_to_sleep == 0 {
                 break;
             }
-            if mode == active_mode {
+            if mode == active_mode || kept_awake.contains(&mode) {
                 continue;
             }
             if let Some(lifecycle) = self.lifecycle_mut(mode) {
                 lifecycle.state = ProjectEditorLifecycleState::Sleeping;
                 modes_to_sleep -= 1;
             }
+        }
+    }
+
+    /// CDXC:Browser 2026-09-19 DECISION:
+    /// User: after the app loads, web panes sleep until clicked, even when a browser tab or view was open last time, so launch never pays for a web page nobody asked for yet.
+    /// Only the awake flag changes: recency, tabs, and companion layout are kept, and the normal sleeping placeholder wakes the view on click. A restored custom view is included because an unknown extension id otherwise reads as awake.
+    pub(crate) fn sleep_all_modes_for_launch(&mut self, active_mode: TitlebarMode) {
+        for mode in project_editor_modes() {
+            self.mark_mode_sleeping(mode);
+        }
+        if matches!(active_mode, TitlebarMode::Extension(_)) {
+            self.mark_mode_sleeping(active_mode);
         }
     }
 
@@ -296,94 +359,52 @@ impl ProjectEditorShellModel {
         true
     }
 
-    pub(crate) fn set_left_companion_width_ratio(&mut self, ratio: f32, content_span: f32) -> bool {
-        let next_ratio = project_editor_companion_width_ratio_for_span(ratio, content_span);
-        if (self.left_companion_width_ratio - next_ratio).abs() < 0.001 {
+    /// Move the divider between the Agents column and the open view, clamped so neither side goes
+    /// under its own minimum for the current workarea width.
+    pub(crate) fn set_workarea_split_ratio(&mut self, ratio: f32, content_span: f32) -> bool {
+        let next_ratio = workarea_split_ratio_for_span(ratio, content_span);
+        if (self.workarea_split_ratio - next_ratio).abs() < 0.001 {
             return false;
         }
 
-        self.left_companion_width_ratio = next_ratio;
+        self.workarea_split_ratio = next_ratio;
         true
     }
 
-    pub(crate) fn reset_left_companion_width_ratio(&mut self, content_span: Option<f32>) -> bool {
+    /// Double-clicking the divider puts it back at the default share. Without a known span the plain
+    /// clamp applies: the span-aware one would read a zero span as an unsatisfiable minimum.
+    pub(crate) fn reset_workarea_split_ratio(&mut self, content_span: Option<f32>) -> bool {
         let next_ratio = content_span
+            .filter(|content_span| *content_span > 1.0)
             .map(|content_span| {
-                project_editor_companion_width_ratio_for_span(
-                    PROJECT_EDITOR_COMPANION_WIDTH_RATIO,
-                    content_span,
-                )
+                workarea_split_ratio_for_span(WORKAREA_SPLIT_DEFAULT_RATIO, content_span)
             })
-            .unwrap_or(PROJECT_EDITOR_COMPANION_WIDTH_RATIO);
-        if (self.left_companion_width_ratio - next_ratio).abs() < 0.001 {
+            .unwrap_or(WORKAREA_SPLIT_DEFAULT_RATIO);
+        if (self.workarea_split_ratio - next_ratio).abs() < 0.001 {
             return false;
         }
 
-        self.left_companion_width_ratio = next_ratio;
+        self.workarea_split_ratio = next_ratio;
         true
     }
 
-    pub(crate) fn set_left_companion_split_ratio(&mut self, ratio: f32, content_span: f32) -> bool {
-        let Some((minimum, maximum)) = split_drag_ratio_bounds_from_minimums(
-            PANE_RESIZE_MINIMUM_HEIGHT,
-            PANE_RESIZE_MINIMUM_HEIGHT,
-            content_span,
-        ) else {
-            return false;
+    /// Put back a ratio remembered for a project, clamped for the current span when one is known.
+    pub(crate) fn restore_workarea_split_ratio(
+        &mut self,
+        ratio: f32,
+        content_span: Option<f32>,
+    ) -> bool {
+        let next_ratio = match content_span {
+            Some(content_span) if content_span > 1.0 => {
+                workarea_split_ratio_for_span(ratio, content_span)
+            }
+            _ => workarea_split_ratio(ratio),
         };
-        let next_ratio = ratio.clamp(minimum, maximum);
-        if (self.left_companion_split_ratio - next_ratio).abs() < 0.001 {
+        if (self.workarea_split_ratio - next_ratio).abs() < 0.001 {
             return false;
         }
 
-        self.left_companion_split_ratio = next_ratio;
-        true
-    }
-
-    pub(crate) fn reset_left_companion_split_ratio(&mut self, content_span: Option<f32>) -> bool {
-        let next_ratio = content_span
-            .and_then(|content_span| {
-                split_drag_ratio_bounds_from_minimums(
-                    PANE_RESIZE_MINIMUM_HEIGHT,
-                    PANE_RESIZE_MINIMUM_HEIGHT,
-                    content_span,
-                )
-                .map(|(minimum, maximum)| {
-                    PROJECT_EDITOR_COMPANION_SPLIT_RATIO.clamp(minimum, maximum)
-                })
-            })
-            .unwrap_or(PROJECT_EDITOR_COMPANION_SPLIT_RATIO);
-        if (self.left_companion_split_ratio - next_ratio).abs() < 0.001 {
-            return false;
-        }
-
-        self.left_companion_split_ratio = next_ratio;
-        true
-    }
-
-    pub(crate) fn hide_left_companion(&mut self) -> bool {
-        /*
-        CDXC:CodeEditor 2026-06-22-14:42:
-        Companion close/hide needs a pure model transition for regression coverage: it may only hide the companion pane and must preserve stored width, mode lifecycle/recency, Browser tab identity, command-pane state, and terminal placeholder state for later restore.
-        */
-        if !self.left_companion_visible {
-            return false;
-        }
-
-        self.left_companion_visible = false;
-        true
-    }
-
-    pub(crate) fn restore_left_companion(&mut self) -> bool {
-        /*
-        CDXC:CodeEditor 2026-06-22-14:42:
-        Companion restore reuses the current shell-owned width and lifecycle state instead of recreating placeholder surfaces or resetting the project-editor layout.
-        */
-        if self.left_companion_visible {
-            return false;
-        }
-
-        self.left_companion_visible = true;
+        self.workarea_split_ratio = next_ratio;
         true
     }
 }
@@ -412,20 +433,32 @@ pub(crate) fn project_view_state_to_shell_state_json(
 ) -> serde_json::Value {
     serde_json::json!({
         "activeMode": state.active_mode.element_slug(),
-        "companionSplitEnabled": state.companion_split_enabled,
-        "companionWidthRatio": json_number_f32(project_editor_companion_width_ratio(
-            state.companion_width_ratio,
-        )),
-        "companionSplitRatio": json_number_f32(state.companion_split_ratio.clamp(0.1, 0.9)),
-        "companionTopSessionId": state.companion_top_session_id.map(|session_id| session_id.0),
-        "companionBottomSessionId": state
-            .companion_bottom_session_id
-            .map(|session_id| session_id.0),
-        "companionFocusedSlot": match state.companion_focused_slot {
-            ProjectEditorCompanionTerminalSlot::Top => "top",
-            ProjectEditorCompanionTerminalSlot::Bottom => "bottom",
-        },
+        "openViews": state
+            .open_views
+            .iter()
+            .map(|mode| serde_json::Value::String(mode.element_slug()))
+            .collect::<Vec<_>>(),
+        "viewStrip": state.view_strip_layout.to_shell_state_json(),
+        "lastViewMode": state.last_view_mode.map(TitlebarMode::element_slug),
+        "workareaSplitRatio": json_number_f32(workarea_split_ratio(state.workarea_split_ratio)),
     })
+}
+
+/// CDXC:Workarea 2026-09-20 DECISION:
+/// User: "keep saved widths" - a user who had already sized the split keeps that number, and
+/// `WORKAREA_SPLIT_DEFAULT_RATIO` applies only where nothing is saved. The companion's
+/// `companionWidthRatio` (per project) and `leftCompanionWidthRatio` (app-wide) measured the same
+/// thing this ratio does, the left column's share of the workarea, at the same scope and with the
+/// same 0.10..0.85 clamp, so each old key is read back in place of its own successor and nothing is
+/// rescaled. This supersedes the phase 3 decision to drop the old keys and start everyone at 0.44.
+fn workarea_split_ratio_from_shell_state(
+    object: &serde_json::Map<String, serde_json::Value>,
+    legacy_key: &str,
+) -> f32 {
+    json_f32_field(object, "workareaSplitRatio")
+        .or_else(|| json_f32_field(object, legacy_key))
+        .map(workarea_split_ratio)
+        .unwrap_or(WORKAREA_SPLIT_DEFAULT_RATIO)
 }
 
 pub(crate) fn project_view_state_from_shell_state(
@@ -438,39 +471,50 @@ pub(crate) fn project_view_state_from_shell_state(
         .and_then(TitlebarMode::from_slug)?;
     Some(GpuiProjectViewState {
         active_mode,
-        companion_split_enabled: json_bool_field(object, "companionSplitEnabled").unwrap_or(false),
-        companion_width_ratio: json_f32_field(object, "companionWidthRatio")
-            .map(project_editor_companion_width_ratio)
-            .unwrap_or(PROJECT_EDITOR_COMPANION_WIDTH_RATIO),
-        companion_split_ratio: json_f32_field(object, "companionSplitRatio")
-            .map(|ratio| ratio.clamp(0.1, 0.9))
-            .unwrap_or(PROJECT_EDITOR_COMPANION_SPLIT_RATIO),
-        companion_top_session_id: json_u64_field(object, "companionTopSessionId")
-            .map(TerminalSessionId),
-        companion_bottom_session_id: json_u64_field(object, "companionBottomSessionId")
-            .map(TerminalSessionId),
-        companion_focused_slot: match object
-            .get("companionFocusedSlot")
+        open_views: open_view_modes_from_shell_state(object.get("openViews"), active_mode),
+        view_strip_layout: GpuiViewStripLayout::from_shell_state(object.get("viewStrip")),
+        last_view_mode: object
+            .get("lastViewMode")
             .and_then(serde_json::Value::as_str)
-        {
-            Some("bottom") => ProjectEditorCompanionTerminalSlot::Bottom,
-            _ => ProjectEditorCompanionTerminalSlot::Top,
-        },
+            .and_then(TitlebarMode::from_slug)
+            .filter(|mode| *mode != TitlebarMode::Agents),
+        workarea_split_ratio: workarea_split_ratio_from_shell_state(object, "companionWidthRatio"),
+        active_view_awake: false,
     })
+}
+
+/// CDXC:Workarea 2026-09-20 WHY:
+/// A state written before the tab strip existed holds one active view and no list, so it reads back
+/// as a strip of exactly that view: the user sees the tab they already had, not an empty panel.
+/// `Agents` never enters the list; it is the name for "the panel is closed".
+pub(crate) fn open_view_modes_from_shell_state(
+    value: Option<&serde_json::Value>,
+    active_mode: TitlebarMode,
+) -> Vec<TitlebarMode> {
+    let Some(entries) = value.and_then(serde_json::Value::as_array) else {
+        return Vec::from_iter((active_mode != TitlebarMode::Agents).then_some(active_mode));
+    };
+    let mut modes = Vec::new();
+    for entry in entries {
+        let Some(mode) = entry.as_str().and_then(TitlebarMode::from_slug) else {
+            continue;
+        };
+        if mode == TitlebarMode::Agents || modes.contains(&mode) {
+            continue;
+        }
+        modes.push(mode);
+    }
+    if active_mode != TitlebarMode::Agents && !modes.contains(&active_mode) {
+        modes.push(active_mode);
+    }
+    modes
 }
 
 pub(crate) fn project_editor_shell_to_shell_state_json(
     model: &ProjectEditorShellModel,
 ) -> serde_json::Value {
     serde_json::json!({
-        "leftCompanionVisible": model.left_companion_visible,
-        "leftCompanionWidthRatio": json_number_f32(project_editor_companion_width_ratio(
-            model.left_companion_width_ratio,
-        )),
-        "leftCompanionSplitEnabled": model.left_companion_split_enabled,
-        "leftCompanionSplitRatio": json_number_f32(
-            model.left_companion_split_ratio.clamp(0.1, 0.9),
-        ),
+        "workareaSplitRatio": json_number_f32(workarea_split_ratio(model.workarea_split_ratio)),
         "modeLifecycle": project_editor_lifecycle_to_shell_state_json(model),
         "nextLifecycleRecency": model.next_lifecycle_recency,
     })
@@ -482,15 +526,10 @@ pub(crate) fn project_editor_shell_from_shell_state(
 ) -> Option<ProjectEditorShellModel> {
     let object = value.as_object()?;
     let mut model = ProjectEditorShellModel {
-        left_companion_visible: json_bool_field(object, "leftCompanionVisible").unwrap_or(true),
-        left_companion_width_ratio: json_f32_field(object, "leftCompanionWidthRatio")
-            .map(project_editor_companion_width_ratio)
-            .unwrap_or(PROJECT_EDITOR_COMPANION_WIDTH_RATIO),
-        left_companion_split_enabled: json_bool_field(object, "leftCompanionSplitEnabled")
-            .unwrap_or(true),
-        left_companion_split_ratio: json_f32_field(object, "leftCompanionSplitRatio")
-            .map(|ratio| ratio.clamp(0.1, 0.9))
-            .unwrap_or(PROJECT_EDITOR_COMPANION_SPLIT_RATIO),
+        workarea_split_ratio: workarea_split_ratio_from_shell_state(
+            object,
+            "leftCompanionWidthRatio",
+        ),
         ..ProjectEditorShellModel::shell_default()
     };
 
@@ -514,7 +553,7 @@ pub(crate) fn project_editor_shell_from_shell_state(
         .unwrap_or(model.next_lifecycle_recency)
         .max(max_recency.saturating_add(1))
         .max(1);
-    model.enforce_awake_mode_cap(active_mode);
+    model.enforce_awake_mode_cap(active_mode, &[]);
     Some(model)
 }
 
@@ -564,19 +603,25 @@ pub(crate) fn project_editor_lifecycle_from_shell_state(
     )
 }
 
-pub(crate) fn project_editor_companion_width_ratio(ratio: f32) -> f32 {
+/// The Agents column never takes less than a tenth or more than 85% of the workarea, whatever the
+/// window width, so a stored or dragged ratio can never hide either side outright.
+pub(crate) fn workarea_split_ratio(ratio: f32) -> f32 {
     ratio.clamp(0.10, 0.85)
 }
 
-pub(crate) fn project_editor_companion_width_ratio_for_span(ratio: f32, content_span: f32) -> f32 {
+/// The same clamp for a known workarea width: the Agents column keeps a workspace pane's minimum and
+/// the view panel keeps its own, and when the window is too narrow for both the Agents column wins,
+/// because the view panel is the thing the user can close.
+pub(crate) fn workarea_split_ratio_for_span(ratio: f32, content_span: f32) -> f32 {
     let content_span = content_span.max(1.0);
-    let companion_min_ratio = (PROJECT_EDITOR_COMPANION_MIN_WIDTH / content_span).clamp(0.10, 0.85);
-    let editor_max_ratio = ((content_span - WORKSPACE_MIN_WIDTH) / content_span).clamp(0.10, 0.85);
-    let ratio = project_editor_companion_width_ratio(ratio);
+    let agents_min_ratio = (WORKAREA_AGENTS_COLUMN_MIN_WIDTH / content_span).clamp(0.10, 0.85);
+    let agents_max_ratio =
+        ((content_span - WORKAREA_VIEW_PANEL_MIN_WIDTH) / content_span).clamp(0.10, 0.85);
+    let ratio = workarea_split_ratio(ratio);
 
-    if companion_min_ratio <= editor_max_ratio {
-        ratio.clamp(companion_min_ratio, editor_max_ratio)
+    if agents_min_ratio <= agents_max_ratio {
+        ratio.clamp(agents_min_ratio, agents_max_ratio)
     } else {
-        companion_min_ratio
+        agents_min_ratio
     }
 }

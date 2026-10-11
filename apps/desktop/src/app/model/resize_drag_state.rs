@@ -51,16 +51,10 @@ pub(crate) struct BrowserSplitResizeDragState {
     pub(crate) content_span: f32,
 }
 
+/// A drag of the divider between the Agents column and the open view.
 #[derive(Clone, Copy)]
-pub(crate) struct ProjectEditorCompanionResizeDragState {
+pub(crate) struct WorkareaSplitResizeDragState {
     pub(crate) start_x: f32,
-    pub(crate) start_ratio: f32,
-    pub(crate) content_span: f32,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ProjectEditorCompanionSplitResizeDragState {
-    pub(crate) start_y: f32,
     pub(crate) start_ratio: f32,
     pub(crate) content_span: f32,
 }

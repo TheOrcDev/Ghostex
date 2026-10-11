@@ -1,0 +1,55 @@
+//! Typed client-side description of the gxserver wire protocol.
+//!
+//! Rules every type in this crate follows:
+//!
+//! - Unknown fields never fail a parse (`deny_unknown_fields` is never used), because older and
+//!   newer remote daemons are merged into one client.
+//! - Every optional wire key is an `Option<T>` (or [`Tri<T>`] where absent and `null` mean
+//!   different things) with `#[serde(default)]`.
+//! - String enums are open: known variants plus `Other(String)`, so an unknown value round-trips
+//!   instead of failing the frame that carries it.
+//! - Fields whose shape the protocol survey flagged as loose stay `serde_json::Value`.
+//!
+//! The crate has no transport code: sockets, HTTP, and reconnect live in the client crate.
+
+#[macro_use]
+mod open_enum;
+
+pub mod agentbox;
+pub mod chat;
+pub mod client_message;
+pub mod de;
+pub mod delta;
+pub mod event;
+pub mod peek;
+pub mod presentation;
+pub mod rpc;
+pub mod side_state;
+pub mod tri;
+
+pub use chat::*;
+pub use client_message::*;
+pub use de::{Rows, SkippedRow};
+pub use delta::*;
+pub use event::*;
+pub use peek::peek_event_type;
+pub use presentation::*;
+pub use rpc::*;
+pub use side_state::*;
+pub use tri::Tri;
+
+/// The `product` string of every RPC envelope.
+pub const GXSERVER_PRODUCT: &str = "gxserver";
+/// The only protocol version gxserver accepts; the gate is an exact match, not a negotiation.
+pub const GXSERVER_PROTOCOL_VERSION: u64 = 1;
+/// Request header that carries the protocol version.
+pub const GXSERVER_PROTOCOL_VERSION_HEADER: &str = "x-gxserver-protocol-version";
+/// Loopback listener of the local daemon.
+pub const GXSERVER_LOCAL_HOST: &str = "127.0.0.1";
+pub const GXSERVER_LOCAL_PORT: u16 = 58744;
+/// Remote listener (disabled by default, bearer token required).
+pub const GXSERVER_REMOTE_PORT: u16 = 58745;
+/// WebSocket path of the event stream.
+pub const GXSERVER_EVENTS_PATH: &str = "/api/events";
+/// `stream` query value that restricts an event socket to subscribed session chat frames.
+pub const GXSERVER_EVENTS_STREAM_SESSION_CHAT: &str = "sessionChat";

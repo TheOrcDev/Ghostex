@@ -52,23 +52,20 @@ Main code:
 
 - `gpui/src/main.rs`
 - `gpui/assets/titlebar/*.svg`
-- `gpui/titlebar-host.html`
-- `native/sidebar/titlebar-host.tsx`
 
-The titlebar is GPUI-owned. It renders the project label, sidebar toggle, workarea switcher, Open In, Resources, Keep Awake, actions, and Settings controls. Git, Actions, Open In, Tips, and Resources use GPUI-rendered `gpui_component::menu::PopupMenu` surfaces in non-activating popup windows; OS utility menus continue to use `gpui_component::native_menu::NativeMenu`. The legacy React Tips and Resources implementations remain owned by the macOS app and are not loaded by these GPUI titlebar controls.
+The titlebar is GPUI-owned. It renders the project label, sidebar toggle, workarea switcher, Open In, Resources, Keep Awake, actions, and Settings controls. Git, Actions, Open In, Tips, and Resources use GPUI-rendered `gpui_component::menu::PopupMenu` surfaces in non-activating popup windows; OS utility menus continue to use `gpui_component::native_menu::NativeMenu`.
 
 ### Sidebar
 
-**Technology:** existing React `SidebarApp` inside CEF.
+**Technology:** native GPUI renderer fed by the Rust store (`packages/gx-core`).
 
 Main code:
 
-- `gpui/index.html`
-- `gpui/sidebar/main.tsx`
-- `gpui/sidebar/gxserver-runtime.ts`
-- `gpui/src/cef/macos.rs`
+- `apps/desktop/src/app/native_sidebar/` (drawing and input)
+- `apps/desktop/src/app/gx_store/` (the store, its gxserver calls through `gx_rpc`, and the actions)
+- `packages/gx-core/` (the rules)
 
-Rust creates a `CefSurface` for `index.html`. The TypeScript runtime mounts the shared sidebar React app and adapts it to GPUI by providing a local message source and a `vscode.postMessage`-compatible facade. The sidebar gets gxserver bootstrap data through `window.ghostexGpui`, talks to local gxserver over HTTP/WebSocket, and posts active-project/readiness/native-action messages back through fixed CEF bridge functions.
+The React sidebar in CEF was deleted on 2026-09-21 and the QuickJS app runtime that fed it on 2026-09-25; the desktop runs no JavaScript outside its CEF pages.
 
 ### Agents terminal panes
 
@@ -123,16 +120,7 @@ Source has strict readiness and mount-request contracts plus an app-owned shared
 
 ### Kanban workarea
 
-**Technology:** existing React Kanban/tasks page inside CEF.
-
-Main code:
-
-- `gpui/kanban.html`
-- `gpui/sidebar/kanban-main.tsx`
-- `gpui/sidebar/project-workarea-cef-bridge.ts`
-- `gpui/src/main.rs`
-
-Vite emits a self-contained `kanban.html` entry. Rust creates a project-scoped `CefSurface` for that bundled entry only when active project gates allow it. The TypeScript bridge maps existing WebKit-style message-handler calls to fixed CEF bridge functions.
+**Technology:** native GPUI views (`src/app/native_kanban/`, `src/app/native_automate/`). The React Kanban/tasks page and its `kanban.html` entry were deleted on 2026-09-30.
 
 ### Manage workarea
 
@@ -147,18 +135,16 @@ Main code:
 
 Vite emits `manage.html`. Rust creates a project-scoped CEF surface when Manage is available and active. Manage file requests leave the renderer only through fixed bridge functions and are handled by Rust-side project/file policy code instead of trusting arbitrary renderer paths.
 
-### App modals: Settings, Hotkeys, Command Palette, Previous Sessions, Agents Hub
+### App modals: Settings, Quick Access, Agents Hub, Onboarding and the rest
 
-**Technology:** separate GPUI-owned window containing the shared React modal host inside CEF.
+**Technology:** native GPUI child windows.
 
 Main code:
 
-- `gpui/modal-host.html`
-- `native/sidebar/modal-host.tsx`
-- `gpui/src/main.rs`
-- `gpui/src/cef/macos.rs`
+- `src/app/native_app_modal_lifecycle.rs` (`try_open_native_app_modal`, one arm per modal kind)
+- `src/app/window/` (each modal's view)
 
-App modals are not transparent overlays. GPUI opens a real window, creates a `CefSurface`, loads `modal-host.html`, and that entry imports the existing shared React modal host. CEF installs a WebKit-compatible `ghostexAppModalHost` shim only for first-party modal/sidebar entries so the existing React modal code can send lifecycle and command messages.
+Every built-in app modal is a native GPUI window; the React modal host (`modal-host.html`) was deleted on 2026-10-01. The only app modal that still loads a CEF page is an extension modal: `open_gpui_app_modal_window_inner` (`src/app/modals/modal_window.rs`) opens a child window (`src/app/window/modal_host.rs`) with the extension's own page and the extension bridge.
 
 ### Prompt editor
 
@@ -174,9 +160,9 @@ Examples:
 
 - Sidebar bridge functions post active project, readiness, and native action messages.
 - Project workarea bridge functions post Kanban board/beads/image requests and Manage file requests.
-- App modal bridge functions post modal lifecycle and sidebar command messages.
+- Extension bridge functions (`window.ghostex`) post extension calls from extension views, popups and modals.
 
-The bridge is installed only for first-party CEF entries and only forwards bounded string payloads to Rust. Browser tabs and arbitrary web pages do not receive sidebar/workarea/modal bridge functions.
+The bridge is installed only for first-party CEF entries and only forwards bounded string payloads to Rust. Browser tabs and arbitrary web pages do not receive workarea or extension bridge functions.
 
 ## Terminal mount model
 
@@ -207,10 +193,7 @@ Build pieces:
 - `build.rs` compiles Objective-C shims and links Cocoa/Foundation/Metal/CoreText/UserNotifications/etc.
 - Vite builds and inlines the CEF HTML entries:
   - `index.html`
-  - `kanban.html`
   - `manage.html`
-  - `modal-host.html`
-  - `titlebar-host.html`
 - The app packager creates a macOS `.app` bundle with CEF frameworks, helper apps, sidebar resources, sounds, CLI resources, Web resources, and optional remote gxserver packages.
 
 ## Current caveats

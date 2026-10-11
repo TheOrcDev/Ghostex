@@ -1,0 +1,523 @@
+{
+  "agents": [
+    {
+      "detected": true,
+      "displayName": "Claude Code",
+      "hooks": {
+        "dir": "~/.claude/hooks",
+        "linkTarget": "~/.agents/hooks",
+        "state": "linked"
+      },
+      "icon": "claude",
+      "id": "claude-code",
+      "instructions": {
+        "kind": "plain",
+        "path": "~/.claude/CLAUDE.md",
+        "state": "pointer"
+      },
+      "kind": "agent",
+      "lock": {
+        "path": "~/.claude/.skill-lock.json",
+        "state": "linked"
+      },
+      "root": "~/.claude",
+      "skills": {
+        "counts": {
+          "copiesDrifted": 0,
+          "copiesIdentical": 0,
+          "dangling": 0,
+          "linked": 0,
+          "linkedElsewhere": 0,
+          "missing": 0,
+          "onlyHere": 0,
+          "viaWholeFolder": 6
+        },
+        "dir": "~/.claude/skills",
+        "dirLinkTarget": "~/.agents/skills",
+        "dirState": "wholeFolderLink",
+        "entries": [
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-cli",
+            "path": "~/.claude/skills/ghostex-cli",
+            "state": "viaWholeFolder"
+          },
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-help",
+            "path": "~/.claude/skills/ghostex-help",
+            "state": "viaWholeFolder"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "madda-commit-and-push",
+            "path": "~/.claude/skills/madda-commit-and-push",
+            "state": "viaWholeFolder"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "shadcn",
+            "path": "~/.claude/skills/shadcn",
+            "state": "viaWholeFolder"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "web-design-guidelines",
+            "path": "~/.claude/skills/web-design-guidelines",
+            "state": "viaWholeFolder"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "skill-creator",
+            "path": "~/.claude/skills/skill-creator",
+            "state": "viaWholeFolder"
+          }
+        ]
+      },
+      "status": "attention",
+      "universal": false
+    },
+    {
+      "detected": true,
+      "displayName": "Droid",
+      "icon": "factory-droid",
+      "id": "droid",
+      "instructions": {
+        "kind": "plain",
+        "path": "~/.factory/AGENTS.md",
+        "state": "pointer"
+      },
+      "kind": "agent",
+      "root": "~/.factory",
+      "skills": {
+        "counts": {
+          "copiesDrifted": 0,
+          "copiesIdentical": 0,
+          "dangling": 0,
+          "linked": 6,
+          "linkedElsewhere": 0,
+          "missing": 0,
+          "onlyHere": 0,
+          "viaWholeFolder": 0
+        },
+        "dir": "~/.factory/skills",
+        "dirState": "realDir",
+        "entries": [
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-cli",
+            "path": "~/.factory/skills/ghostex-cli",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-help",
+            "path": "~/.factory/skills/ghostex-help",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "madda-commit-and-push",
+            "path": "~/.factory/skills/madda-commit-and-push",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "shadcn",
+            "path": "~/.factory/skills/shadcn",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "skill-creator",
+            "path": "~/.factory/skills/skill-creator",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "web-design-guidelines",
+            "path": "~/.factory/skills/web-design-guidelines",
+            "state": "linked"
+          }
+        ]
+      },
+      "status": "linked",
+      "universal": false
+    },
+    {
+      "detected": true,
+      "displayName": "Kiro CLI",
+      "icon": "kiro",
+      "id": "kiro-cli",
+      "instructions": {
+        "kind": "plain",
+        "path": "~/.kiro/steering/ghostex-shared.md",
+        "state": "missing"
+      },
+      "kind": "agent",
+      "root": "~/.kiro",
+      "skills": {
+        "counts": {
+          "copiesDrifted": 1,
+          "copiesIdentical": 2,
+          "dangling": 1,
+          "linked": 0,
+          "linkedElsewhere": 0,
+          "missing": 3,
+          "onlyHere": 1,
+          "viaWholeFolder": 0
+        },
+        "dir": "~/.kiro/skills",
+        "dirState": "realDir",
+        "entries": [
+          {
+            "ghostexBundled": false,
+            "linkTarget": "~/.agents/skills/faster-chrome-devtools-skill",
+            "name": "faster-chrome-devtools-skill",
+            "path": "~/.kiro/skills/faster-chrome-devtools-skill",
+            "state": "dangling"
+          },
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-cli",
+            "path": "~/.kiro/skills/ghostex-cli",
+            "state": "copyIdentical"
+          },
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-help",
+            "path": "~/.kiro/skills/ghostex-help",
+            "state": "copyIdentical"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "madda-commit-and-push",
+            "path": "~/.kiro/skills/madda-commit-and-push",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "plannotator-review",
+            "path": "~/.kiro/skills/plannotator-review",
+            "state": "onlyHere"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "shadcn",
+            "path": "~/.kiro/skills/shadcn",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "skill-creator",
+            "path": "~/.kiro/skills/skill-creator",
+            "state": "copyDrifted"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "web-design-guidelines",
+            "path": "~/.kiro/skills/web-design-guidelines",
+            "state": "missing"
+          }
+        ]
+      },
+      "status": "attention",
+      "universal": false
+    },
+    {
+      "detected": true,
+      "displayName": "OpenCode",
+      "icon": "opencode",
+      "id": "opencode",
+      "instructions": {
+        "kind": "plain",
+        "path": "~/.config/opencode/AGENTS.md",
+        "state": "pointer"
+      },
+      "kind": "agent",
+      "root": "~/.config/opencode",
+      "skills": {
+        "counts": {
+          "copiesDrifted": 0,
+          "copiesIdentical": 0,
+          "dangling": 1,
+          "linked": 2,
+          "linkedElsewhere": 0,
+          "missing": 0,
+          "onlyHere": 0,
+          "viaWholeFolder": 0
+        },
+        "dir": "~/.config/opencode/skills",
+        "dirState": "realDir",
+        "entries": [
+          {
+            "ghostexBundled": false,
+            "name": "skill-creator",
+            "path": "~/.config/opencode/skills/skill-creator",
+            "state": "linked"
+          },
+          {
+            "ghostexBundled": false,
+            "linkTarget": "~/.agents/skills/test",
+            "name": "test",
+            "path": "~/.config/opencode/skills/test",
+            "state": "dangling"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "web-design-guidelines",
+            "path": "~/.config/opencode/skills/web-design-guidelines",
+            "state": "linked"
+          }
+        ]
+      },
+      "status": "attention",
+      "universal": true
+    },
+    {
+      "detected": true,
+      "displayName": "Claude Code work profile",
+      "hooks": {
+        "dir": "~/.claude-profiles/work/hooks",
+        "state": "missing"
+      },
+      "icon": "claude",
+      "id": "claude-code:work",
+      "instructions": {
+        "kind": "plain",
+        "path": "~/.claude-profiles/work/CLAUDE.md",
+        "state": "legacyPointer"
+      },
+      "kind": "profile",
+      "lock": {
+        "path": "~/.claude-profiles/work/.skill-lock.json",
+        "state": "missing"
+      },
+      "root": "~/.claude-profiles/work",
+      "skills": {
+        "counts": {
+          "copiesDrifted": 0,
+          "copiesIdentical": 0,
+          "dangling": 0,
+          "linked": 0,
+          "linkedElsewhere": 0,
+          "missing": 0,
+          "onlyHere": 0,
+          "viaWholeFolder": 0
+        },
+        "dir": "~/.claude-profiles/work/skills",
+        "dirState": "missing",
+        "entries": [
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-cli",
+            "path": "~/.claude-profiles/work/skills/ghostex-cli",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": true,
+            "name": "ghostex-help",
+            "path": "~/.claude-profiles/work/skills/ghostex-help",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "madda-commit-and-push",
+            "path": "~/.claude-profiles/work/skills/madda-commit-and-push",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "shadcn",
+            "path": "~/.claude-profiles/work/skills/shadcn",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "web-design-guidelines",
+            "path": "~/.claude-profiles/work/skills/web-design-guidelines",
+            "state": "missing"
+          },
+          {
+            "ghostexBundled": false,
+            "name": "skill-creator",
+            "path": "~/.claude-profiles/work/skills/skill-creator",
+            "state": "missing"
+          }
+        ]
+      },
+      "status": "attention",
+      "universal": false
+    },
+    {
+      "detected": false,
+      "displayName": "Goose",
+      "id": "goose",
+      "kind": "agent",
+      "root": "~/.config/goose",
+      "status": "notInstalled",
+      "universal": false
+    }
+  ],
+  "generatedAt": "2026-09-16T12:00:00.000Z",
+  "home": "/Users/example",
+  "problems": [
+    {
+      "count": 2,
+      "detail": "Removed by Sync. Nothing else references them.",
+      "fixable": true,
+      "items": [
+        "~/.kiro/skills/faster-chrome-devtools-skill",
+        "~/.config/opencode/skills/test"
+      ],
+      "kind": "danglingLinks",
+      "title": "2 dangling symlinks point at skills that no longer exist"
+    },
+    {
+      "count": 1,
+      "detail": "Converted to a real folder of per-skill links so agent-local files can coexist with the source.",
+      "fixable": true,
+      "items": [
+        "~/.claude/skills"
+      ],
+      "kind": "wholeFolderLinks",
+      "title": "1 skills folder is a whole-folder link"
+    },
+    {
+      "count": 3,
+      "detail": "Identical copies are backed up and replaced by links. Copies that differ from the source are kept and listed on the agent.",
+      "fixable": true,
+      "items": [
+        "~/.kiro/skills/ghostex-cli",
+        "~/.kiro/skills/ghostex-help",
+        "~/.kiro/skills/skill-creator"
+      ],
+      "kind": "copiedFolders",
+      "title": "3 skill folders are copies, not links"
+    },
+    {
+      "count": 2,
+      "detail": "Sync writes the one-line pointer. A file with other content is backed up first.",
+      "fixable": true,
+      "items": [
+        "~/.kiro/steering/ghostex-shared.md",
+        "~/.claude-profiles/work/CLAUDE.md"
+      ],
+      "kind": "missingPointers",
+      "title": "2 instruction files do not point at ~/.agents/main.md"
+    },
+    {
+      "count": 2,
+      "detail": "Left over in .skill-lock.json after skills were removed or renamed. Pruning is an opt-in step of the plan.",
+      "fixable": true,
+      "items": [
+        "faster-chrome-devtools-skill",
+        "test"
+      ],
+      "kind": "staleLockEntries",
+      "title": "2 lock entries have no skill folder"
+    },
+    {
+      "count": 3,
+      "detail": "Your own skills and the Ghostex bundled skills. The skills CLI skips them on update, which is fine. Nothing to fix.",
+      "fixable": false,
+      "items": [
+        "ghostex-cli",
+        "ghostex-help",
+        "madda-commit-and-push"
+      ],
+      "kind": "untrackedSkills",
+      "title": "3 skills in the source have no lock entry"
+    }
+  ],
+  "source": {
+    "exists": true,
+    "git": "noCommits",
+    "hookScriptCount": 4,
+    "hooksDir": "~/.agents/hooks",
+    "hooksDirExists": true,
+    "lock": {
+      "entryCount": 5,
+      "exists": true,
+      "path": "~/.agents/.skill-lock.json",
+      "staleEntries": [
+        "faster-chrome-devtools-skill",
+        "test"
+      ],
+      "untrackedSkills": [
+        "ghostex-cli",
+        "ghostex-help",
+        "madda-commit-and-push"
+      ]
+    },
+    "mainMdExists": true,
+    "mdFiles": [
+      "main.md",
+      "general-programming.md",
+      "typescript-best-practices.md"
+    ],
+    "path": "~/.agents",
+    "skills": [
+      {
+        "broken": false,
+        "ghostexBundled": true,
+        "inLock": false,
+        "isSymlink": false,
+        "name": "ghostex-cli",
+        "path": "~/.agents/skills/ghostex-cli"
+      },
+      {
+        "broken": false,
+        "ghostexBundled": true,
+        "inLock": false,
+        "isSymlink": false,
+        "name": "ghostex-help",
+        "path": "~/.agents/skills/ghostex-help"
+      },
+      {
+        "broken": false,
+        "ghostexBundled": false,
+        "inLock": false,
+        "isSymlink": false,
+        "name": "madda-commit-and-push",
+        "path": "~/.agents/skills/madda-commit-and-push"
+      },
+      {
+        "broken": false,
+        "ghostexBundled": false,
+        "inLock": true,
+        "isSymlink": false,
+        "name": "shadcn",
+        "path": "~/.agents/skills/shadcn"
+      },
+      {
+        "broken": false,
+        "ghostexBundled": false,
+        "inLock": true,
+        "isSymlink": false,
+        "name": "web-design-guidelines",
+        "path": "~/.agents/skills/web-design-guidelines"
+      },
+      {
+        "broken": false,
+        "ghostexBundled": false,
+        "inLock": true,
+        "isSymlink": false,
+        "name": "skill-creator",
+        "path": "~/.agents/skills/skill-creator"
+      }
+    ],
+    "skillsDir": "~/.agents/skills"
+  },
+  "summary": {
+    "agentsAttention": 4,
+    "agentsDetected": 5,
+    "agentsLinked": 1,
+    "agentsNotInstalled": 1,
+    "copiedSkillFolders": 3,
+    "danglingLinks": 2,
+    "missingPointers": 2,
+    "staleLockEntries": 2,
+    "wholeFolderLinks": 1
+  }
+}

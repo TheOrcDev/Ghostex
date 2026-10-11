@@ -52,6 +52,35 @@ fn current_fast(
     Some(selection.fast.unwrap_or(false))
 }
 
+/// Claude's `/fast` panel ("↯ Fast mode (research preview)" … "Esc to cancel"), open at the tail.
+fn claude_fast_panel_open(screen: &str) -> bool {
+    let lines = screen_lines(screen);
+    let tail: Vec<&String> = lines
+        .iter()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .collect();
+    tail.first()
+        .is_some_and(|line| line.trim() == "Esc to cancel")
+        && tail
+            .iter()
+            .any(|line| line.trim_start().starts_with("↯ Fast mode"))
+}
+
+/// Claude's reason, when the panel says this account cannot turn Fast mode on.
+fn claude_fast_unavailable(screen: &str) -> Option<String> {
+    if !claude_fast_panel_open(screen) {
+        return None;
+    }
+    screen_lines(screen)
+        .iter()
+        .rev()
+        .take(8)
+        .find(|line| line.contains("Fast mode requires"))
+        .map(|line| line.trim().replace(" · ", ". Run ").to_string())
+}
+
 impl PickerDriver<'_> {
     async fn option_screen(
         &self,
@@ -83,6 +112,7 @@ impl PickerDriver<'_> {
         if agent == SessionChatOptionAgent::Claude
             && crate::session_chat_composer::claude_composer_input_text(&screen)
                 .is_some_and(|text| !text.trim().is_empty())
+            && self.claude_input_holds_draft().await
         {
             return Err(agent_busy(
                 "Waiting for the text in the terminal input to be sent or cleared.",
@@ -116,19 +146,55 @@ impl PickerDriver<'_> {
         plan: &CodexPickerPlan,
         agent: SessionChatOptionAgent,
     ) -> Result<(), DomainStateError> {
+        /*
+        CDXC:SessionChat 2026-09-29 WHY:
+        On an account without usage credits Claude Code 2.1.284 answers `/fast` with a panel ("Fast mode requires usage credits · /usage-credits to turn them on", "Esc to cancel") instead of toggling. The panel stayed open, so every retry found no input box and waited forever, holding every model change and message behind it. A panel left open is closed first, the credits answer ends the change with Claude's reason, and a failed toggle never leaves the panel open.
+        */
         let fast_result: Result<(), DomainStateError> = async {
             if let Some(target) = plan.options.fast_mode.as_deref() {
                 let target = target == "on";
+                if agent == SessionChatOptionAgent::Claude
+                    && self
+                        .capture()
+                        .await
+                        .is_some_and(|screen| claude_fast_panel_open(&screen))
+                {
+                    self.write(claude_effort_slider::CLAUDE_ESCAPE).await?;
+                    self.wait_for("close Claude Fast mode panel", |screen| {
+                        ready(screen, agent).then_some(())
+                    })
+                    .await?;
+                }
                 let screen = self.option_screen(agent).await?;
                 let current = current_fast(&screen, agent, plan).ok_or_else(|| {
                     agent_busy("Waiting for the agent to report its Fast mode state.")
                 })?;
                 if current != target {
                     self.type_option_command(agent, "/fast").await?;
-                    self.wait_for("Fast mode", |screen| {
-                        (current_fast(screen, agent, plan) == Some(target)).then_some(())
-                    })
-                    .await?;
+                    let unavailable = self
+                        .wait_for("Fast mode", |screen| {
+                            if current_fast(screen, agent, plan) == Some(target) {
+                                return Some(None);
+                            }
+                            claude_fast_unavailable(screen).map(Some)
+                        })
+                        .await;
+                    let leftover = self
+                        .capture()
+                        .await
+                        .is_some_and(|screen| claude_fast_panel_open(&screen));
+                    if leftover {
+                        let _ = self.write(claude_effort_slider::CLAUDE_ESCAPE).await;
+                        // The mode change below needs the input box back.
+                        let _ = self
+                            .wait_for("close Claude Fast mode panel", |screen| {
+                                ready(screen, agent).then_some(())
+                            })
+                            .await;
+                    }
+                    if let Some(reason) = unavailable? {
+                        return Err(unsupported_selection(format!("{reason}.")));
+                    }
                 }
             }
             Ok(())

@@ -67,7 +67,7 @@ pub(super) async fn handle(
             request_id,
             DomainStateError {
                 code: "internalError",
-                message: format!("Docs request failed: {error}"),
+                message: format!("Files request failed: {error}"),
             },
         ),
     }

@@ -183,7 +183,21 @@ fn json_u16(value: &Value) -> Option<u16> {
         })
 }
 
-pub fn remove_runtime_metadata(paths: &GxserverPaths) -> Result<()> {
+/// CDXC:ServerDaemon 2026-09-23 WHY:
+/// A replacement can publish its metadata while the previous daemon finishes its shutdown tail. Only the daemon that published the current record may remove it, or Windows cannot discover the replacement's listening port during the next install.
+pub fn remove_runtime_metadata(paths: &GxserverPaths, owner: &RuntimeMetadata) -> Result<()> {
+    let text = match fs::read_to_string(&paths.runtime_metadata_file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| "read gxserver runtime metadata before removal")
+        }
+    };
+    let current: RuntimeMetadata = serde_json::from_str(&text)
+        .with_context(|| "parse gxserver runtime metadata before removal")?;
+    if current.pid != owner.pid || current.started_at != owner.started_at {
+        return Ok(());
+    }
     match fs::remove_file(&paths.runtime_metadata_file) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -354,7 +368,7 @@ mod tests {
         assert_eq!(read.server_id, metadata.server_id);
         assert_eq!(read.started_at, metadata.started_at);
         assert_eq!(read.version, metadata.version);
-        remove_runtime_metadata(&paths).expect("remove metadata");
+        remove_runtime_metadata(&paths, &metadata).expect("remove metadata");
         assert!(read_runtime_metadata(&paths)
             .expect("read removed metadata")
             .is_none());

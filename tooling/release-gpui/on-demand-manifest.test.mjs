@@ -133,8 +133,8 @@ describe('component-tag publisher idempotency', () => {
     const script = path.resolve('tooling/release-gpui/create-deterministic-tar.sh');
     const firstArchive = path.join(root, 'first.tar.gz');
     const secondArchive = path.join(root, 'second.tar.gz');
-    execFileSync(script, [first, firstArchive]);
-    execFileSync(script, [second, secondArchive]);
+    execFileSync('bash', [script, first, firstArchive]);
+    execFileSync('bash', [script, second, secondArchive]);
     expect(sha256File(firstArchive)).toBe(sha256File(secondArchive));
   });
 

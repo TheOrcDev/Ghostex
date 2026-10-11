@@ -15,7 +15,13 @@
 // dismiss-on-outside-press menu surface, like the titlebar's dropdown panels —
 // and it occludes only its own visible rectangle.
 
+mod account_flyout;
+mod dictation;
+pub(crate) use dictation::TerminalDictation;
+mod menu_width;
+mod model_pill;
 mod palette;
+mod skills_flyout;
 
 use palette::*;
 
@@ -38,6 +44,7 @@ use gpui::rgb;
 use gpui::svg;
 use gpui_component::h_flex;
 use gpui_component::tooltip::ManagedTooltipExt as _;
+use gpui_component::tooltip::ManagedTooltipPlacement;
 use gpui_component::tooltip::Tooltip;
 
 use crate::app::helpers::*;
@@ -45,11 +52,13 @@ use crate::app::model::*;
 use crate::*;
 
 /*
-Geometry is derived from the real chat composer so the shared controls land on
-the same pixels when a session flips between Chat and Terminal:
+Geometry is derived from the chat composer (apps/desktop/src/app/native_chat/composer.rs)
+so the shared controls land on the same pixels when a session flips between Chat
+and Terminal. It was measured from the React chat, whose shape the native composer
+kept:
 
-  packages/core-ui/chat/session-chat-view.tsx  wrapper `max-w-3xl px-4 pb-3`
-  packages/core-ui/chat/session-chat-composer.tsx  box `rounded-3xl border px-4`
+  wrapper `max-w-3xl px-4 pb-3`
+  box `rounded-3xl border px-4`
 
 so the composer's action row is inset 16 + 1 + 16 = 33px from the pane's side
 edges and its centre line sits 12 + 1 + 10 + 16 = 39px above the pane's bottom
@@ -80,25 +89,28 @@ const TERMINAL_AGENT_BAR_ACCENT_BUTTON_RADIUS: f32 = 6.0;
 const TERMINAL_AGENT_BAR_BUTTON_GAP: f32 = 6.0;
 const TERMINAL_AGENT_BAR_ICON_SIZE: f32 = 16.0;
 /*
-`.ghostex-chat-stash-control .n svg { width: 1.25rem }` in
-packages/core-ui/styles/chat.css: the stack-push glyph only inks 16x15 of its
-24px box, so at the shared 16px size it reads smaller than the paperclip beside
-it. The chat footer renders that one glyph a size up; the bar does the same.
+The React chat's `.ghostex-chat-stash-control .n svg { width: 1.25rem }` (in
+packages/core-ui/styles/chat.css until 2026-09-25): the stack-push glyph only
+inks 16x15 of its 24px box, so at the shared 16px size it reads smaller than the
+paperclip beside it. The chat footer rendered that one glyph a size up; the bar
+does the same.
 */
 const TERMINAL_AGENT_BAR_STASH_ICON_SIZE: f32 = 20.0;
 const TERMINAL_AGENT_BAR_MENU_ICON_SIZE: f32 = 14.0;
 const TERMINAL_AGENT_BAR_MENU_SHORTCUT_SIZE: f32 = 11.0;
 const TERMINAL_AGENT_BAR_INDICATOR_SIZE: f32 = 12.0;
-const TERMINAL_AGENT_BAR_MENU_WIDTH: f32 = 200.0;
+/// The ⋯ menu is as wide as its rows need (`menu_width.rs`), between these.
+const TERMINAL_AGENT_BAR_MENU_MIN_WIDTH: f32 = 200.0;
+const TERMINAL_AGENT_BAR_MENU_MAX_WIDTH: f32 = 360.0;
 /// Distance from the ⋯ button's top edge up to the menu's bottom edge.
 const TERMINAL_AGENT_BAR_MENU_GAP: f32 = 6.0;
 
 /*
-Every glyph below is the Tabler outline icon the chat footer imports from
+Every glyph below is the Tabler outline icon the chat footer used from
 `@tabler/icons-react`, shipped here as an asset file under
 `apps/desktop/assets/titlebar/` (the crate's established icon pattern; see
-`apps/desktop/src/assets.rs`). The mapping is one-for-one with
-`packages/core-ui/chat/session-chat-composer-actions.tsx`:
+`apps/desktop/src/assets.rs`). The mapping is one-for-one with the React chat's
+composer actions, which the native chat footer kept:
 
   IconDots        → dots.svg          IconNote        → note.svg
   IconStackPush   → stack-push.svg    IconPaperclip   → paperclip.svg
@@ -129,31 +141,33 @@ const TERMINAL_AGENT_BAR_FORK_ICON: &str = "titlebar/git-branch.svg";
 const TERMINAL_AGENT_BAR_FULL_RELOAD_ICON: &str = "titlebar/refresh.svg";
 const TERMINAL_AGENT_BAR_STASHED_PROMPTS_ICON: &str = "titlebar/stack-push.svg";
 const TERMINAL_AGENT_BAR_CHAT_VIEW_ICON: &str = "titlebar/message-circle.svg";
+const TERMINAL_AGENT_BAR_DICTATE_ICON: &str = "titlebar/microphone.svg";
+const TERMINAL_AGENT_BAR_STOP_DICTATING_ICON: &str = "titlebar/player-stop.svg";
 const TERMINAL_AGENT_BAR_EXPORT_TRANSCRIPT_ICON: &str = "titlebar/file-export.svg";
 const TERMINAL_AGENT_BAR_SWITCH_ACCOUNT_ICON: &str = "titlebar/user-circle.svg";
-const TERMINAL_AGENT_BAR_SUBMENU_CHEVRON_ICON: &str = "titlebar/chevron-left.svg";
-/// The Switch Account flyout: opens to the LEFT of the menu (the menu hugs the
-/// pane's right edge), bottom-aligned with it, slightly wider for agent names.
+const TERMINAL_AGENT_BAR_SKILLS_ICON: &str = "titlebar/sparkles.svg";
+const TERMINAL_AGENT_BAR_SUBMENU_CHEVRON_ICON: &str = "titlebar/chevron-right.svg";
+/// The Switch Account flyout: bottom-aligned with the menu (its row sits near the window's bottom,
+/// so a flyout hung from the row would run off it), slightly wider for agent names. It opens to
+/// the RIGHT of the menu, like the chat menu's submenus, and to the left only when the window has
+/// no room on the right (the menu hugs the right edge).
 const TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_WIDTH: f32 = 220.0;
+/// Room the flyout keeps clear of the window's right edge before it flips to the left.
+const TERMINAL_AGENT_BAR_FLYOUT_WINDOW_MARGIN: f32 = 8.0;
 const TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_GAP: f32 = 4.0;
 const TERMINAL_AGENT_BAR_COPY_SESSION_ID_ICON: &str = "titlebar/copy.svg";
 
-/// Which pane surface a bar belongs to. Both show Agents workspace sessions and
-/// both resolve into the same shell-session id space, but they focus through
-/// different entry points.
+/// Which pane surface a bar belongs to. One variant today; it stays an enum because the popped-out
+/// view window phase 4 adds is the next one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TerminalAgentBarSurface {
     AgentsPane(WorkspacePaneId),
-    ProjectEditorCompanion(TitlebarMode),
 }
 
 impl TerminalAgentBarSurface {
     fn element_id_suffix(self, session_id: TerminalSessionId) -> String {
         match self {
             Self::AgentsPane(pane_id) => format!("agents-{}-{}", pane_id.0, session_id.0),
-            Self::ProjectEditorCompanion(mode) => {
-                format!("companion-{}-{}", mode.element_slug(), session_id.0)
-            }
         }
     }
 }
@@ -173,6 +187,7 @@ pub(crate) enum TerminalAgentBarAction {
     StashedPrompts,
     AttachPath,
     Maximize,
+    Dictate,
     ToggleChatView,
     PromptEditor,
     VerboseMode,
@@ -184,9 +199,11 @@ pub(crate) enum TerminalAgentBarAction {
     FullReload,
     /// CDXC:AgentProviders 2026-09-03: opens the same-family account flyout
     /// instead of emitting a terminal event; the pick is dispatched to the
-    /// sidebar runtime with the agent id. Hidden when the session has no
+    /// Rust store with the agent id (gx_store/terminal_lifecycle/runtime_actions.rs). Hidden when the session has no
     /// compatible account.
     SwitchAccount,
+    /// Opens the Skills flyout (`skills_flyout.rs`).
+    Skills,
     ExportTranscript,
 }
 
@@ -199,6 +216,7 @@ impl TerminalAgentBarAction {
             Self::StashedPrompts => "stashed-prompts",
             Self::AttachPath => "attach-path",
             Self::Maximize => "maximize",
+            Self::Dictate => "dictate",
             Self::ToggleChatView => "chat-view",
             Self::PromptEditor => "prompt-editor",
             Self::VerboseMode => "verbose-mode",
@@ -209,6 +227,7 @@ impl TerminalAgentBarAction {
             Self::Fork => "fork",
             Self::FullReload => "full-reload",
             Self::SwitchAccount => "switch-account",
+            Self::Skills => "skills",
             Self::ExportTranscript => "export-transcript",
         }
     }
@@ -226,6 +245,7 @@ impl TerminalAgentBarAction {
                 "Maximize pane",
                 terminal_element::TERMINAL_OVERLAY_FOCUS_MODE_HOTKEY_ACTION_ID,
             ),
+            Self::Dictate => ("Dictate", ""),
             Self::ToggleChatView => ("Chat View", "toggleChatView"),
             Self::PromptEditor => ("Prompt editor", "promptEditor"),
             Self::VerboseMode => ("Verbose mode", ""),
@@ -236,6 +256,7 @@ impl TerminalAgentBarAction {
             Self::Fork => ("Fork Session", "forkSession"),
             Self::FullReload => ("Full Reload", "reloadSession"),
             Self::SwitchAccount => ("Switch Account", ""),
+            Self::Skills => ("Skills", ""),
             Self::ExportTranscript => ("Handoff / Export", "exportTranscript"),
         }
     }
@@ -248,6 +269,7 @@ impl TerminalAgentBarAction {
             Self::StashedPrompts => TERMINAL_AGENT_BAR_STASHED_PROMPTS_ICON,
             Self::AttachPath => TERMINAL_AGENT_BAR_ATTACH_PATH_ICON,
             Self::Maximize => TERMINAL_AGENT_BAR_MAXIMIZE_ICON,
+            Self::Dictate => TERMINAL_AGENT_BAR_DICTATE_ICON,
             Self::ToggleChatView => TERMINAL_AGENT_BAR_CHAT_VIEW_ICON,
             Self::PromptEditor => TERMINAL_AGENT_BAR_PROMPT_EDITOR_ICON,
             Self::VerboseMode => TERMINAL_AGENT_BAR_VERBOSE_MODE_ICON,
@@ -258,8 +280,14 @@ impl TerminalAgentBarAction {
             Self::Fork => TERMINAL_AGENT_BAR_FORK_ICON,
             Self::FullReload => TERMINAL_AGENT_BAR_FULL_RELOAD_ICON,
             Self::SwitchAccount => TERMINAL_AGENT_BAR_SWITCH_ACCOUNT_ICON,
+            Self::Skills => TERMINAL_AGENT_BAR_SKILLS_ICON,
             Self::ExportTranscript => TERMINAL_AGENT_BAR_EXPORT_TRANSCRIPT_ICON,
         }
+    }
+
+    /// A row that opens a flyout beside the menu instead of acting, drawn with a chevron.
+    fn opens_flyout(self) -> bool {
+        matches!(self, Self::SwitchAccount | Self::Skills)
     }
 
     fn icon_size(self) -> f32 {
@@ -288,8 +316,10 @@ impl TerminalAgentBarAction {
             Self::ToggleMenu
             | Self::AttachPath
             | Self::Maximize
+            | Self::Dictate
             | Self::PromptEditor
             | Self::SwitchAccount
+            | Self::Skills
             | Self::VerboseMode => None,
         }
     }
@@ -297,8 +327,8 @@ impl TerminalAgentBarAction {
 
 /*
 The ⋯ menu, top to bottom. It is the chat composer's menu row for row, in the
-same order, with the same icons and the same shortcut column — see
-`packages/core-ui/chat/session-chat-composer-actions.tsx`, whose expanded menu
+same order, with the same icons and the same shortcut column; see
+`apps/desktop/src/app/native_chat/actions.rs`, whose expanded menu
 renders a "Chat" group of Verbose mode and Delayed actions, then the host's
 Close After Done action, then the host's "Agent" group, then the host's
 remaining actions in host-list order under no heading at all. The headings themselves come from
@@ -319,6 +349,8 @@ const TERMINAL_AGENT_BAR_MENU_ROWS: &[Option<TerminalAgentBarAction>] = &[
     Some(TerminalAgentBarAction::FullReload),
     Some(TerminalAgentBarAction::SwitchAccount),
     None,
+    // Second from the bottom, as in the chat's More actions menu.
+    Some(TerminalAgentBarAction::Skills),
     Some(TerminalAgentBarAction::ExportTranscript),
 ];
 
@@ -357,23 +389,6 @@ impl GhostexGpuiApp {
         )
     }
 
-    /// The project-editor companion terminal shows the same Agents sessions in
-    /// its own top/bottom split, and had the same overlay cluster, so it gets
-    /// the same bar.
-    pub(crate) fn render_project_editor_companion_terminal_agent_action_bar(
-        &self,
-        mode: TitlebarMode,
-        session_id: Option<TerminalSessionId>,
-        cx: &mut gpui::Context<Self>,
-    ) -> Option<AnyElement> {
-        let session_id = session_id?;
-        self.render_terminal_agent_action_bar(
-            TerminalAgentBarSurface::ProjectEditorCompanion(mode),
-            session_id,
-            cx,
-        )
-    }
-
     fn render_terminal_agent_action_bar(
         &self,
         surface: TerminalAgentBarSurface,
@@ -383,10 +398,23 @@ impl GhostexGpuiApp {
         if self.agents_chat_mode_sessions.contains(&session_id) {
             return None;
         }
+        // CDXC:Terminal 2026-09-25 WHY:
+        // The bar's data (agent name, icon, session id) and a respawned viewer can lag a frame behind a session switch. Rendering no bar for that frame grew the terminal body by the bar's height, which resized the session grid and ran the whole claim, dump and redraw pipeline twice per switch.
+        // A running session whose bar has rendered once in this project reserves the bar's height with an invisible spacer while its data lags. Sleeping and other non-running bodies never reserve it, and a project switch forgets the set because session ids are project-local.
+        let reserve_bar = self.terminal_agent_bar_sessions.contains(&session_id)
+            && self
+                .agents_workspace
+                .session(session_id)
+                .is_some_and(|session| {
+                    session.presentation_state == TerminalSessionPresentationState::Running
+                });
         if !self.agents_gpui_engine_terminals.contains_key(&session_id) {
-            return None;
+            return reserve_bar.then(|| Self::reserved_terminal_agent_bar(surface, session_id));
         }
-        let presentation_session = self.agents_sidebar_session_for_terminal(session_id)?;
+        let Some(presentation_session) = self.agents_sidebar_session_for_terminal(session_id)
+        else {
+            return reserve_bar.then(|| Self::reserved_terminal_agent_bar(surface, session_id));
+        };
         let agent_name = terminal_agent_bar_agent_name(presentation_session);
         let agent_session_id = presentation_session
             .agent_session_id
@@ -397,7 +425,16 @@ impl GhostexGpuiApp {
             && presentation_session.agent_icon.is_none()
             && agent_session_id.is_none()
         {
-            return None;
+            return reserve_bar.then(|| Self::reserved_terminal_agent_bar(surface, session_id));
+        }
+        if !self.terminal_agent_bar_sessions.contains(&session_id) {
+            // Rendering only reads the app; the set is updated right after this frame.
+            let app = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = app.update(cx, |app, _| {
+                    app.terminal_agent_bar_sessions.insert(session_id);
+                });
+            });
         }
         let has_session_note = presentation_session.has_session_note;
         let stashed_prompt_count = presentation_session.stashed_prompt_count;
@@ -429,6 +466,10 @@ impl GhostexGpuiApp {
                         .when_some(full_session_id, |this, full_session_id| {
                             this.child(terminal_agent_bar_session_id(full_session_id, &suffix, cx))
                         })
+                        .when_some(
+                            self.render_terminal_agent_bar_model_pill(session_id, &suffix, cx),
+                            |this, pill| this.child(pill),
+                        )
                         .child(div().flex_1().min_w_0())
                         .child(self.render_terminal_agent_bar_menu_anchor(
                             surface, session_id, menu_open, &suffix, cx,
@@ -473,6 +514,18 @@ impl GhostexGpuiApp {
                             None,
                             cx,
                         ))
+                        .when(dictation::TERMINAL_DICTATION, |this| {
+                            this.child(self.render_terminal_agent_bar_icon_button(
+                                surface,
+                                session_id,
+                                TerminalAgentBarAction::Dictate,
+                                false,
+                                0,
+                                &suffix,
+                                None,
+                                cx,
+                            ))
+                        })
                         .child(self.render_terminal_agent_bar_icon_button(
                             surface,
                             session_id,
@@ -488,6 +541,7 @@ impl GhostexGpuiApp {
                             session_id,
                             TerminalAgentBarAction::PromptEditor,
                             &suffix,
+                            self.configured_tooltip_delay(),
                             cx,
                         )),
                 )
@@ -502,10 +556,7 @@ impl GhostexGpuiApp {
     can never be drawn enabled while its handler refuses to run it, which is the
     failure the old hard-coded `is_enabled` list invited.
 
-    In Agents, Maximize is the workspace's reversible pane Focus mode. In a
-    project-editor companion it is a route into Agents focused on that exact
-    session; the matching Agents button becomes Minimize and restores the
-    remembered view and companion slot.
+    Maximize is the workspace's reversible pane Focus mode.
     */
     fn terminal_agent_bar_action_state(
         &self,
@@ -545,9 +596,16 @@ impl GhostexGpuiApp {
                     .is_none()
                 {
                     let agent_name = agent_name.unwrap_or("This agent");
-                    state.disabled_reason = Some(format!(
-                        "{agent_name} isn't supported by Ghostex Chat View yet\nOnly Claude, Codex, Cursor, Antigravity, Pi, Omp, Grok, and Hermes are supported\nPlease request other agents on X or the Discord"
-                    ));
+                    let in_box = self.agents_session_chat_view_unavailable(session_id);
+                    state.disabled_reason = Some(if in_box {
+                        format!(
+                            "{agent_name} runs in a cloud box\nChat View needs the agent on this computer"
+                        )
+                    } else {
+                        format!(
+                            "{agent_name} isn't supported by Ghostex Chat View yet\nOnly Claude, Codex, Cursor, Antigravity, Pi, Omp, Grok, and Hermes are supported\nPlease request other agents on X or the Discord"
+                        )
+                    });
                 } else if !self.agents_session_chat_eligible(session_id) {
                     // CDXC:AgentHooks 2026-09-03: the session id Chat
                     // View needs arrives through the agent's Ghostex hook, so
@@ -561,23 +619,19 @@ impl GhostexGpuiApp {
                     ));
                 }
             }
+            TerminalAgentBarAction::Dictate => {
+                if self.terminal_dictating(session_id) {
+                    state.icon_path = TERMINAL_AGENT_BAR_STOP_DICTATING_ICON;
+                    state.label = "Stop dictating";
+                }
+            }
             TerminalAgentBarAction::Maximize => {
-                if let TerminalAgentBarSurface::AgentsPane(pane_id) = surface {
-                    let restoring_companion = self
-                        .terminal_agent_bar_companion_focus_return
-                        .is_some_and(|target| target.session_id == session_id);
-                    if restoring_companion || self.agents_workspace.focus_mode_pane == Some(pane_id)
-                    {
-                        state.icon_path = TERMINAL_AGENT_BAR_EXIT_MAXIMIZE_ICON;
-                        state.label = "Exit maximize";
-                    } else if self.agents_workspace.focus_mode_eligible_leaf_count() <= 1 {
-                        state.disabled_reason = Some("Session is not in a split pane".to_string());
-                    }
-                } else {
-                    // The global Agents Focus-mode chord is inert while a
-                    // project view owns the workarea; only advertise the
-                    // companion button's click action here.
-                    state.hotkey_action_id = "";
+                let TerminalAgentBarSurface::AgentsPane(pane_id) = surface;
+                if self.agents_workspace.focus_mode_pane == Some(pane_id) {
+                    state.icon_path = TERMINAL_AGENT_BAR_EXIT_MAXIMIZE_ICON;
+                    state.label = "Exit maximize";
+                } else if self.agents_workspace.focus_mode_eligible_leaf_count() <= 1 {
+                    state.disabled_reason = Some("Session is not in a split pane".to_string());
                 }
             }
             _ => {}
@@ -628,12 +682,34 @@ impl GhostexGpuiApp {
             .when(menu_open, |this| {
                 // Dismissal lives on the anchor, not the menu: the ⋯ button is
                 // inside the anchor, so its own click never counts as an
-                // outside press and the toggle keeps working. Anything else,
-                // including a menu row, closes the menu.
-                this.on_mouse_down_out(cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
-                    this.close_terminal_agent_action_bar_menu(cx);
-                }))
-                .child(self.render_terminal_agent_bar_menu(surface, session_id, suffix, cx))
+                // outside press and the toggle keeps working. The menu and its
+                // flyout are drawn outside the 28px anchor, so GPUI reports a
+                // press on them as outside too, in the capture phase, before
+                // the row's own handler: the Switch Account row, which must
+                // keep the menu up, closed it. A press inside the menu or the
+                // flyout is therefore not a dismissal; the rows close the menu
+                // themselves when they should.
+                let menu_bounds = self.agents_terminal_action_bar_menu_measure.clone();
+                let flyout_bounds = TerminalBarPopupBounds::default();
+                let (inside_menu, inside_flyout) = (menu_bounds.clone(), flyout_bounds.clone());
+                this.on_mouse_down_out(cx.listener(
+                    move |this, event: &MouseDownEvent, _window, cx| {
+                        if inside_menu.get().0.contains(&event.position)
+                            || inside_flyout.get().contains(&event.position)
+                        {
+                            return;
+                        }
+                        this.close_terminal_agent_action_bar_menu(cx);
+                    },
+                ))
+                .child(self.render_terminal_agent_bar_menu(
+                    surface,
+                    session_id,
+                    suffix,
+                    &menu_bounds,
+                    &flyout_bounds,
+                    cx,
+                ))
             })
             .into_any_element()
     }
@@ -643,8 +719,24 @@ impl GhostexGpuiApp {
         surface: TerminalAgentBarSurface,
         session_id: TerminalSessionId,
         suffix: &str,
+        menu_bounds: &TerminalBarMenuMeasure,
+        flyout_bounds: &TerminalBarPopupBounds,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        // Where the menu was last painted and how wide the window was: the flyout opens to the
+        // right unless it would run past the window's right edge. Nothing is measured on the
+        // frame the menu first opens, and the flyout cannot be open yet, so it starts on the right.
+        let (painted_menu, window_width) = menu_bounds.get();
+        let switchable_agents = self
+            .agents_sidebar_session_for_terminal(session_id)
+            .map(|session| session.switchable_agents.clone())
+            .unwrap_or_default();
+        // The chat's menu rule: Claude and Codex sessions switch between saved accounts, every
+        // other agent between the daemon's switchable-agent rows.
+        let accounts_target = self.terminal_agent_bar_account_target(session_id);
+        let has_switch_account = accounts_target.is_some() || !switchable_agents.is_empty();
+        let menu_width =
+            self.terminal_agent_bar_menu_width(surface, session_id, has_switch_account, cx);
         let mut menu = div()
             .id(format!("ghostex-gpui-terminal-agent-bar-menu-{suffix}"))
             .absolute()
@@ -652,7 +744,8 @@ impl GhostexGpuiApp {
             .bottom(px(
                 TERMINAL_AGENT_BAR_BUTTON_SIZE + TERMINAL_AGENT_BAR_MENU_GAP
             ))
-            .w(px(TERMINAL_AGENT_BAR_MENU_WIDTH))
+            .w(px(menu_width))
+            .font_family(crate::ui_fonts::UI_FONT)
             .flex()
             .flex_col()
             .p(px(5.0))
@@ -674,18 +767,13 @@ impl GhostexGpuiApp {
                 )
                 .blur_radius(px(22.0)),
             ])
-            .occlude();
+            .occlude()
+            .child(terminal_agent_bar_menu_probe(menu_bounds));
 
-        let switchable_agents = self
-            .agents_sidebar_session_for_terminal(session_id)
-            .map(|session| session.switchable_agents.clone())
-            .unwrap_or_default();
         for row in TERMINAL_AGENT_BAR_MENU_ROWS {
             match row {
                 Some(action) => {
-                    if *action == TerminalAgentBarAction::SwitchAccount
-                        && switchable_agents.is_empty()
-                    {
+                    if *action == TerminalAgentBarAction::SwitchAccount && !has_switch_account {
                         continue;
                     }
                     if let Some(heading) = terminal_agent_bar_menu_group_heading(*action) {
@@ -700,16 +788,84 @@ impl GhostexGpuiApp {
                 }
             }
         }
-        if self.agents_terminal_action_bar_account_submenu_open && !switchable_agents.is_empty() {
-            menu = menu.child(self.render_terminal_agent_bar_account_submenu(
+        if self.agents_terminal_action_bar_account_submenu_open {
+            let opens_left = |flyout_width: f32| {
+                painted_menu.size.width > px(0.0)
+                    && painted_menu.right()
+                        + px(TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_GAP + flyout_width)
+                        > window_width - px(TERMINAL_AGENT_BAR_FLYOUT_WINDOW_MARGIN)
+            };
+            if accounts_target.is_some() {
+                if let Some((_, rows)) = self.agents_terminal_action_bar_account_page.clone() {
+                    menu = menu.child(
+                        self.render_terminal_agent_bar_account_page(
+                            menu_width,
+                            opens_left(account_flyout::ACCOUNT_PAGE_WIDTH),
+                            &rows,
+                            suffix,
+                            flyout_bounds,
+                            cx,
+                        ),
+                    );
+                }
+            } else if !switchable_agents.is_empty() {
+                menu = menu.child(self.render_terminal_agent_bar_account_submenu(
+                    session_id,
+                    menu_width,
+                    opens_left(TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_WIDTH),
+                    &switchable_agents,
+                    suffix,
+                    flyout_bounds,
+                    cx,
+                ));
+            }
+        }
+
+        if let Some(rows) = self.agents_terminal_action_bar_skills.as_deref() {
+            let (painted_menu, window_width) = menu_bounds.get();
+            let opens_left = painted_menu.size.width > px(0.0)
+                && painted_menu.right()
+                    + px(
+                        TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_GAP + skills_flyout::SKILLS_FLYOUT_WIDTH
+                    )
+                    > window_width - px(TERMINAL_AGENT_BAR_FLYOUT_WINDOW_MARGIN);
+            menu = menu.child(self.render_terminal_agent_bar_skills_flyout(
+                surface,
                 session_id,
-                &switchable_agents,
+                menu_width,
+                opens_left,
+                rows,
                 suffix,
+                flyout_bounds,
                 cx,
             ));
         }
-
         menu.into_any_element()
+    }
+
+    /// Invisible spacer with the bar's exact layout height: while the bar's
+    /// data lags behind the selection, the terminal body keeps its row count
+    /// instead of growing for one frame and reflowing the session grid.
+    fn reserved_terminal_agent_bar(
+        surface: TerminalAgentBarSurface,
+        session_id: TerminalSessionId,
+    ) -> AnyElement {
+        let suffix = surface.element_id_suffix(session_id);
+        h_flex()
+            .id(format!("ghostex-gpui-terminal-agent-bar-reserved-{suffix}"))
+            .flex_shrink_0()
+            .w_full()
+            .justify_center()
+            .px(px(TERMINAL_AGENT_BAR_OUTER_PADDING))
+            .pb(px(TERMINAL_AGENT_BAR_BOTTOM_INSET))
+            .child(
+                h_flex()
+                    .w_full()
+                    .max_w(px(TERMINAL_AGENT_BAR_MAX_CONTENT_WIDTH
+                        - 2.0 * TERMINAL_AGENT_BAR_OUTER_PADDING))
+                    .h(px(TERMINAL_AGENT_BAR_HEIGHT)),
+            )
+            .into_any_element()
     }
 
     pub(crate) fn toggle_terminal_agent_action_bar_menu(
@@ -721,11 +877,15 @@ impl GhostexGpuiApp {
             (self.agents_terminal_action_bar_menu_session != Some(session_id))
                 .then_some(session_id);
         self.agents_terminal_action_bar_account_submenu_open = false;
+        self.agents_terminal_action_bar_account_page = None;
+        self.agents_terminal_action_bar_skills = None;
         cx.notify();
     }
 
     pub(crate) fn close_terminal_agent_action_bar_menu(&mut self, cx: &mut gpui::Context<Self>) {
         self.agents_terminal_action_bar_account_submenu_open = false;
+        self.agents_terminal_action_bar_account_page = None;
+        self.agents_terminal_action_bar_skills = None;
         if self
             .agents_terminal_action_bar_menu_session
             .take()
@@ -736,23 +896,27 @@ impl GhostexGpuiApp {
     }
 
     /// The Switch Account flyout: one row per compatible account. Picking one
-    /// closes the menu and hands the agent id to the sidebar runtime, which
+    /// closes the menu and hands the agent id to the Rust store
+    /// (gx_store/terminal_lifecycle/runtime_actions.rs), which
     /// asks gxserver to rewrite the row and then runs its Full reload.
     fn render_terminal_agent_bar_account_submenu(
         &self,
         session_id: TerminalSessionId,
+        menu_width: f32,
+        opens_left: bool,
         switchable_agents: &[GpuiSwitchableSessionAgent],
         suffix: &str,
+        flyout_bounds: &TerminalBarPopupBounds,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let offset = px(menu_width + TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_GAP);
         let mut submenu = div()
             .id(format!(
                 "ghostex-gpui-terminal-agent-bar-account-submenu-{suffix}"
             ))
             .absolute()
-            .right(px(
-                TERMINAL_AGENT_BAR_MENU_WIDTH + TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_GAP
-            ))
+            .when(opens_left, |this| this.right(offset))
+            .when(!opens_left, |this| this.left(offset))
             .bottom_0()
             .w(px(TERMINAL_AGENT_BAR_ACCOUNT_SUBMENU_WIDTH))
             .flex()
@@ -776,7 +940,8 @@ impl GhostexGpuiApp {
                 )
                 .blur_radius(px(22.0)),
             ])
-            .occlude();
+            .occlude()
+            .child(terminal_agent_bar_popup_bounds_probe(flyout_bounds));
         for (index, agent) in switchable_agents.iter().enumerate() {
             let agent_id = agent.agent_id.clone();
             let icon = agent
@@ -852,15 +1017,29 @@ impl GhostexGpuiApp {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // The bar's own click handlers stop propagation before the managed
+        // tooltip's hide-on-click runs, and a control that leaves the tree
+        // (Chat View swaps the whole pane) never reports a hover-leave, so its
+        // tooltip would stay on screen over the next view.
+        gpui_component::Root::hide_tooltip(window, cx);
         if action == TerminalAgentBarAction::ToggleMenu {
             self.toggle_terminal_agent_action_bar_menu(session_id, cx);
+            return;
+        }
+        if action == TerminalAgentBarAction::Skills {
+            self.toggle_terminal_agent_bar_skills(session_id, cx);
             return;
         }
         // The Switch Account row only opens its flyout; the menu stays up so
         // the account rows have somewhere to be.
         if action == TerminalAgentBarAction::SwitchAccount {
-            self.agents_terminal_action_bar_account_submenu_open =
-                !self.agents_terminal_action_bar_account_submenu_open;
+            let open = !self.agents_terminal_action_bar_account_submenu_open;
+            self.agents_terminal_action_bar_account_submenu_open = open;
+            self.agents_terminal_action_bar_account_page = None;
+            self.agents_terminal_action_bar_skills = None;
+            if open && let Some(target) = self.terminal_agent_bar_account_target(session_id) {
+                self.open_terminal_agent_bar_account_page(target, cx);
+            }
             cx.notify();
             return;
         }
@@ -875,18 +1054,26 @@ impl GhostexGpuiApp {
                 .agents_sidebar_session_for_terminal(session_id)
                 .and_then(terminal_agent_bar_agent_name)
                 .unwrap_or_else(|| "this agent".to_string());
-            self.open_gpui_settings_agent_hooks_page(window, cx);
-            self.dispatch_gpui_app_modal_toast(
-                "warning",
-                &format!("{agent_name} hasn't reported its session yet"),
-                &format!(
-                    "Chat View needs the {agent_name} hooks installed, approved, and running. Check their status here. Resuming and working/done indicators also require hooks."
-                ),
-                cx,
-            );
+            /*
+            CDXC:AgentScreenDetection 2026-10-06 WHY:
+            "Not eligible" usually means the agent's hook has not reported its
+            conversation, but an agent that died before reporting lands here too
+            and the hooks page is the wrong remedy for a corpse. One bounded
+            readSessionChat decides: a session whose terminal carries a notice
+            (it exited, it is stuck on a login) opens in chat to show that
+            card; everything else keeps the hooks education path.
+            */
+            self.probe_agents_chat_notice_admission(session_id, agent_name, window, cx);
             return;
         }
         if !self.terminal_agent_bar_action_enabled(surface, session_id, action) {
+            return;
+        }
+
+        // Dictation listens in the app and pastes into the terminal when it ends
+        // (`dictation.rs`), so it is not a `TerminalViewEvent` either.
+        if action == TerminalAgentBarAction::Dictate {
+            self.toggle_terminal_dictation(session_id, window, cx);
             return;
         }
 
@@ -897,21 +1084,15 @@ impl GhostexGpuiApp {
             return;
         }
 
-        match surface {
-            TerminalAgentBarSurface::AgentsPane(pane_id) => {
-                self.focus_agents_terminal_mount_slot(
-                    AgentsTerminalBodyMountSlotId {
-                        pane_id,
-                        session_id,
-                    },
-                    window,
-                    cx,
-                );
-            }
-            TerminalAgentBarSurface::ProjectEditorCompanion(mode) => {
-                self.focus_project_editor_companion_terminal_session(mode, session_id, window, cx);
-            }
-        }
+        let TerminalAgentBarSurface::AgentsPane(pane_id) = surface;
+        self.focus_agents_terminal_mount_slot(
+            AgentsTerminalBodyMountSlotId {
+                pane_id,
+                session_id,
+            },
+            window,
+            cx,
+        );
 
         let Some(view) = self
             .agents_gpui_engine_terminals
@@ -941,94 +1122,12 @@ impl GhostexGpuiApp {
     fn perform_terminal_agent_bar_maximize_action(
         &mut self,
         surface: TerminalAgentBarSurface,
-        session_id: TerminalSessionId,
-        window: &mut Window,
+        _session_id: TerminalSessionId,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        match surface {
-            TerminalAgentBarSurface::ProjectEditorCompanion(mode) => {
-                let slot = if self.project_editor_companion_terminal_session_id == Some(session_id)
-                {
-                    ProjectEditorCompanionTerminalSlot::Top
-                } else if self.project_editor_companion_secondary_terminal_session_id
-                    == Some(session_id)
-                {
-                    ProjectEditorCompanionTerminalSlot::Bottom
-                } else {
-                    return;
-                };
-                let Some(pane_id) = self.agents_workspace.pane_id_for_session(session_id) else {
-                    return;
-                };
-
-                self.terminal_agent_bar_companion_focus_return =
-                    Some(TerminalAgentBarCompanionFocusReturn {
-                        mode,
-                        session_id,
-                        slot,
-                    });
-                self.agents_workspace.select_tab(pane_id, session_id);
-                if self.agents_workspace.focus_mode_pane != Some(pane_id) {
-                    if self.agents_workspace.focus_mode_pane.is_some() {
-                        let _ = self.agents_workspace.toggle_focus_mode();
-                    }
-                    let _ = self.agents_workspace.toggle_focus_mode();
-                }
-                if self.set_active_mode(TitlebarMode::Agents, window, cx) {
-                    self.focus_agents_pane(pane_id, cx);
-                    cx.notify();
-                } else {
-                    self.terminal_agent_bar_companion_focus_return = None;
-                }
-            }
-            TerminalAgentBarSurface::AgentsPane(pane_id) => {
-                if self.restore_terminal_agent_bar_companion_focus(session_id, window, cx) {
-                    return;
-                }
-                self.toggle_agents_focus_mode_for_pane(pane_id, cx);
-            }
-        }
-    }
-
-    fn restore_terminal_agent_bar_companion_focus(
-        &mut self,
-        session_id: TerminalSessionId,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(target) = self
-            .terminal_agent_bar_companion_focus_return
-            .filter(|target| target.session_id == session_id)
-        else {
-            return false;
-        };
-        if !self.titlebar_mode_available(target.mode)
-            || !self.agents_workspace.has_session(session_id)
-        {
-            self.terminal_agent_bar_companion_focus_return = None;
-            return false;
-        }
-
-        self.terminal_agent_bar_companion_focus_return = None;
-        if self.agents_workspace.focus_mode_pane.is_some() {
-            let _ = self.agents_workspace.toggle_focus_mode();
-        }
-        match target.slot {
-            ProjectEditorCompanionTerminalSlot::Top => {
-                self.project_editor_companion_terminal_session_id = Some(session_id);
-            }
-            ProjectEditorCompanionTerminalSlot::Bottom => {
-                self.project_editor_shell.left_companion_split_enabled = true;
-                self.project_editor_companion_secondary_terminal_session_id = Some(session_id);
-            }
-        }
-        self.project_editor_companion_focused_terminal_slot = target.slot;
-        if !self.set_active_mode(target.mode, window, cx) {
-            return false;
-        }
-        self.focus_project_editor_companion_terminal_session(target.mode, session_id, window, cx);
-        cx.notify();
-        true
+        let TerminalAgentBarSurface::AgentsPane(pane_id) = surface;
+        self.toggle_agents_focus_mode_for_pane(pane_id, cx);
     }
 }
 
@@ -1064,10 +1163,10 @@ impl GhostexGpuiApp {
         let enabled = state.disabled_reason.is_none();
         let right_click_action = (action == TerminalAgentBarAction::StashPrompt)
             .then_some(TerminalAgentBarAction::StashedPrompts);
-        terminal_agent_bar_button_base(action, &state, suffix)
+        terminal_agent_bar_button_base(action, &state, suffix, self.configured_tooltip_delay())
             .size(px(TERMINAL_AGENT_BAR_BUTTON_SIZE))
             .when(enabled, |this| {
-                this.hover(|this| this.bg(terminal_agent_bar_hover_background()))
+                this.hover(|this| this.bg(terminal_agent_bar_button_hover_background()))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
@@ -1196,7 +1295,7 @@ impl GhostexGpuiApp {
                         .child(shortcut),
                 )
             })
-            .when(action == TerminalAgentBarAction::SwitchAccount, |this| {
+            .when(action.opens_flyout(), |this| {
                 // Submenu affordance; points left because that is where the
                 // flyout opens.
                 this.child(terminal_agent_bar_icon(
@@ -1237,8 +1336,7 @@ fn terminal_agent_bar_session_id(
             cx.listener(move |_this, _event: &MouseDownEvent, window, cx| {
                 window.prevent_default();
                 cx.stop_propagation();
-                cx.write_to_clipboard(ClipboardItem::new_string(copy_session_id.clone()));
-                gpui_play_copy_sound();
+                gpui_copy_to_clipboard(ClipboardItem::new_string(copy_session_id.clone()), cx);
             }),
         )
         .child(
@@ -1264,7 +1362,9 @@ fn terminal_agent_bar_session_id(
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .group_hover(group, |this| this.bg(terminal_agent_bar_hover_background()))
+                .group_hover(group, |this| {
+                    this.bg(terminal_agent_bar_button_hover_background())
+                })
                 .child(
                     svg()
                         .flex_shrink_0()
@@ -1284,6 +1384,7 @@ fn terminal_agent_bar_accent_button(
     session_id: TerminalSessionId,
     action: TerminalAgentBarAction,
     suffix: &str,
+    tooltip_delay: std::time::Duration,
     cx: &mut gpui::Context<GhostexGpuiApp>,
 ) -> AnyElement {
     let (label, hotkey_action_id) = action.label_and_hotkey_action_id();
@@ -1294,7 +1395,7 @@ fn terminal_agent_bar_accent_button(
         label,
         tooltip_override: None,
     };
-    terminal_agent_bar_button_base(action, &state, suffix)
+    terminal_agent_bar_button_base(action, &state, suffix, tooltip_delay)
         .size(px(TERMINAL_AGENT_BAR_ACCENT_BUTTON_SIZE))
         .rounded(px(TERMINAL_AGENT_BAR_ACCENT_BUTTON_RADIUS))
         .bg(terminal_agent_bar_accent_background())
@@ -1321,6 +1422,7 @@ fn terminal_agent_bar_button_base(
     action: TerminalAgentBarAction,
     state: &TerminalAgentBarActionState,
     suffix: &str,
+    tooltip_delay: std::time::Duration,
 ) -> gpui::Stateful<gpui::Div> {
     // A disabled control names why it is inert instead of leaving the user to
     // guess, and drops the shortcut: naming a chord that would do nothing here
@@ -1350,7 +1452,11 @@ fn terminal_agent_bar_button_base(
         .justify_center()
         .rounded_full()
         .cursor_default()
-        .managed_tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .managed_discrete_tooltip_with_placement(
+            ManagedTooltipPlacement::Auto,
+            tooltip_delay,
+            move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx),
+        )
 }
 
 fn terminal_agent_bar_agent_name(session: &GpuiSidebarWorkspaceTabSession) -> Option<String> {
@@ -1394,7 +1500,7 @@ fn terminal_agent_bar_stashed_prompt_count_badge(count: u64) -> AnyElement {
 /// the chat-surface actions (Verbose mode, Delayed actions, Close After Done)
 /// and "Agent" over the host's session actions, and leaves its trailing
 /// host-action block unnamed;
-/// see `packages/core-ui/chat/session-chat-composer-actions.tsx`. This menu
+/// see `apps/desktop/src/app/native_chat/actions.rs`. This menu
 /// mirrors that, so Export transcript stays under a bare separator here too.
 fn terminal_agent_bar_menu_group_heading(action: TerminalAgentBarAction) -> Option<&'static str> {
     match action {
@@ -1419,6 +1525,36 @@ fn terminal_agent_bar_menu_group_label(label: &'static str) -> AnyElement {
         .text_size(px(11.0))
         .text_color(terminal_agent_bar_session_id_color())
         .child(label)
+        .into_any_element()
+}
+
+/// Where a popup of the ⋯ menu was last painted, so the anchor's dismissal can tell a press on it
+/// from a press elsewhere.
+type TerminalBarPopupBounds = std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>;
+
+/// Where the ⋯ menu was last painted and the window's width then. Kept on the app, so the next
+/// render knows which side of the menu has room for the flyout.
+pub(crate) type TerminalBarMenuMeasure =
+    std::rc::Rc<std::cell::Cell<(gpui::Bounds<gpui::Pixels>, gpui::Pixels)>>;
+
+/// An invisible child that records the menu's painted bounds and the window's width.
+fn terminal_agent_bar_menu_probe(measure: &TerminalBarMenuMeasure) -> AnyElement {
+    let measure = measure.clone();
+    gpui::canvas(
+        move |painted, window, _| measure.set((painted, window.viewport_size().width)),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
+}
+
+/// An invisible child that records its parent's painted bounds.
+fn terminal_agent_bar_popup_bounds_probe(bounds: &TerminalBarPopupBounds) -> AnyElement {
+    let bounds = bounds.clone();
+    gpui::canvas(move |painted, _, _| bounds.set(painted), |_, _, _, _| {})
+        .absolute()
+        .size_full()
         .into_any_element()
 }
 

@@ -6,6 +6,7 @@
 
 use std::{
     env, fs,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
     sync::atomic::Ordering,
@@ -17,11 +18,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::app::helpers::*;
 use crate::*;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+/// CDXC:CodeEditor 2026-09-23 WHY:
+/// Remote preflight and payload transfer have their own bounded timeouts; charging them against editor readiness could exhaust its budget before any tunnel starts. Windows sends the launch script through unused SSH stdin so long workspace paths cannot exceed OpenSSH's command-line limit.
 pub(crate) fn source_code_server_spawn_remote_runtime(
     target: &SourceCodeServerRuntimeTarget,
     startup_deadline: Instant,
 ) -> Result<SourceCodeServerRuntimeStartOutput, String> {
+    let readiness_timeout = startup_deadline.saturating_duration_since(Instant::now());
     let SourceCodeServerRuntimeEndpoint::Remote {
         component_platform,
         execution_target,
@@ -49,21 +53,25 @@ pub(crate) fn source_code_server_spawn_remote_runtime(
         let store = on_demand_component_store()?.ok_or_else(|| {
             "The sealed code-server component manifest is unavailable.".to_string()
         })?;
-        let installed = store
-            .query_current_for_platform(SOURCE_CODE_SERVER_COMPONENT_NAME, component_platform)?;
+        let store_platform = source_code_server_component_store_platform(target)
+            .unwrap_or_else(|| component_platform.clone());
+        let installed =
+            store.query_current_for_platform(SOURCE_CODE_SERVER_COMPONENT_NAME, &store_platform)?;
         if !installed.installed {
             return Err("The Linux code-server component is not installed.".to_string());
         }
+        #[cfg(not(target_os = "windows"))]
         source_code_server_validate_remote_linux_payload(&installed.path)?;
         source_code_server_ensure_remote_payload(machine_config, execution_target, &installed)?;
     }
 
+    let startup_deadline = Instant::now() + readiness_timeout;
     for local_port in source_code_server_remote_candidate_ports() {
         if Instant::now() >= startup_deadline {
             break;
         }
         let askpass = gpui_remote_ssh_askpass_script(machine_config)?;
-        let mut arguments = gpui_remote_ssh_client_options(machine_config.has_saved_password);
+        let mut arguments = gpui_remote_ssh_tunnel_options(machine_config.has_saved_password);
         arguments.extend([
             "-o".to_string(),
             "ExitOnForwardFailure=yes".to_string(),
@@ -74,16 +82,21 @@ pub(crate) fn source_code_server_spawn_remote_runtime(
         arguments.push(gpui_remote_command_for_execution_target(
             execution_target,
             &if native_windows {
-                gpui_remote_windows_code_launch(&target.project_path)
+                "$gxLaunch=[Console]::In.ReadToEnd(); & ([ScriptBlock]::Create($gxLaunch))"
+                    .to_string()
             } else {
                 source_code_server_remote_launch_command(&target.project_path)
             },
         ));
-        let mut command = Command::new("/usr/bin/ssh");
+        let mut command = gpui_remote_background_command(&gpui_remote_ssh_executable());
         command
             .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdin(Stdio::piped())
+            .stdout(if native_windows {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            })
             .stderr(Stdio::null());
         if let Some(environment) = gpui_remote_ssh_askpass_environment(askpass.as_ref()) {
             command.envs(environment);
@@ -93,6 +106,52 @@ pub(crate) fn source_code_server_spawn_remote_runtime(
             Ok(child) => child,
             Err(_) => continue,
         };
+        if native_windows {
+            let script = gpui_remote_windows_code_launch(&target.project_path);
+            let Some(mut stdin) = child.stdin.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not open the remote Code launch input.".to_string());
+            };
+            let (written, result) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let result = stdin.write_all(script.as_bytes());
+                drop(stdin);
+                let _ = written.send(result);
+            });
+            if !matches!(
+                result.recv_timeout(startup_deadline.saturating_duration_since(Instant::now())),
+                Ok(Ok(()))
+            ) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not send the remote Code launch script over SSH.".to_string());
+            }
+        } else {
+            let Some(mut stdout) = child.stdout.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not open the remote Code startup receipt.".to_string());
+            };
+            let (sent, received) = std::sync::mpsc::sync_channel(1);
+            let reader = std::thread::spawn(move || {
+                let mut receipt = [0_u8; b"GHOSTEX_CODE_READY\n".len()];
+                let ready =
+                    stdout.read_exact(&mut receipt).is_ok() && receipt == *b"GHOSTEX_CODE_READY\n";
+                let _ = sent.send(ready);
+            });
+            let acknowledged = matches!(
+                received.recv_timeout(startup_deadline.saturating_duration_since(Instant::now())),
+                Ok(true)
+            );
+            if !acknowledged {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                continue;
+            }
+            let _ = reader.join();
+        }
         let readiness = source_code_server_wait_until_responsive_at(
             local_port,
             startup_deadline.saturating_duration_since(Instant::now()),
@@ -113,12 +172,24 @@ pub(crate) fn source_code_server_spawn_remote_runtime(
     Err("Remote Source runtime did not become reachable through SSH.".to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn source_code_server_ensure_remote_payload(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
     installed: &component_store::InstalledComponent,
 ) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let linux_archive = component_store::verify_installed_windows_code_server_component(
+        &installed.path,
+        &installed.version,
+        &installed.platform,
+    )?;
+    #[cfg(target_os = "windows")]
+    let component_key = format!(
+        "{}:{}",
+        linux_archive.component_version, linux_archive.platform
+    );
+    #[cfg(not(target_os = "windows"))]
     let component_key = format!("{}:{}", installed.version, installed.platform);
     let ready_command = source_code_server_remote_payload_ready_command(component_key.as_str());
     let ready = gpui_run_remote_ssh_in_execution_target(
@@ -131,29 +202,38 @@ pub(crate) fn source_code_server_ensure_remote_payload(
         return Ok(());
     }
 
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let archive_path = env::temp_dir().join(format!(
-        "ghostex-code-server-{}-{unique:x}.tar.gz",
-        std::process::id()
+    #[cfg(target_os = "windows")]
+    let archive_path = installed.path.join(format!(
+        "code-server-{}-{}.tar.gz",
+        linux_archive.component_version, linux_archive.platform
     ));
-    let archive_result = Command::new("/usr/bin/tar")
-        .args(["-czf"])
-        .arg(&archive_path)
-        .arg("-C")
-        .arg(&installed.path)
-        .arg(".")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| "Could not package the Linux code-server component.".to_string())?;
-    if !archive_result.success() {
-        let _ = fs::remove_file(&archive_path);
-        return Err("Could not package the Linux code-server component.".to_string());
-    }
+    #[cfg(not(target_os = "windows"))]
+    let archive_path = {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let archive_path = env::temp_dir().join(format!(
+            "ghostex-code-server-{}-{unique:x}.tar.gz",
+            std::process::id()
+        ));
+        let archive_result = gpui_remote_background_command(&gpui_remote_tar_executable())
+            .args(["-czf"])
+            .arg(&archive_path)
+            .arg("-C")
+            .arg(&installed.path)
+            .arg(".")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| "Could not package the Linux code-server component.".to_string())?;
+        if !archive_result.success() {
+            let _ = fs::remove_file(&archive_path);
+            return Err("Could not package the Linux code-server component.".to_string());
+        }
+        archive_path
+    };
     let upload_command = source_code_server_remote_payload_upload_command(component_key.as_str());
     let upload = gpui_run_remote_ssh_with_stdin_file_in_execution_target(
         config,
@@ -162,6 +242,7 @@ pub(crate) fn source_code_server_ensure_remote_payload(
         archive_path.as_path(),
         Duration::from_secs(180),
     );
+    #[cfg(not(target_os = "windows"))]
     let _ = fs::remove_file(&archive_path);
     if upload.exit_code != 0 {
         return Err("Could not upload the Linux code-server component over SSH.".to_string());
@@ -169,35 +250,35 @@ pub(crate) fn source_code_server_ensure_remote_payload(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn source_code_server_remote_data_root_script() -> &'static str {
     r#"if [ -n "${GHOSTEX_HOME:-}" ] && [ "${GHOSTEX_HOME#/}" != "$GHOSTEX_HOME" ]; then ghostex_data="$GHOSTEX_HOME"; elif [ -n "${XDG_DATA_HOME:-}" ]; then ghostex_data="$XDG_DATA_HOME/ghostex"; else ghostex_data="$HOME/.local/share/ghostex"; fi
 code_root="$ghostex_data/code-server""#
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn source_code_server_remote_payload_ready_command(component_key: &str) -> String {
     format!(
         "set -eu\n{}\ntest -f \"$code_root/package/.ghostex-component-key\"\ntest \"$(cat \"$code_root/package/.ghostex-component-key\")\" = {}\ntest -x \"$code_root/package/lib/node\"\ntest -f \"$code_root/package/out/node/entry.js\"\ntest -f \"$code_root/package/lib/vscode/out/server-main.js\"",
         source_code_server_remote_data_root_script(),
-        gpui_shell_quote(component_key),
+        gpui_shell_single_quote(component_key),
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn source_code_server_remote_payload_upload_command(component_key: &str) -> String {
     format!(
         "set -eu\n{}\numask 077\nreleases=\"$code_root/releases\"\nmkdir -p \"$releases\"\nstage=\"$releases/.install-$$\"\nrelease=\"$releases/{}\"\npointer_stage=\"$code_root/.package-$$\"\ncleanup() {{ rm -rf -- \"$stage\"; rm -f -- \"$pointer_stage\"; }}\ntrap cleanup EXIT HUP INT TERM\nfor abandoned in \"$releases\"/.install-* \"$code_root\"/.package-*; do\n  if [ ! -e \"$abandoned\" ] && [ ! -L \"$abandoned\" ]; then continue; fi\n  abandoned_pid=${{abandoned##*-}}\n  case \"$abandoned_pid\" in ''|*[!0-9]*) continue ;; esac\n  if [ ! -d \"/proc/$abandoned_pid\" ]; then rm -rf -- \"$abandoned\"; fi\ndone\nrm -rf -- \"$stage\"\nrm -f -- \"$pointer_stage\"\nmkdir \"$stage\"\ntar -xzf - -C \"$stage\"\ntest -x \"$stage/lib/node\"\ntest -f \"$stage/out/node/entry.js\"\ntest -f \"$stage/lib/vscode/out/server-main.js\"\nprintf '%s' {} >\"$stage/.ghostex-component-key\"\nif [ -e \"$release\" ]; then\n  test -f \"$release/.ghostex-component-key\"\n  test \"$(cat \"$release/.ghostex-component-key\")\" = {}\n  test -x \"$release/lib/node\"\n  test -f \"$release/out/node/entry.js\"\n  test -f \"$release/lib/vscode/out/server-main.js\"\n  rm -rf -- \"$stage\"\nelif ! mv -T \"$stage\" \"$release\"; then\n  test -f \"$release/.ghostex-component-key\"\n  test \"$(cat \"$release/.ghostex-component-key\")\" = {}\n  test -x \"$release/lib/node\"\n  test -f \"$release/out/node/entry.js\"\n  test -f \"$release/lib/vscode/out/server-main.js\"\n  rm -rf -- \"$stage\"\nfi\nprevious_release=$(readlink -f \"$code_root/package\" 2>/dev/null || true)\nln -s \"releases/{}\" \"$pointer_stage\"\nmv -Tf \"$pointer_stage\" \"$code_root/package\"\nfor candidate in \"$releases\"/*; do\n  [ -d \"$candidate\" ] || continue\n  if [ \"$candidate\" = \"$release\" ] || [ \"$candidate\" = \"$previous_release\" ]; then continue; fi\n  if find \"$candidate\" -maxdepth 0 -mmin +10 -print -quit | grep -q .; then rm -rf -- \"$candidate\"; fi\ndone\ntrap - EXIT HUP INT TERM",
         source_code_server_remote_data_root_script(),
         installed_key_path_fragment(component_key),
-        gpui_shell_quote(component_key),
-        gpui_shell_quote(component_key),
-        gpui_shell_quote(component_key),
+        gpui_shell_single_quote(component_key),
+        gpui_shell_single_quote(component_key),
+        gpui_shell_single_quote(component_key),
         installed_key_path_fragment(component_key),
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn installed_key_path_fragment(component_key: &str) -> String {
     component_key
         .chars()
@@ -211,17 +292,20 @@ pub(crate) fn installed_key_path_fragment(component_key: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+/// CDXC:CodeEditor 2026-09-24 WHY:
+/// A rapid remote reopen reached the previous server through the shared port while its SSH shell was still shutting down. Hold the shared runtime lock through owned child teardown, terminate that child when SSH stdin closes, and require its own bind receipt before accepting HTTP health; the shared session socket remains stable for remote prompt-editor clients.
 pub(crate) fn source_code_server_remote_launch_command(project_path: &Path) -> String {
     format!(
-        "set -eu\n{}\npackage=\"$code_root/package\"\nruntime=\"$code_root/runtime\"\nmkdir -p \"$runtime/user-data\" \"$runtime/extensions\"\ncd {}\nchild=\ncleanup() {{ if [ -n \"$child\" ]; then kill \"$child\" 2>/dev/null || true; wait \"$child\" 2>/dev/null || true; fi; }}\ntrap cleanup EXIT HUP INT TERM\n\"$package/lib/node\" \"$package/out/node/entry.js\" --auth none --bind-addr 127.0.0.1:{} --disable-telemetry --disable-update-check --disable-workspace-trust --disable-getting-started-override --ignore-last-opened --app-name 'ghostex Code' --user-data-dir \"$runtime/user-data\" --extensions-dir \"$runtime/extensions\" &\nchild=$!\nwait \"$child\"",
+        "set -eu\n{}\npackage=\"$code_root/package\"\nruntime=\"$code_root/runtime\"\nmkdir -p \"$runtime/user-data\" \"$runtime/extensions\"\nexec 9>\"$runtime/launch.lock\"\nflock 9\ncd {}\nexec \"$package/lib/node\" --eval {} -- \"$package/out/node/entry.js\" --auth none --log info --bind-addr 127.0.0.1:{} --disable-telemetry --disable-update-check --disable-workspace-trust --disable-getting-started-override --ignore-last-opened --app-name 'ghostex Code' --user-data-dir \"$runtime/user-data\" --extensions-dir \"$runtime/extensions\"",
         source_code_server_remote_data_root_script(),
-        gpui_shell_quote(gpui_path_string(project_path).as_str()),
+        gpui_shell_single_quote(gpui_path_string(project_path).as_str()),
+        gpui_shell_single_quote(include_str!("source_code_supervisor.js")),
         SOURCE_CODE_SERVER_REMOTE_PORT,
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn source_code_server_remote_candidate_ports() -> Vec<u16> {
     let range =
         u64::from(SOURCE_CODE_SERVER_TUNNEL_PORT_MAX - SOURCE_CODE_SERVER_TUNNEL_PORT_MIN + 1);
@@ -256,6 +340,7 @@ pub(crate) fn run_remote_manage_files_bridge_request_for_project_snapshot(
     additional_docs_folders_text: &str,
     reference: &GpuiRemoteProjectReference,
     target: Option<&GpuiRemoteGxserverRequestTarget>,
+    project_scope: bool,
 ) -> ManageFilesBridgeOutcome {
     /*
     CDXC:Docs 2026-08-06:
@@ -272,7 +357,7 @@ pub(crate) fn run_remote_manage_files_bridge_request_for_project_snapshot(
     let request_id = manage_request_string(&request, "requestId").unwrap_or_default();
     let result = (|| {
         let snapshot =
-            snapshot.ok_or_else(|| "No active Docs project is available.".to_string())?;
+            snapshot.ok_or_else(|| "No active project is available for Files.".to_string())?;
         manage_validate_request_identity(&request, snapshot)?;
         if !matches!(
             action.as_str(),
@@ -288,15 +373,20 @@ pub(crate) fn run_remote_manage_files_bridge_request_for_project_snapshot(
                 | "move"
                 | "copyFullPath"
                 | "addToSessionContext"
+                | "search"
         ) {
-            return if action == "revealInFinder" {
-                Err("Reveal in Finder is unavailable for remote Docs items.".to_string())
+            return if action == "openWithSystemApp" {
+                Err("Files on a remote computer can't open in this computer's apps.".to_string())
+            } else if action == "revealInFinder" {
+                Err("Open Location is unavailable for remote files.".to_string())
+            } else if action == "openInCodeView" {
+                Err("Open in Code view is unavailable for remote files.".to_string())
             } else {
-                Err("Unsupported Docs file action.".to_string())
+                Err("Unsupported Files action.".to_string())
             };
         }
         let target =
-            target.ok_or_else(|| "Reconnect the remote machine to use Docs.".to_string())?;
+            target.ok_or_else(|| "Reconnect the remote machine to use Files.".to_string())?;
         let mut params = serde_json::Map::new();
         params.insert(
             "action".to_string(),
@@ -314,7 +404,13 @@ pub(crate) fn run_remote_manage_files_bridge_request_for_project_snapshot(
             "additionalDocsFolders".to_string(),
             serde_json::Value::String(additional_docs_folders_text.to_string()),
         );
-        for key in ["path", "newPath", "content", "revision"] {
+        if project_scope {
+            params.insert(
+                "scope".to_string(),
+                serde_json::Value::String("project".to_string()),
+            );
+        }
+        for key in ["path", "newPath", "content", "revision", "query"] {
             if let Some(value) = manage_request_string(&request, key) {
                 params.insert(key.to_string(), serde_json::Value::String(value));
             }
@@ -337,7 +433,7 @@ pub(crate) fn run_remote_manage_files_bridge_request_for_project_snapshot(
                 .and_then(serde_json::Value::as_str)
                 != Some(request_id.as_str())
         {
-            return Err("The remote Docs service returned an invalid response.".to_string());
+            return Err("The remote Files service returned an invalid response.".to_string());
         }
         Ok(response)
     })();
@@ -349,6 +445,7 @@ pub(crate) fn read_remote_manage_docs_resource(
     project_id: &str,
     relative_path: &str,
     additional_docs_folders_text: &str,
+    project_scope: bool,
 ) -> Option<Vec<u8>> {
     let target = target?;
     let request_id = format!(
@@ -364,6 +461,7 @@ pub(crate) fn read_remote_manage_docs_resource(
             "path": relative_path,
             "projectId": project_id,
             "requestId": request_id,
+            "scope": if project_scope { "project" } else { "docs" },
         }),
         Duration::from_secs(30),
     )

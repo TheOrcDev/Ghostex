@@ -101,14 +101,12 @@ pub(crate) fn command_pane_sleeping_placeholder_wake_text_is_alphanumeric(
 pub(crate) enum FocusedTerminalTextTarget {
     Agents,
     Command,
-    ProjectEditorCompanion,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FocusedTerminalTextMountTarget {
     Agents(AgentsTerminalBodyMountSlotId),
     Command(CommandTerminalBodyMountSlotId),
-    ProjectEditorCompanion(ProjectEditorCompanionTerminalBodyMountSlotId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,21 +119,13 @@ pub(crate) fn focused_terminal_text_target(
     active_mode: TitlebarMode,
     shell_focus: ShellFocusTarget,
 ) -> Option<FocusedTerminalTextTarget> {
+    let _ = active_mode;
     match shell_focus {
-        ShellFocusTarget::AgentsPane(_) if active_mode == TitlebarMode::Agents => {
-            Some(FocusedTerminalTextTarget::Agents)
-        }
+        ShellFocusTarget::AgentsPane(_) => Some(FocusedTerminalTextTarget::Agents),
         ShellFocusTarget::CommandPane => Some(FocusedTerminalTextTarget::Command),
-        ShellFocusTarget::ProjectEditorCompanion(mode)
-            if active_mode == mode && mode.is_project_editor_mode() =>
-        {
-            Some(FocusedTerminalTextTarget::ProjectEditorCompanion)
-        }
-        ShellFocusTarget::AgentsPane(_)
-        | ShellFocusTarget::BrowserSurface
+        ShellFocusTarget::BrowserSurface
         | ShellFocusTarget::BrowserPane(_)
-        | ShellFocusTarget::ProjectEditorSurface(_)
-        | ShellFocusTarget::ProjectEditorCompanion(_) => None,
+        | ShellFocusTarget::ProjectEditorSurface(_) => None,
     }
 }
 

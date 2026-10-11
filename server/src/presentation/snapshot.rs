@@ -21,6 +21,7 @@ pub fn read_presentation_snapshot(
     server_id: &str,
     auto_settle_after_days: Option<f64>,
     sidebar_v2_selected: bool,
+    sidebar_spaces_enabled: bool,
     sessions: Vec<Value>,
 ) -> Result<Value, DomainStateError> {
     let repository = DomainRepository::new(db, server_id);
@@ -40,6 +41,8 @@ pub fn read_presentation_snapshot(
         sidebar_v2_selected,
     );
     insert_delayed_send_presentation_payload(db, &mut snapshot)?;
+    crate::close_after_done::insert_close_after_done_presentation_payload(&mut snapshot, db);
+    crate::coordinators::insert_coordinator_presentation_payload(&mut snapshot, db, &repository);
     insert_session_chat_queue_presentation_payload(&mut snapshot, db);
     insert_session_chat_draft_presentation_payload(&mut snapshot, db);
     insert_session_agent_note_presentation_payload(&mut snapshot, db);
@@ -49,6 +52,8 @@ pub fn read_presentation_snapshot(
     insert_workspace_groups_presentation_payload(&mut snapshot, db)?;
     insert_sidebar_project_collections_presentation_payload(&mut snapshot, db)?;
     insert_sidebar_spaces_presentation_payload(&mut snapshot, db)?;
+    insert_sidebar_workspaces_presentation_payload(&mut snapshot, db)?;
+    insert_sidebar_spaces_enabled_presentation_payload(&mut snapshot, sidebar_spaces_enabled);
     insert_custom_session_tags_presentation_payload(&mut snapshot, db)?;
     Ok(snapshot)
 }
@@ -154,6 +159,8 @@ pub fn build_presentation_session_delta(
         &now_iso(),
     );
     insert_delayed_send_session_projection(db, &mut presentation_session)?;
+    crate::close_after_done::insert_close_after_done_session_projection(&mut presentation_session, db);
+    crate::coordinators::insert_coordinator_session_projection(&mut presentation_session, db, &session);
     insert_session_chat_queue_session_projection(
         &mut presentation_session,
         db,
@@ -374,6 +381,15 @@ pub fn presentation_capabilities(sidebar_v2_selected: bool) -> Value {
         shows its full unfiltered project list — not even the built-in Other view.
         */
         "spaces": true,
+        /*
+        CDXC:Workspaces 2026-10-09 WHY:
+        `workspaces` promises `sidebarWorkspaces` in the snapshot, `workspaceId` on projects and
+        Spaces, and the workspace routes (`/api/readWorkspaces` … `/api/moveProjectToWorkspace`).
+        A client viewing a daemon without it shows that machine's projects and Spaces unfiltered
+        and offers no workspace tile or Move to workspace, which is also what the Workspaces
+        built-in extension being off means, so the flag follows that switch.
+        */
+        "workspaces": crate::workspaces::workspaces_feature_enabled(),
         /*
         CDXC:Worktrees 2026-07-29-00:00:
         `worktreeSessions` promises `/api/createWorktreeSession` and

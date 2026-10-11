@@ -30,7 +30,13 @@ pub(crate) async fn handle(
     let paths = state.paths.clone();
     let server_id = state.metadata.server_id.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
-        if super::resolve::text(&params["view"], "availability") == "spaces" {
+        // With the Spaces extension off there is one Space, so a view limited to Spaces is
+        // available in every project (built_in_extensions.rs).
+        let spaces_on = ghostex_settings_catalog::built_in_extensions::enabled_in_value(
+            crate::session_lifecycle::read_sidebar_settings(&paths).as_ref(),
+            ghostex_settings_catalog::built_in_extensions::SPACES,
+        );
+        if spaces_on && super::resolve::text(&params["view"], "availability") == "spaces" {
             let db = crate::storage::open_gxserver_database(&paths)?;
             if !super::scope::matches(&db, &server_id, &params)? {
                 let mut release = params;

@@ -4,22 +4,9 @@ use std::{
 };
 
 use anyhow::Result;
-use gpui_component::{WindowExt, notification::Notification};
 
 use crate::app::helpers::*;
 use crate::*;
-
-#[cfg(target_os = "macos")]
-pub(crate) fn gpui_app_shots_c_string(ptr: *const std::ffi::c_char) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let text = unsafe { std::ffi::CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .trim()
-        .to_string();
-    (!text.is_empty()).then_some(text)
-}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn gpui_menu_bar_status_action_c_string(ptr: *const std::ffi::c_char) -> Option<String> {
@@ -58,9 +45,7 @@ pub(crate) fn queue_gpui_session_attention_notification_click(session_id: String
     foreground
         .spawn(async move {
             let _ = app.update_in(&mut async_app, |this, window, cx| {
-                cx.activate(true);
-                window.activate_window();
-                this.dispatch_gpui_status_pet_activation(session_id.as_str(), cx);
+                this.activate_system_notification(session_id, window, cx);
             });
         })
         .detach();
@@ -78,6 +63,23 @@ pub(crate) fn queue_gpui_accessibility_display_options_changed(should_reduce_mot
         .spawn(async move {
             let _ = app.update_in(&mut async_app, |this, _window, cx| {
                 this.set_gpui_pet_overlay_reduce_motion_enabled(should_reduce_motion, cx);
+                cx.set_reduce_motion(should_reduce_motion);
+                // The same notification carries Reduce Transparency, which turns window glass off.
+                let settings = shared_settings::shared_sidebar_settings_snapshot();
+                let glass_changed = refresh_window_glass(settings.object());
+                if glass_changed {
+                    this.refresh_workarea_page_themes(&settings, cx);
+                    cx.notify();
+                }
+                // Every window draws its own pet and pages (app/workspace_windows/).
+                this.update_other_workspace_windows(cx, move |app, cx| {
+                    app.set_gpui_pet_overlay_reduce_motion_enabled(should_reduce_motion, cx);
+                    if glass_changed {
+                        let settings = shared_settings::shared_sidebar_settings_snapshot();
+                        app.refresh_workarea_page_themes(&settings, cx);
+                    }
+                    cx.notify();
+                });
             });
         })
         .detach();
@@ -135,45 +137,6 @@ pub(crate) fn queue_gpui_sparkle_update_download_progress_changed(progress: Opti
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn queue_gpui_app_shot_capture(capture: GpuiAppShotCapture) {
-    let Some(target) = gpui_app_shots_callback_target() else {
-        return;
-    };
-    let app = target.app.clone();
-    let mut async_app = target.async_app.clone();
-    let foreground = target.async_app.foreground_executor().clone();
-    foreground
-        .spawn(async move {
-            /*
-            CDXC:AppShots 2026-06-26-04:18:
-            Native App Shots callbacks must copy capture metadata at the FFI boundary and then enqueue a foreground GPUI update without borrowing `AsyncApp` across the returned future. This keeps the C callback non-blocking while preserving the existing Rust/sidebar capture contract.
-            */
-            let _ = app.update_in(&mut async_app, |this, window, cx| {
-                this.handle_gpui_native_app_shot_capture(capture, window, cx);
-            });
-        })
-        .detach();
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn queue_gpui_app_shot_status(message: &'static str) {
-    let Some(target) = gpui_app_shots_callback_target() else {
-        return;
-    };
-    let app = target.app.clone();
-    let mut async_app = target.async_app.clone();
-    let foreground = target.async_app.foreground_executor().clone();
-    foreground
-        .spawn(async move {
-            let _ = app.update_in(&mut async_app, |this, window, cx| {
-                window.push_notification(Notification::warning(message), cx);
-                this.dispatch_gpui_app_modal_toast("warning", "App Shot Failed", message, cx);
-            });
-        })
-        .detach();
-}
-
-#[cfg(target_os = "macos")]
 pub(crate) fn gpui_spawn_completion_sound_player(path: &Path) -> Result<(), String> {
     std::process::Command::new("/usr/bin/afplay")
         .arg(path)
@@ -182,7 +145,7 @@ pub(crate) fn gpui_spawn_completion_sound_player(path: &Path) -> Result<(), Stri
         .stderr(std::process::Stdio::null())
         .spawn()
         .map(|_| ())
-        .map_err(|_| "GPUI could not start the macOS sound preview player.".to_string())
+        .map_err(|_| "Could not start the sound preview player.".to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -195,6 +158,7 @@ unsafe extern "C" {
     pub(crate) fn GhostexGpuiRequestNotificationAuthorization() -> i32;
     pub(crate) fn GhostexGpuiDeliverSettingsTestNotification() -> i32;
     pub(crate) fn GhostexGpuiAccessibilityDisplayShouldReduceMotion() -> i32;
+    pub(crate) fn GhostexGpuiAccessibilityDisplayShouldReduceTransparency() -> i32;
     pub(crate) fn GhostexGpuiInstallAccessibilityDisplayOptionsMonitor();
     pub(crate) fn GhostexGpuiRemoveAccessibilityDisplayOptionsMonitor();
     pub(crate) fn GhostexGpuiInstallWorkspacePowerEventsMonitor();
@@ -205,8 +169,6 @@ unsafe extern "C" {
         body: *const std::ffi::c_char,
         icon_data_url: *const std::ffi::c_char,
     ) -> i32;
-    pub(crate) fn GhostexGpuiInstallAppShotsEventMonitors(shots_directory: *const std::ffi::c_char);
-    pub(crate) fn GhostexGpuiRemoveAppShotsEventMonitors();
     pub(crate) fn GhostexGpuiSparkleUpdaterStart() -> i32;
     pub(crate) fn GhostexGpuiSparkleCheckForUpdates();
     pub(crate) fn GhostexGpuiSparkleProbeForUpdateInformation();

@@ -86,6 +86,7 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
           ARCHIVE='${{ steps.code_server_identity.outputs.archive_name }}'
           TAG='${{ steps.code_server_identity.outputs.download_tag }}'
+          COMPONENTS_REPO="$(node tooling/release-gpui/components-repo.mjs)"
           # A missing tag and a transient API failure both make `gh release view`
           # exit non-zero, and both used to mean "not published" — i.e. one blip
           # bought a ~10-minute rebuild that publish-component.mjs would then
@@ -95,7 +96,7 @@ jobs:
           ERRLOG="$(mktemp)"
           ASSETS=""
           for attempt in 1 2 3; do
-            if ASSETS="$(gh release view "$TAG" --repo maddada/Ghostex --json assets 2>"$ERRLOG")"; then
+            if ASSETS="$(gh release view "$TAG" --repo "$COMPONENTS_REPO" --json assets 2>"$ERRLOG")"; then
               break
             fi
             ASSETS=""
@@ -122,10 +123,23 @@ jobs:
           fi
           if [[ "$PUBLISHED" == "1" ]]; then
             echo "action=reuse" >> "$GITHUB_OUTPUT"
-            echo "::notice::Reusing published component $TAG/$ARCHIVE"
+            echo "::notice::Reusing published component $COMPONENTS_REPO $TAG/$ARCHIVE"
           else
             echo "action=build" >> "$GITHUB_OUTPUT"
-            echo "::notice::Component $TAG has no $ARCHIVE yet; building it"
+            echo "::notice::Component $TAG has no $ARCHIVE in $COMPONENTS_REPO yet; building it"
+          fi
+      # Component tags are published to a separate repository that
+      # github.token cannot write; fail before any build work when the PAT is
+      # missing (see tooling/release-gpui/components-repo-setup.md).
+      - name: Require the components publishing token
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        shell: bash
+        env:
+          COMPONENTS_GITHUB_TOKEN: ${{ secrets.COMPONENTS_GITHUB_TOKEN }}
+        run: |
+          if [[ -z "$COMPONENTS_GITHUB_TOKEN" ]]; then
+            echo "::error::COMPONENTS_GITHUB_TOKEN is not configured; component tags are published to $(node tooling/release-gpui/components-repo.mjs) and github.token cannot write there. See tooling/release-gpui/components-repo-setup.md."
+            exit 1
           fi
       - name: Reuse the published component asset
         if: ${{ steps.probe.outputs.action == 'reuse' }}
@@ -210,6 +224,7 @@ jobs:
         if: ${{ steps.probe.outputs.action == 'build' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          COMPONENTS_GITHUB_TOKEN: ${{ secrets.COMPONENTS_GITHUB_TOKEN }}
         run: |
           ARCHIVE="$OUTPUT_DIR/${{ steps.code_server_identity.outputs.archive_name }}"
           mkdir -p "$OUTPUT_DIR"

@@ -23,6 +23,10 @@ session, sleeping, and daemon restarts, whether or not anything has been typed
 into it, and leaves the sidebar by exactly two routes: the user deletes it, or
 it is promoted. There is no navigate-away discard and no boot-time sweep of
 empty drafts any more — an empty draft is a session the user made on purpose.
+Since 2026-10-04 one more route exists, off by default since 2026-10-09: with the
+advanced `closeEmptySessionsOnNew` setting on and a Chat agent, the user's next new
+session in the same project closes it while it is still fully empty (CDXC:Sessions
+2026-10-09 in empty_session_cleanup.rs).
 */
 
 use std::path::{Path, PathBuf};
@@ -537,6 +541,7 @@ pub(crate) fn switch_draft_agent(
     let lifecycle = read_lifecycle(params)?;
     let project = require_project(repository, &lifecycle.project_id)?;
     let session = require_session(repository, &lifecycle)?;
+    crate::agentbox::refuse_for_agentbox_session(&session, "Switching the agent")?;
     if !session_is_draft(&session) {
         return Err(DomainStateError {
             code: "invalidState",
@@ -597,6 +602,8 @@ pub(crate) fn switch_draft_agent(
     // re-read before the rewrite below builds its update out of it.
     let session = require_session(repository, &lifecycle)?;
 
+    let switch_guard = DraftAgentSwitch::begin(&lifecycle.project_id, &lifecycle.session_id)?;
+
     /*
     Everything the OLD agent owns has to go before the new plan is built, or
     `create_agent_session_params_for_project` would resolve the new agent id
@@ -617,6 +624,7 @@ pub(crate) fn switch_draft_agent(
         "accountId",
         "accountName",
         "accountColor",
+        "accountSlot",
         "accountProvider",
         "accountBaseCommand",
         "accountCommand",
@@ -639,6 +647,7 @@ pub(crate) fn switch_draft_agent(
         "acceptAllMode",
         "agentCommand",
         "agentLaunchPlan",
+        "agentResumePlan",
         "icon",
         "runtimeRelevant",
     ] {
@@ -660,15 +669,50 @@ pub(crate) fn switch_draft_agent(
         "runtimeSettings".to_string(),
         Value::Object(runtime_settings),
     );
-    let resolved = create_agent_session_params_for_project(db, &project, &create_params)?;
+    // CDXC:SessionChat 2026-09-22 DECISION:
+    // User: picking another agent's model in the chat picker "switches the CLI and also sets the right effort and model on the CLI that we switched to". A draft rebuilt without them started the new CLI on its own saved default, so the pick rides the rebuilt launch line the way `createAgentSession` carries `agentModel` and `agentEffort`.
+    for key in ["agentModel", "agentEffort"] {
+        if let Some(value) = params.get(key).filter(|value| !value.is_null()) {
+            create_params.insert(key.to_string(), value.clone());
+        }
+    }
+    // CDXC:AgentProviders 2026-09-16 DECISION:
+    // User: switching Codex to Claude or Claude to Codex must choose the same account as launching the target agent from the sidebar button.
+    // A draft whose Run on row picked a box keeps that box when the new agent can run in one; its
+    // pane stays at the login shell until the first message starts the box (draft_run_location.rs).
+    let keep_box = crate::agentbox::pending_session_agentbox(&session)
+        .filter(|_| {
+            resume_agent_family_id(Some(agent_id.clone()), &agent_config, &Map::new())
+                .is_some_and(|family| crate::agentbox::AGENTBOX_AGENTS.contains(&family.as_str()))
+        })
+        .map(|agentbox| agentbox.provider);
+    if let Some(provider) = keep_box.as_deref() {
+        create_params.insert(
+            "runLocation".to_string(),
+            json!(format!("agentbox:{provider}")),
+        );
+    }
+    let mut resolved = create_agent_session_params_for_project(db, &project, &create_params)?;
+    if keep_box.is_some() {
+        hold_box_launch(&mut resolved);
+    }
     /*
     The line the live pane will be typed, read out BEFORE the row is written so
     a plan that somehow carries no command leaves the draft exactly as it was
     instead of claiming an agent nobody can launch.
     */
-    let reuse_command = provider_exists
+    let reuse_command = (provider_exists && keep_box.is_none())
         .then(|| draft_switch_reuse_command(&resolved))
         .transpose()?;
+    if provider_exists && keep_box.is_none() {
+        if let Some(launch_settings) =
+            crate::zmx::launch_settings_with_consumed_agent_launch_startup_text(&Value::Object(
+                resolved.clone(),
+            ))
+        {
+            resolved.insert("launchSettings".to_string(), Value::Object(launch_settings));
+        }
+    }
 
     let mut update = lifecycle_update(&lifecycle);
     update.insert("agentId".to_string(), json!(agent_id.clone()));
@@ -677,9 +721,9 @@ pub(crate) fn switch_draft_agent(
         update.insert("launchSettings".to_string(), value);
     }
     /*
-    The rebuild's own default would start this row at "working", because a
-    create that carries launch startup text treats the launch as work. That is
-    right for a session being created to run a first prompt and wrong for a
+    The rebuild's own default starts this row at "working" whenever the
+    runtime settings it is rebuilt from still carry a `firstUserMessage`. That
+    is right for a session being created to run a first prompt and wrong for a
     draft, which is being relaunched with nothing to do — and it would hand the
     new CLI's startup spinner an already-expired suppression stamp to promote
     the draft through. Seed the idle default instead: it names the NEW agent and
@@ -734,13 +778,15 @@ pub(crate) fn switch_draft_agent(
             &lifecycle.project_id,
             &lifecycle.session_id,
         );
-        crate::session_chat_send::enqueue_session_write_sequence(
+        let completion = crate::session_chat_send::enqueue_session_write_sequence_with_completion(
             &updated,
             &lifecycle.project_id,
             &lifecycle.session_id,
             DRAFT_AGENT_SWITCH_SEND_SOURCE,
             build_draft_agent_switch_steps(&command),
+            None,
         )?;
+        switch_guard.finish_after(completion);
         return Ok(AgentEndpointOutput {
             presentation_session: Some((
                 lifecycle.project_id.clone(),
@@ -781,11 +827,7 @@ const DRAFT_SWITCH_INTERRUPT: &str = "\u{3}";
 /// Spacing between the interrupts. Wide enough that each is its own stdin
 /// chunk, narrow enough that all three land inside the CLIs' one-second window.
 const DRAFT_SWITCH_INTERRUPT_SPACING_MS: u64 = 150;
-/// Time the interrupted pane gets to become a login shell before the new
-/// agent's line is typed into it. This settles a SHELL start (`exec $SHELL -l`
-/// is the last line of the provider script), not a TUI repaint, which is why it
-/// is several times the chat path's settles.
-const DRAFT_SWITCH_SHELL_SETTLE_MS: u64 = 800;
+const DRAFT_SWITCH_EXIT_TIMEOUT_MS: u64 = 15_000;
 
 /// The new agent's launch line, taken from the rebuilt plan's `startupText` —
 /// already leading-space prefixed so the login shell keeps it out of atuin
@@ -818,9 +860,8 @@ person sitting at that pane would type them, as one indivisible job.
 
 Three interrupts, not one: every chat-supported CLI reads a single Ctrl+C as
 "cancel this turn" and only a repeat inside its own short window as "exit", so
-one would be swallowed. The burst spans 300ms — comfortably inside the second
-those CLIs measure — and the third interrupt's spacing simply folds into the
-shell settle that follows it.
+one would be swallowed. The burst spans 300ms, inside the second those CLIs
+measure, then the process check waits for the old CLI to exit.
 
 The command and its Enter are separate writes for the reason every server-side
 writer of an agent pty keeps them separate (see SESSION_CHAT_CLEAR_INPUT_SETTLE_MS
@@ -831,16 +872,7 @@ pub(crate) fn build_draft_agent_switch_steps(
     command: &str,
 ) -> Vec<crate::session_chat_send::SessionChatSendStep> {
     use crate::session_chat_send::SessionChatSendStep;
-    let mut steps = Vec::new();
-    for _ in 0..3 {
-        steps.push(SessionChatSendStep::Write(
-            DRAFT_SWITCH_INTERRUPT.to_string(),
-        ));
-        steps.push(SessionChatSendStep::SleepMs(
-            DRAFT_SWITCH_INTERRUPT_SPACING_MS,
-        ));
-    }
-    steps.push(SessionChatSendStep::SleepMs(DRAFT_SWITCH_SHELL_SETTLE_MS));
+    let mut steps = build_draft_agent_exit_steps();
     steps.push(SessionChatSendStep::Write(command.to_string()));
     steps.push(SessionChatSendStep::SleepMs(
         crate::session_chat_send::SESSION_CHAT_SUBMIT_DELAY_MS,
@@ -848,6 +880,31 @@ pub(crate) fn build_draft_agent_switch_steps(
     steps.push(SessionChatSendStep::Write(
         crate::session_chat_send::SESSION_CHAT_SUBMIT.to_string(),
     ));
+    steps
+}
+
+/// The first half of [`build_draft_agent_switch_steps`]: exit the draft's CLI and wait for its
+/// login shell. On its own it stops a draft whose Run on row picked a box, which starts nothing
+/// until the first message (agents/draft_run_location.rs).
+pub(crate) fn build_draft_agent_exit_steps() -> Vec<crate::session_chat_send::SessionChatSendStep> {
+    use crate::session_chat_send::SessionChatSendStep;
+    let mut steps = Vec::new();
+    for interrupt in 0..3 {
+        steps.push(SessionChatSendStep::Write(
+            DRAFT_SWITCH_INTERRUPT.to_string(),
+        ));
+        if interrupt < 2 {
+            steps.push(SessionChatSendStep::SleepMs(
+                DRAFT_SWITCH_INTERRUPT_SPACING_MS,
+            ));
+        }
+    }
+    // CDXC:Drafts 2026-09-16 WHY:
+    // A fixed 800ms delay both held up fast exits and typed the launch command into slow CLIs. Reuse the account-switch process check so the command follows the actual exit.
+    steps.push(SessionChatSendStep::WaitForAgentExit {
+        home_dir: crate::paths::get_gxserver_paths(None).home_dir,
+        timeout_ms: DRAFT_SWITCH_EXIT_TIMEOUT_MS,
+    });
     steps
 }
 

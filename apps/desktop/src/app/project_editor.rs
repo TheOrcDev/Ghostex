@@ -2,9 +2,7 @@
 // main.rs (pure move; the only edit is the `pub(crate) ` visibility prefix the
 // cross-module split requires). See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 //
-// Cluster: project-editor companion terminal selection and auto-sleep policy
-
-use std::collections::HashMap;
+// Cluster: project-editor view wake/sleep lifecycle and auto-sleep policy
 
 // RefCell backs cross-platform runtime state (window frame persistence), not
 // just the macOS-only shims that first introduced the import.
@@ -19,29 +17,61 @@ impl GhostexGpuiApp {
         mode: TitlebarMode,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let marked = self.project_editor_shell.mark_mode_awake(mode);
+        let kept_awake = self.view_modes_kept_awake_by_parked_projects();
+        let marked = self.project_editor_shell.mark_mode_awake(mode, &kept_awake);
         if marked {
+            self.release_capped_view_surfaces(cx);
             self.schedule_project_editor_auto_sleep_for_inactive_modes(cx);
         }
         marked
     }
 
-    pub(crate) fn project_editor_companion_terminal_session_is_eligible(
-        &self,
-        session_id: TerminalSessionId,
-    ) -> bool {
-        self.agents_workspace
-            .session(session_id)
-            .is_some_and(|session| {
-                session.presentation_state == TerminalSessionPresentationState::Running
-                    && self
-                        .agents_terminal_runtime_sessions
-                        .runtime_session_id_for_shell_session(session_id)
-                        .is_some()
-            })
+    /// The active views of the projects the user left while they were awake (`active_view_awake`):
+    /// neither the idle timer nor the awake cap may sleep them. The live project's entry is stale
+    /// until it is left again, and its own active view is already exempt as `active_mode`.
+    pub(crate) fn view_modes_kept_awake_by_parked_projects(&self) -> Vec<TitlebarMode> {
+        let live_project_id = self.agents_workspace_project_id.as_deref();
+        let mut modes = Vec::new();
+        for (project_id, state) in &self.project_view_states_by_project {
+            if state.active_view_awake
+                && live_project_id != Some(project_id.as_str())
+                && !modes.contains(&state.active_mode)
+            {
+                modes.push(state.active_mode);
+            }
+        }
+        modes
     }
 
-    pub(crate) fn project_editor_companion_active_project_id(&self) -> Option<String> {
+    /// CDXC:Workarea 2026-09-20 WHY:
+    /// The awake cap is a promise about live pages, not just a flag: `mark_mode_awake` puts the
+    /// oldest view over the cap to sleep, and this is what makes that cost nothing, by handing its
+    /// CEF surface back the way the Sleep menu row does. Without it a tab strip of six views would
+    /// keep six renderer processes alive with only the flag saying otherwise, which is exactly what
+    /// the cap exists to prevent. A sleeping view that owns no surface is left alone, so waking one
+    /// view does not walk every other one through the sleep path on every click.
+    pub(crate) fn release_capped_view_surfaces(&mut self, cx: &mut gpui::Context<Self>) {
+        for mode in self.project_editor_shell.lifecycle_modes() {
+            if mode == self.active_mode || self.project_editor_shell.is_mode_awake(mode) {
+                continue;
+            }
+            let owns_surface = match mode {
+                TitlebarMode::Browser => !self.browser_surfaces.is_empty(),
+                _ => {
+                    ProjectWorkareaCefSurfaceSlotKey::for_titlebar_mode(mode).is_some_and(|slot| {
+                        self.project_workarea_runtime_cef_surfaces
+                            .contains_key(&slot)
+                    })
+                }
+            };
+            if owns_surface {
+                self.sleep_titlebar_view(mode, cx);
+            }
+        }
+    }
+
+    /// The project the sidebar currently has selected.
+    pub(crate) fn active_sidebar_project_id(&self) -> Option<String> {
         gpui_active_project_id_from_snapshot(self.latest_sidebar_project_snapshot.as_ref())
             .map(str::to_string)
     }
@@ -67,396 +97,6 @@ impl GhostexGpuiApp {
                     && key.project_id == remote_project.project_id)
                     .then(|| GpuiWorkspaceTerminalSessionKey::Remote(key.clone()))
             })
-    }
-
-    pub(crate) fn project_editor_companion_terminal_key_for_slot(
-        &self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-    ) -> Option<GpuiWorkspaceTerminalSessionKey> {
-        self.is_current_project_editor_companion_terminal_body_mount_slot(slot_id)
-            .then(|| self.workspace_terminal_key_for_shell_session(slot_id.session_id))?
-    }
-
-    pub(crate) fn project_editor_companion_remote_attach_attempt_for_slot(
-        &self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-    ) -> Option<GpuiProjectEditorCompanionRemoteAttachAttempt> {
-        let GpuiWorkspaceTerminalSessionKey::Remote(remote_key) =
-            self.project_editor_companion_terminal_key_for_slot(slot_id)?
-        else {
-            return None;
-        };
-        let connection_generation = self
-            .remote_gxserver_connect_generations
-            .get(remote_key.remote_machine_id.as_str())
-            .copied()
-            .unwrap_or(0);
-        Some(GpuiProjectEditorCompanionRemoteAttachAttempt {
-            connection_generation,
-            remote_key,
-        })
-    }
-
-    pub(crate) fn project_editor_companion_remote_attach_attempt_is_current(
-        &self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-        attempt: &GpuiProjectEditorCompanionRemoteAttachAttempt,
-    ) -> bool {
-        self.is_current_project_editor_companion_terminal_body_mount_slot(slot_id)
-            && self
-                .project_editor_companion_remote_attach_attempt_for_slot(slot_id)
-                .as_ref()
-                == Some(attempt)
-    }
-
-    pub(crate) fn record_project_editor_companion_remote_attach_unavailable(
-        &mut self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-        attempt: GpuiProjectEditorCompanionRemoteAttachAttempt,
-        message: String,
-    ) {
-        if !self.project_editor_companion_remote_attach_attempt_is_current(slot_id, &attempt)
-            || !self
-                .project_editor_companion_remote_attach_states
-                .get(&slot_id)
-                .is_some_and(|state| state.attempt() == &attempt)
-        {
-            return;
-        }
-        self.project_editor_companion_remote_attach_states.insert(
-            slot_id,
-            GpuiProjectEditorCompanionRemoteAttachState::Unavailable { attempt, message },
-        );
-    }
-
-    pub(crate) fn clear_project_editor_companion_remote_attach_state_for_key(
-        &mut self,
-        remote_key: &GpuiRemoteAttachSessionKey,
-    ) {
-        self.project_editor_companion_remote_attach_states
-            .retain(|_, state| &state.attempt().remote_key != remote_key);
-    }
-
-    pub(crate) fn clear_project_editor_companion_remote_attach_states_for_machine(
-        &mut self,
-        remote_machine_id: &str,
-    ) {
-        self.project_editor_companion_remote_attach_states
-            .retain(|_, state| state.attempt().remote_key.remote_machine_id != remote_machine_id);
-    }
-
-    pub(crate) fn prune_project_editor_companion_remote_attach_states(&mut self) {
-        let current_attempts = self
-            .current_project_editor_companion_terminal_body_mount_slots()
-            .into_iter()
-            .filter_map(|slot_id| {
-                self.project_editor_companion_remote_attach_attempt_for_slot(slot_id)
-                    .map(|attempt| (slot_id, attempt))
-            })
-            .collect::<HashMap<_, _>>();
-        self.project_editor_companion_remote_attach_states
-            .retain(|slot_id, state| current_attempts.get(slot_id) == Some(state.attempt()));
-    }
-
-    pub(crate) fn project_editor_companion_remote_attach_unavailable_message(
-        &self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-    ) -> Option<String> {
-        let state = self
-            .project_editor_companion_remote_attach_states
-            .get(&slot_id)?;
-        let GpuiProjectEditorCompanionRemoteAttachState::Unavailable { attempt, message } = state
-        else {
-            return None;
-        };
-        self.project_editor_companion_remote_attach_attempt_is_current(slot_id, attempt)
-            .then(|| message.clone())
-    }
-
-    pub(crate) fn shell_session_for_workspace_terminal_key(
-        &self,
-        key: &GpuiWorkspaceTerminalSessionKey,
-    ) -> Option<TerminalSessionId> {
-        match key {
-            GpuiWorkspaceTerminalSessionKey::Local(key) => {
-                self.local_workspace_session_mappings.get(key).copied()
-            }
-            GpuiWorkspaceTerminalSessionKey::Remote(key) => {
-                self.remote_attach_sessions.get(key).copied()
-            }
-        }
-    }
-
-    pub(crate) fn project_editor_companion_active_terminal_key(
-        &self,
-    ) -> Option<GpuiWorkspaceTerminalSessionKey> {
-        let active_project_id = self.project_editor_companion_active_project_id()?;
-        let focus_state = &self.sidebar_gxserver_presentation_focus_state;
-        if focus_state.active_project_id.as_deref() != Some(active_project_id.as_str()) {
-            return None;
-        }
-        let focused_session_id = focus_state.focused_session_id.as_deref()?;
-        if let Some(reference) =
-            gpui_remote_attach_session_reference_from_project_id(focused_session_id)
-        {
-            let key = GpuiRemoteAttachSessionKey::from(&reference);
-            return (gpui_remote_scoped_project_id(
-                key.remote_machine_id.as_str(),
-                key.project_id.as_str(),
-            ) == active_project_id)
-                .then_some(GpuiWorkspaceTerminalSessionKey::Remote(key));
-        }
-        if gpui_remote_project_reference_from_project_id(active_project_id.as_str()).is_some() {
-            return None;
-        }
-        Some(GpuiWorkspaceTerminalSessionKey::Local(
-            GpuiLocalWorkspaceSessionKey {
-                project_id: active_project_id,
-                session_id: focused_session_id.to_string(),
-            },
-        ))
-    }
-
-    pub(crate) fn project_editor_companion_active_terminal_session_id(
-        &mut self,
-    ) -> Option<TerminalSessionId> {
-        let key = self.project_editor_companion_active_terminal_key()?;
-        let session_id = self.shell_session_for_workspace_terminal_key(&key)?;
-        self.project_editor_companion_terminal_session_is_active_project_eligible(session_id)
-            .then_some(session_id)
-    }
-
-    pub(crate) fn shell_session_belongs_to_active_project(
-        &mut self,
-        session_id: TerminalSessionId,
-    ) -> bool {
-        let Some(active_project_id) = self.project_editor_companion_active_project_id() else {
-            return false;
-        };
-        let Some(key) = self.workspace_terminal_key_for_shell_session(session_id) else {
-            return false;
-        };
-        key.scoped_project_id() == active_project_id
-    }
-
-    pub(crate) fn project_editor_companion_terminal_session_is_active_project_eligible(
-        &mut self,
-        session_id: TerminalSessionId,
-    ) -> bool {
-        self.project_editor_companion_terminal_session_is_eligible(session_id)
-            && self.shell_session_belongs_to_active_project(session_id)
-    }
-
-    pub(crate) fn project_editor_companion_focused_terminal_session_id(
-        &self,
-    ) -> Option<TerminalSessionId> {
-        match self.project_editor_companion_focused_terminal_slot {
-            ProjectEditorCompanionTerminalSlot::Top => {
-                self.project_editor_companion_terminal_session_id
-            }
-            ProjectEditorCompanionTerminalSlot::Bottom => {
-                self.project_editor_companion_secondary_terminal_session_id
-            }
-        }
-    }
-
-    pub(crate) fn project_editor_companion_active_title(&self, _mode: TitlebarMode) -> String {
-        self.project_editor_companion_focused_terminal_session_id()
-            .map(|session_id| self.agents_workspace_tab_display_title(session_id))
-            .unwrap_or_else(|| "Companion".to_string())
-    }
-
-    pub(crate) fn project_editor_companion_recent_terminal_sessions(
-        &mut self,
-    ) -> Vec<TerminalSessionId> {
-        let active_project_id = self.project_editor_companion_active_project_id();
-        let mut keys = self
-            .sidebar_gxserver_presentation_focus_state
-            .active_project_tab_sessions
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .filter_map(|session| {
-                let key = session.key.as_local()?;
-                (active_project_id.as_deref() == Some(key.project_id.as_str())).then(|| key.clone())
-            })
-            .collect::<Vec<_>>();
-        if let Some(latest_key) = self.local_workspace_latest_focus_key.clone()
-            && active_project_id.as_deref() == Some(latest_key.project_id.as_str())
-        {
-            keys.retain(|key| key != &latest_key);
-            keys.push(latest_key);
-        }
-        let mut mapped_session_ids = keys
-            .into_iter()
-            .rev()
-            .filter_map(|key| self.local_workspace_session_mappings.get(&key).copied())
-            .collect::<Vec<_>>();
-        let mut remote_session_ids = self
-            .remote_attach_sessions
-            .iter()
-            .filter_map(|(key, session_id)| {
-                (active_project_id.as_deref()
-                    == Some(
-                        gpui_remote_scoped_project_id(
-                            key.remote_machine_id.as_str(),
-                            key.project_id.as_str(),
-                        )
-                        .as_str(),
-                    ))
-                .then_some(*session_id)
-            })
-            .collect::<Vec<_>>();
-        remote_session_ids.sort_by_key(|session_id| std::cmp::Reverse(session_id.0));
-        mapped_session_ids.extend(remote_session_ids);
-        if let Some(active_session_id) = self.project_editor_companion_active_terminal_session_id()
-        {
-            mapped_session_ids.retain(|session_id| *session_id != active_session_id);
-            mapped_session_ids.insert(0, active_session_id);
-        }
-        mapped_session_ids
-            .into_iter()
-            .filter(|session_id| {
-                self.project_editor_companion_terminal_session_is_active_project_eligible(
-                    *session_id,
-                )
-            })
-            .collect()
-    }
-
-    /// CDXC:Workarea 2026-09-14 DECISION:
-    /// User: with two vertically split companion panes in a non-Agents view, sidebar session clicks and new sessions replace the currently active companion pane.
-    /// Reconciliation preserves the active slot recorded by pane focus instead of resetting it from the sidebar's previous selection.
-    pub(crate) fn sync_project_editor_companion_terminal_selection(&mut self) -> bool {
-        let previous = (
-            self.project_editor_companion_terminal_session_id,
-            self.project_editor_companion_secondary_terminal_session_id,
-            self.project_editor_companion_focused_terminal_slot,
-        );
-        let mut top = self
-            .project_editor_companion_terminal_session_id
-            .filter(|session_id| {
-                self.project_editor_companion_terminal_session_is_active_project_eligible(
-                    *session_id,
-                )
-            });
-        let mut bottom = self
-            .project_editor_shell
-            .left_companion_split_enabled
-            .then_some(self.project_editor_companion_secondary_terminal_session_id)
-            .flatten()
-            .filter(|session_id| {
-                self.project_editor_companion_terminal_session_is_active_project_eligible(
-                    *session_id,
-                ) && Some(*session_id) != top
-            });
-        let recent = self.project_editor_companion_recent_terminal_sessions();
-
-        if let Some(active_session_id) = recent.first().copied() {
-            if !self.project_editor_shell.left_companion_split_enabled {
-                top = Some(active_session_id);
-                self.project_editor_companion_focused_terminal_slot =
-                    ProjectEditorCompanionTerminalSlot::Top;
-            } else if top != Some(active_session_id) && bottom != Some(active_session_id) {
-                if bottom.is_some()
-                    && self.project_editor_companion_focused_terminal_slot
-                        == ProjectEditorCompanionTerminalSlot::Bottom
-                {
-                    bottom = Some(active_session_id);
-                } else {
-                    top = Some(active_session_id);
-                    self.project_editor_companion_focused_terminal_slot =
-                        ProjectEditorCompanionTerminalSlot::Top;
-                }
-            }
-        }
-
-        if self.project_editor_shell.left_companion_split_enabled
-            && bottom.is_none()
-            && top == recent.first().copied()
-            && recent.len() > 1
-        {
-            bottom = top;
-            top = recent.get(1).copied();
-            self.project_editor_companion_focused_terminal_slot =
-                ProjectEditorCompanionTerminalSlot::Bottom;
-        } else {
-            if top.is_none() {
-                top = recent
-                    .iter()
-                    .copied()
-                    .find(|session_id| Some(*session_id) != bottom);
-            }
-            if self.project_editor_shell.left_companion_split_enabled && bottom.is_none() {
-                bottom = recent
-                    .iter()
-                    .copied()
-                    .find(|session_id| Some(*session_id) != top);
-            }
-        }
-
-        if top.is_none() && bottom.is_some() {
-            top = bottom.take();
-        }
-        if bottom.is_none() {
-            self.project_editor_companion_focused_terminal_slot =
-                ProjectEditorCompanionTerminalSlot::Top;
-        }
-        self.project_editor_companion_terminal_session_id = top;
-        self.project_editor_companion_secondary_terminal_session_id = bottom;
-        previous
-            != (
-                self.project_editor_companion_terminal_session_id,
-                self.project_editor_companion_secondary_terminal_session_id,
-                self.project_editor_companion_focused_terminal_slot,
-            )
-    }
-
-    pub(crate) fn project_editor_companion_terminal_slot_for_mode(
-        &self,
-        mode: TitlebarMode,
-    ) -> Option<ProjectEditorCompanionTerminalBodyMountSlotId> {
-        if self.active_mode != mode
-            || !mode.is_project_editor_mode()
-            || !self.project_editor_companion_is_visible()
-            || !self.project_editor_shell.is_mode_awake(mode)
-        {
-            return None;
-        }
-        let session_id = self.project_editor_companion_focused_terminal_session_id()?;
-        self.project_editor_companion_terminal_session_is_eligible(session_id)
-            .then_some(ProjectEditorCompanionTerminalBodyMountSlotId { mode, session_id })
-    }
-
-    pub(crate) fn current_project_editor_companion_terminal_body_mount_slots(
-        &self,
-    ) -> Vec<ProjectEditorCompanionTerminalBodyMountSlotId> {
-        let mode = self.active_mode;
-        if !mode.is_project_editor_mode()
-            || !self.project_editor_companion_is_visible()
-            || !self.project_editor_shell.is_mode_awake(mode)
-        {
-            return Vec::new();
-        }
-        [
-            self.project_editor_companion_terminal_session_id,
-            self.project_editor_companion_secondary_terminal_session_id,
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|session_id| {
-            self.project_editor_companion_terminal_session_is_eligible(*session_id)
-        })
-        .map(|session_id| ProjectEditorCompanionTerminalBodyMountSlotId { mode, session_id })
-        .collect()
-    }
-
-    pub(crate) fn is_current_project_editor_companion_terminal_body_mount_slot(
-        &self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-    ) -> bool {
-        self.current_project_editor_companion_terminal_body_mount_slots()
-            .contains(&slot_id)
     }
 
     pub(crate) fn schedule_project_editor_auto_sleep_for_inactive_modes(
@@ -500,6 +140,12 @@ impl GhostexGpuiApp {
             cx.background_executor().timer(duration).await;
 
             let _ = this.update(cx, |this, cx| {
+                if this
+                    .view_modes_kept_awake_by_parked_projects()
+                    .contains(&mode)
+                {
+                    return;
+                }
                 this.sleep_project_editor_mode_from_timer(mode, token, cx);
             });
         })

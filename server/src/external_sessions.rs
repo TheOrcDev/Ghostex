@@ -19,6 +19,8 @@ use std::{
 
 static SCANNED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
+mod hermes;
+pub(crate) use hermes::HERMES_INJECTED_PREFIXES;
 mod scan_cache;
 use scan_cache::ScanCache;
 
@@ -35,6 +37,16 @@ struct Conversation {
 
 fn error(error: impl std::fmt::Display) -> DomainStateError {
     DomainStateError::corrupt_state(format!("Could not discover external sessions: {error}"))
+}
+
+/// Makes the next discovery scan again. Bot sync calls it after adding a bot project: a scan that
+/// ran before the project existed skipped that bot's conversations and marked the store scanned.
+pub(crate) fn rescan_on_next_discovery(paths: &GxserverPaths) {
+    if let Some(scanned) = SCANNED.get() {
+        if let Ok(mut scanned) = scanned.lock() {
+            scanned.remove(&paths.state_db_file);
+        }
+    }
 }
 
 /// Receipts survive removing/restoring a history row, so deleted conversations
@@ -57,7 +69,8 @@ pub(crate) fn discover(
         return Ok(());
     }
     let mut cache = ScanCache::load(db)?;
-    let conversations = scan(home, paths.isolated_agent_home_dir.is_none(), &mut cache)?;
+    let mut conversations = scan(home, paths.isolated_agent_home_dir.is_none(), &mut cache)?;
+    conversations.extend(hermes::read_bot_conversations(db, server_id, paths)?);
     db.execute_batch("CREATE TABLE IF NOT EXISTS external_session_receipts (agent TEXT NOT NULL, conversationId TEXT NOT NULL, PRIMARY KEY(agent, conversationId))").map_err(error)?;
     let receipts = db
         .prepare("SELECT agent, conversationId FROM external_session_receipts")
@@ -77,6 +90,9 @@ pub(crate) fn discover(
     if conversations.is_empty() && !cache.has_changes() {
         scanned.insert(paths.state_db_file.clone());
         return Ok(());
+    }
+    if !conversations.is_empty() {
+        reconcile_pending_codex_forks(&DomainRepository::new(db, server_id), home)?;
     }
     let transaction =
         Transaction::new_unchecked(db, TransactionBehavior::Immediate).map_err(error)?;
@@ -112,11 +128,22 @@ pub(crate) fn discover(
         .filter_map(|p| Some((project_key(p.get("path")?.as_str()?), p)))
         .collect();
     for conversation in conversations {
+        // CDXC:Bots 2026-09-26 WHY:
+        // A Hermes conversation belongs to its bot, the project at its profile folder.
+        // Bot sync owns creating that project; an ordinary project made here would stop the folder from ever becoming a bot.
+        let is_hermes = conversation.agent == hermes::HERMES_AGENT;
+        let project_key = if is_hermes {
+            project_key(&conversation.agent_home.to_string_lossy())
+        } else {
+            project_key(&conversation.cwd)
+        };
+        if is_hermes && !projects.contains_key(&project_key) {
+            continue;
+        }
         let inserted = transaction.execute("INSERT OR IGNORE INTO external_session_receipts (agent, conversationId) VALUES (?1, ?2)", (&conversation.agent, &conversation.id)).map_err(error)?;
         if inserted == 0 || known.contains(&conversation.id) {
             continue;
         }
-        let project_key = project_key(&conversation.cwd);
         let project = match projects.get(&project_key) {
             Some(project) => project.clone(),
             None => {
@@ -143,6 +170,76 @@ pub(crate) fn discover(
     cache.save(&transaction)?;
     transaction.commit().map_err(error)?;
     scanned.insert(paths.state_db_file.clone());
+    Ok(())
+}
+
+/// CDXC:SessionFork 2026-09-23 WHY:
+/// Codex writes its fork rollout before the managed row adopts the new conversation id. Importing that file first creates a second owner. Resolve the exact terminal process's open rollout before classifying external history; the presentation probe's cached pre-fork identity is too old for this ownership decision.
+fn reconcile_pending_codex_forks(
+    repository: &DomainRepository<'_>,
+    home: &Path,
+) -> Result<(), DomainStateError> {
+    let is_pending_fork = |session: &Value| {
+        session["lifecycleState"] == "running"
+            && session["runtimeSettings"]["agentName"] == "codex"
+            && session["runtimeSettings"]["externalSession"] != true
+            && session["runtimeSettings"]["forkedFromSessionId"]
+                .as_str()
+                .is_some()
+            && session["runtimeSettings"]["agentSessionId"]
+                .as_str()
+                .is_none_or(|id| id.trim().is_empty())
+    };
+    let pending = repository
+        .list_sessions(None)?
+        .into_iter()
+        .filter(is_pending_fork)
+        .collect::<Vec<_>>();
+    let names = pending
+        .iter()
+        .filter_map(|session| session["zmxName"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    let identities =
+        crate::zmx::read_zmx_session_process_identities(&names, home).map_err(|failure| {
+            error(format!(
+                "Could not resolve managed fork ownership: {failure:?}"
+            ))
+        })?;
+    for session in pending {
+        let Some(identity) = session["zmxName"]
+            .as_str()
+            .and_then(|name| identities.get(name))
+        else {
+            continue;
+        };
+        if identity.agent_id.as_deref() != Some("codex") || identity.agent_session_path.is_none() {
+            continue;
+        }
+        let (Some(project_id), Some(session_id)) =
+            (session["projectId"].as_str(), session["sessionId"].as_str())
+        else {
+            continue;
+        };
+        let Some(current) = repository.get_session(project_id, session_id)? else {
+            continue;
+        };
+        if !is_pending_fork(&current)
+            || current["agentId"] != session["agentId"]
+            || current["zmxName"] != session["zmxName"]
+            || crate::agents::draft_agent_switch_in_progress(project_id, session_id)
+        {
+            continue;
+        }
+        crate::agents::apply_live_process_session_identity(
+            repository,
+            &current,
+            project_id,
+            session_id,
+            identity.agent_id.clone(),
+            identity.agent_session_id.clone(),
+            identity.agent_session_path.clone(),
+        )?;
+    }
     Ok(())
 }
 

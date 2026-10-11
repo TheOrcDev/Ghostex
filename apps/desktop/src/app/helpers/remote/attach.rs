@@ -4,7 +4,7 @@
 // and remote workspace terminal creation. See
 // docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::app::helpers::*;
 use crate::*;
@@ -55,7 +55,7 @@ pub(crate) fn gpui_prepare_remote_attach_terminal_plan(
 ) -> Result<GpuiRemoteAttachTerminalPlan, String> {
     /*
     CDXC:RemoteMachines 2026-06-24-19:06:
-    Remote attach validates session/project ownership through the Rust-owned gxserver tunnel before creating a GPUI terminal. The interactive pane runs the authoritative attach command returned by that validation over a fresh SSH connection; asking the remote CLI to resolve the same ids again would repeat its full session-inventory RPC sequence before input becomes available. The human-facing copy command remains `ghostex attach`, and renderer text, gxserver bearer tokens, remote paths, stdout/stderr, and daemon bodies are never logged or copied to CEF.
+    Remote attach validates session/project ownership through the Rust-owned gxserver tunnel before creating a GPUI terminal. The interactive pane runs the authoritative attach command returned by that validation over a fresh SSH connection; asking the remote CLI to resolve the same ids again would repeat its full session-inventory RPC sequence before input becomes available. Renderer text, gxserver bearer tokens, remote paths, stdout/stderr, and daemon bodies are never logged or copied to CEF.
 
     CDXC:RemoteMachines 2026-08-29:
     `wake_session` and `interactive_attach` answer different questions and must
@@ -74,37 +74,20 @@ pub(crate) fn gpui_prepare_remote_attach_terminal_plan(
     } else {
         "/api/attachSessionMetadata"
     };
-    let attach_rpc_started = Instant::now();
-    let result = gpui_remote_gxserver_rpc_result(
-        target,
-        path,
-        &serde_json::json!({
-            "projectId": reference.project_id.as_str(),
-            "sessionId": reference.session_id.as_str(),
-        }),
-        Duration::from_secs(15),
-    )?;
-    support_logs::append_temporary(
-        support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.remoteNewTerminal.attachRpcCompleted",
-        serde_json::json!({
-            "durationMs": attach_rpc_started.elapsed().as_millis() as u64,
-            "operation": if wake_session { "wake" } else { "metadata" },
-        }),
-    );
-    gpui_remote_attach_terminal_plan_from_result(
-        config,
-        target,
-        reference,
-        &result,
-        interactive_attach,
-    )
+    let mut params = serde_json::json!({
+        "projectId": reference.project_id.as_str(),
+        "sessionId": reference.session_id.as_str(),
+    });
+    if target.capabilities.code_server_prompt_editor {
+        params["promptEditor"] = serde_json::json!("code-server");
+    }
+    let result = gpui_remote_gxserver_rpc_result(target, path, &params, Duration::from_secs(15))?;
+    gpui_remote_attach_terminal_plan_from_result(config, target, &result, interactive_attach)
 }
 
 pub(crate) fn gpui_remote_attach_terminal_plan_from_result(
     config: &GpuiRemoteMachineConfig,
     target: &GpuiRemoteGxserverRequestTarget,
-    reference: &GpuiRemoteAttachSessionReference,
     result: &serde_json::Value,
     interactive_attach: bool,
 ) -> Result<GpuiRemoteAttachTerminalPlan, String> {
@@ -121,8 +104,6 @@ pub(crate) fn gpui_remote_attach_terminal_plan_from_result(
         .ok_or_else(|| "Remote attach metadata is unavailable.".to_string())?;
     let agent_icon = gpui_workspace_attach_agent_icon(attach);
     let title = gpui_workspace_attach_title(attach);
-    let clipboard_command =
-        gpui_remote_ghostex_attach_ssh_command(config, &target.execution_target, reference)?;
     let terminal_remote_command = if matches!(
         target.execution_target,
         GpuiRemoteExecutionTarget::WindowsPowerShell
@@ -145,7 +126,7 @@ pub(crate) fn gpui_remote_attach_terminal_plan_from_result(
         config.ssh_host.as_str(),
         config.ssh_port,
     );
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     let askpass = if interactive_attach {
         gpui_remote_ssh_askpass_script(config)?
     } else {
@@ -153,9 +134,8 @@ pub(crate) fn gpui_remote_attach_terminal_plan_from_result(
     };
     Ok(GpuiRemoteAttachTerminalPlan {
         agent_icon,
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         askpass,
-        clipboard_command,
         terminal_command,
         title,
     })
@@ -172,7 +152,6 @@ pub(crate) fn gpui_create_remote_project_workspace_terminal(
     ),
     String,
 > {
-    let create_started = Instant::now();
     /*
     CDXC:RemoteMachines 2026-08-20:
     Ctrl+G in a remote pane can only reach that machine's code-server prompt
@@ -214,13 +193,6 @@ pub(crate) fn gpui_create_remote_project_workspace_terminal(
         });
     }
     let result = parse_gpui_gxserver_rpc_result(&body)?;
-    support_logs::append_temporary(
-        support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.remoteNewTerminal.createRpcCompleted",
-        serde_json::json!({
-            "durationMs": create_started.elapsed().as_millis() as u64,
-        }),
-    );
     let session = result
         .get("session")
         .and_then(serde_json::Value::as_object)
@@ -242,17 +214,7 @@ pub(crate) fn gpui_create_remote_project_workspace_terminal(
         project_id,
         session_id,
     };
-    let plan_started = Instant::now();
-    let plan =
-        gpui_remote_attach_terminal_plan_from_result(config, target, &reference, &result, true)?;
-    support_logs::append_temporary(
-        support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.remoteNewTerminal.planCompleted",
-        serde_json::json!({
-            "durationMs": plan_started.elapsed().as_millis() as u64,
-            "totalDurationMs": create_started.elapsed().as_millis() as u64,
-        }),
-    );
+    let plan = gpui_remote_attach_terminal_plan_from_result(config, target, &result, true)?;
     Ok((reference, plan))
 }
 
@@ -280,75 +242,6 @@ pub(crate) fn gpui_validate_remote_attach_metadata(
         return Err("Remote attach metadata is unavailable.".to_string());
     }
     Ok(())
-}
-
-pub(crate) fn gpui_prepare_remote_resume_clipboard_command(
-    config: &GpuiRemoteMachineConfig,
-    target: &GpuiRemoteGxserverRequestTarget,
-    reference: &GpuiRemoteAttachSessionReference,
-) -> Result<String, String> {
-    /*
-    CDXC:RemoteMachines 2026-06-24-19:06:
-    Copy Remote Resume asks the owning remote gxserver for its agent resume plan and wraps only the returned copy command in a saved-machine SSH command. The renderer supplies no command text or cwd, and Rust must not log the plan, cwd, SSH target, stdout/stderr, token, or daemon body.
-    */
-    let result = gpui_remote_gxserver_rpc_result(
-        target,
-        "/api/readAgentResumePlan",
-        &serde_json::json!({
-            "projectId": reference.project_id.as_str(),
-            "sessionId": reference.session_id.as_str(),
-        }),
-        Duration::from_secs(15),
-    )?;
-    let resume_command = result
-        .get("plan")
-        .and_then(|plan| plan.get("copyCommand"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|command| !command.is_empty())
-        .ok_or_else(|| "No resume command is available for that remote session.".to_string())?;
-    let cwd = result
-        .get("session")
-        .and_then(|session| session.get("cwd"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|cwd| !cwd.is_empty());
-    let remote_command = cwd
-        .map(|cwd| {
-            if matches!(
-                target.execution_target,
-                GpuiRemoteExecutionTarget::WindowsPowerShell
-            ) {
-                format!(
-                    "Set-Location -LiteralPath {}; {resume_command}",
-                    gpui_powershell_quote(cwd)
-                )
-            } else {
-                format!("cd {} && {resume_command}", gpui_shell_single_quote(cwd))
-            }
-        })
-        .unwrap_or_else(|| resume_command.to_string());
-    gpui_remote_ssh_shell_command(
-        config,
-        &target.execution_target,
-        remote_command.as_str(),
-        false,
-        true,
-    )
-}
-
-pub(crate) fn gpui_remote_ghostex_attach_ssh_command(
-    config: &GpuiRemoteMachineConfig,
-    execution_target: &GpuiRemoteExecutionTarget,
-    reference: &GpuiRemoteAttachSessionReference,
-) -> Result<String, String> {
-    gpui_remote_ssh_shell_command(
-        config,
-        execution_target,
-        gpui_remote_ghostex_attach_command_for(execution_target, reference).as_str(),
-        true,
-        true,
-    )
 }
 
 pub(crate) fn gpui_remote_ssh_shell_command(
@@ -379,6 +272,9 @@ pub(crate) fn gpui_remote_ssh_shell_command(
         }
     };
     arguments.push(command);
+    #[cfg(windows)]
+    return Ok(gpui_windows_remote_ssh_terminal_command(&arguments[1..]));
+    #[cfg(not(windows))]
     Ok(arguments
         .iter()
         .map(|argument| gpui_remote_shell_command_arg(argument))
@@ -399,47 +295,4 @@ pub(crate) fn gpui_noninteractive_login_shell_remote_command(command: &str) -> S
     format!(
         "if [ -x /bin/zsh ]; then exec /bin/zsh -lc {quoted_command}; elif command -v zsh >/dev/null 2>&1; then exec zsh -lc {quoted_command}; else exec /bin/sh -lc {quoted_command}; fi"
     )
-}
-
-pub(crate) fn gpui_remote_ghostex_attach_command(
-    reference: &GpuiRemoteAttachSessionReference,
-) -> String {
-    let mut parts = vec![
-        "attach".to_string(),
-        "--session-id".to_string(),
-        gpui_shell_single_quote(reference.session_id.as_str()),
-        "--project-id".to_string(),
-        gpui_shell_single_quote(reference.project_id.as_str()),
-    ];
-    /*
-    Remote Ctrl+G owns a file on the authoritative remote session. Advertise
-    the fixed code-server capability so the remote CLI uses h2fe's remote Code
-    runtime IPC; never advertise the Mac-only GhostexEditor capability across
-    SSH and never let a remote path fall through to a local editor.
-    */
-    parts.extend(["--prompt-editor".to_string(), "code-server".to_string()]);
-    [
-        "case \"${GHOSTEX_HOME:-}\" in /*) ghostex_data_dir=\"$GHOSTEX_HOME\";; *) case \"${XDG_DATA_HOME:-}\" in /*) ghostex_data_dir=\"${XDG_DATA_HOME%/}/ghostex\";; *) ghostex_data_dir=\"$HOME/.local/share/ghostex\";; esac;; esac".to_string(),
-        "remote_ghostex=\"$ghostex_data_dir/gxserver/package/bin/ghostex\"".to_string(),
-        "if [ ! -x \"$remote_ghostex\" ] && [ -x \"$HOME/.ghostex/gxserver/package/bin/ghostex\" ]; then remote_ghostex=\"$HOME/.ghostex/gxserver/package/bin/ghostex\"; fi".to_string(),
-        "if [ ! -x \"$remote_ghostex\" ]; then if [ -x \"$HOME/.local/bin/ghostex\" ]; then remote_ghostex=\"$HOME/.local/bin/ghostex\"; else remote_ghostex=\"ghostex\"; fi; fi".to_string(),
-        format!("\"$remote_ghostex\" {}", parts.join(" ")),
-    ]
-    .join("; ")
-}
-
-pub(crate) fn gpui_remote_ghostex_attach_command_for(
-    target: &GpuiRemoteExecutionTarget,
-    reference: &GpuiRemoteAttachSessionReference,
-) -> String {
-    if matches!(target, GpuiRemoteExecutionTarget::WindowsPowerShell) {
-        format!(
-            "{}\n& $gxExe attach --session-id {} --project-id {} --prompt-editor code-server; exit $LASTEXITCODE",
-            gpui_remote_windows_cli_setup(),
-            gpui_powershell_quote(&reference.session_id),
-            gpui_powershell_quote(&reference.project_id)
-        )
-    } else {
-        gpui_remote_ghostex_attach_command(reference)
-    }
 }

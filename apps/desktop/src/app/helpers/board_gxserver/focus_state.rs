@@ -4,7 +4,11 @@
 // validation, and on-disk persistence helpers.
 // See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::app::helpers::*;
 use crate::*;
@@ -20,6 +24,31 @@ pub(crate) fn gpui_gxserver_presentation_focus_state_from_sidebar_contract_json(
 pub(crate) fn gpui_gxserver_presentation_focus_state_from_sidebar_contract_value(
     value: &serde_json::Value,
 ) -> Result<GpuiGxserverPresentationFocusState, GpuiGxserverPresentationFocusStateContractError> {
+    gpui_gxserver_presentation_focus_state_and_stamp_from_sidebar_contract_value(value)
+        .map(|(state, _echo)| state)
+}
+
+/// What a focus payload carried beside the focus state itself when the sidebar runtime produced it (until 2026-09-25). The store's publish (gx_store/focus_publish.rs) hands the state over directly, and the persisted focus file carries neither field.
+///
+/// CDXC:FocusRouting 2026-09-20 WHY:
+/// `activeGroupId` rides here rather than inside `GpuiGxserverPresentationFocusState`, whose equality decides whether a payload changed anything, and whose persisted file has no such field. The store needs it because a user-made session group that holds no session cannot be derived from the focused session: without it the store stays on the project's own group and reads the empty tab list of the selected group as a disagreement.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GpuiGxserverPresentationFocusEcho {
+    pub(crate) focus_stamp: Option<u64>,
+    pub(crate) active_group_id: Option<String>,
+}
+
+/// CDXC:FocusRouting 2026-09-19 WHY:
+/// `focusStamp` was the newest store focus stamp Rust had told the sidebar runtime before it produced this payload; Rust used it to tell a payload that answered the current selection from one that was already overtaken. Nothing sends it since the runtime was deleted on 2026-09-25 (the store's publish in gx_store/focus_publish.rs passes the state directly, and the persisted focus file never had one), so it stays optional and it is kept out of `GpuiGxserverPresentationFocusState`, whose equality decides whether a payload changed anything.
+fn gpui_gxserver_presentation_focus_state_and_stamp_from_sidebar_contract_value(
+    value: &serde_json::Value,
+) -> Result<
+    (
+        GpuiGxserverPresentationFocusState,
+        GpuiGxserverPresentationFocusEcho,
+    ),
+    GpuiGxserverPresentationFocusStateContractError,
+> {
     let object = gpui_gxserver_focus_contract_object(value)?;
     reject_unexpected_gxserver_focus_contract_keys(
         object,
@@ -30,8 +59,18 @@ pub(crate) fn gpui_gxserver_presentation_focus_state_from_sidebar_contract_value
             "tabSessions",
             "focusedSessionId",
             "visibleSessionIds",
+            "focusStamp",
+            "activeGroupId",
         ],
     )?;
+    let focus_stamp = match object.get("focusStamp") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedField)?,
+        ),
+    };
 
     let version = object
         .get("version")
@@ -53,12 +92,29 @@ pub(crate) fn gpui_gxserver_presentation_focus_state_from_sidebar_contract_value
     let visible_session_ids = required_gxserver_visible_session_ids_field(object)?;
     let active_project_id = optional_gxserver_focus_project_id_field(object, "activeProjectId")?;
     let active_project_tab_sessions = optional_gxserver_workspace_tab_sessions_field(object)?;
-    Ok(GpuiGxserverPresentationFocusState {
-        active_project_id,
-        active_project_tab_sessions,
-        focused_session_id,
-        visible_session_ids,
-    })
+    let active_group_id = match object.get("activeGroupId") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedField)?
+                .trim()
+                .to_string(),
+        )
+        .filter(|group_id| !group_id.is_empty()),
+    };
+    Ok((
+        GpuiGxserverPresentationFocusState {
+            active_project_id,
+            active_project_tab_sessions,
+            focused_session_id,
+            visible_session_ids,
+        },
+        GpuiGxserverPresentationFocusEcho {
+            focus_stamp,
+            active_group_id,
+        },
+    ))
 }
 
 pub(crate) fn gpui_gxserver_focus_contract_object(
@@ -161,9 +217,9 @@ pub(crate) fn gxserver_workspace_tab_session_from_value(
             "projectId",
             // CDXC:SessionChat 2026-08-21: gxserver publishes a
             // session's queued-prompt count on the presentation snapshot the
-            // sidebar runtime already reads. Accepted here (unused for now, the
-            // pane chip reads the count itself) so that the day the runtime
-            // forwards it, one added key cannot invalidate the whole
+            // Rust store already reads. Accepted here (unused for now, the
+            // pane chip reads the count itself) so that the day the focus state
+            // carries it, one added key cannot invalidate the whole
             // focus-state message and blank the Agents tab strip.
             "queuedPromptCount",
             "hasSessionNote",
@@ -459,10 +515,11 @@ pub(crate) fn gpui_gxserver_presentation_focus_state_path() -> PathBuf {
 /// re-materialize the previously focused session (Decision #3). The file
 /// carries only the fixed focus-state contract shape — no titles, paths,
 /// commands, or terminal content.
+/// `path` is the window's own focus file (app/workspace_windows/slots.rs).
 pub(crate) fn persist_gpui_gxserver_presentation_focus_state(
+    path: &Path,
     state: &GpuiGxserverPresentationFocusState,
 ) {
-    let path = gpui_gxserver_presentation_focus_state_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -485,8 +542,10 @@ pub(crate) fn persist_gpui_gxserver_presentation_focus_state(
     let _ = fs::write(path, payload.to_string());
 }
 
-pub(crate) fn load_gpui_gxserver_presentation_focus_state() -> GpuiGxserverPresentationFocusState {
-    fs::read_to_string(gpui_gxserver_presentation_focus_state_path())
+pub(crate) fn load_gpui_gxserver_presentation_focus_state(
+    path: &Path,
+) -> GpuiGxserverPresentationFocusState {
+    fs::read_to_string(path)
         .ok()
         .and_then(|text| {
             gpui_gxserver_presentation_focus_state_from_sidebar_contract_json(&text).ok()
@@ -494,7 +553,7 @@ pub(crate) fn load_gpui_gxserver_presentation_focus_state() -> GpuiGxserverPrese
         .unwrap_or_default()
 }
 
-// Revision markers mirror packages/shared/first-launch-setup-settings.ts
+// Revision markers mirror packages/shared/first-launch-setup-settings.ts (deleted 2026-10-01)
 // (FIRST_LAUNCH_SETUP_CURRENT_REVISION / HIGHLIGHTED_FEATURES_CURRENT_REVISION);
 // keep them in sync when the shared revisions bump so both apps replay the
 // refreshed onboarding exactly once.

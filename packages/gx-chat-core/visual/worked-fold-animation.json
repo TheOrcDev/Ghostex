@@ -1,0 +1,11 @@
+{
+  "dimMs": 200,
+  "dimOpacity": 0.35,
+  "collapseDelayMs": 120,
+  "collapseMs": 480,
+  "headingDelayMs": 240,
+  "headingMs": 320,
+  "headingOffsetPx": 3,
+  "toggleMs": 240,
+  "easing": [0.4, 0, 0.2, 1]
+}

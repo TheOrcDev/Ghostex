@@ -7,7 +7,6 @@
  */
 @source "../";
 @source "../../components";
-@source "../../../apps/web";
 @source "../../../apps/desktop/sidebar";
 @source "../../../apps/desktop/views";
 @source "../../shared";

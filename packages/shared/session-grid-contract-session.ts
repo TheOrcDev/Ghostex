@@ -1,3 +1,4 @@
+import { formatSidebarHotkeyLabel } from './hotkey-label';
 import {
   DEFAULT_AGENT_MANAGER_ZOOM_PERCENT,
   DEFAULT_MAIN_GROUP_ID,
@@ -141,6 +142,7 @@ const IGNORED_PLACEHOLDER_SESSION_TITLES = new Set([
   'cursor agent session',
   'cursor cli session',
   'cursor session',
+  'freebuff session',
   'mastra session',
   'mastra code session',
   'devin session',
@@ -190,6 +192,7 @@ const DEFAULT_SESSION_AGENT_TITLE_NAMES = new Map<string, string>([
   ['devin', 'Devin'],
   ['droid', 'Factory Droid'],
   ['factory-droid', 'Factory Droid'],
+  ['freebuff', 'Freebuff'],
   ['gemini', 'Gemini'],
   ['grok', 'Grok Build'],
   ['grok-build', 'Grok Build'],
@@ -214,7 +217,7 @@ const DEFAULT_SESSION_AGENT_TITLE_NAMES = new Map<string, string>([
 ]);
 const DEFAULT_SESSION_SEARCH_PLACEHOLDER_TITLES = createDefaultSessionSearchPlaceholderTitles();
 const ELLIPSIZED_PATH_TITLE_PATTERN = /^(?:…|\.\.\.)[\\/]/u;
-const WINDOWS_DEFAULT_POWERSHELL_TITLE_PATTERN = /^[a-z]:[\\/].*[\\/](?:powershell|pwsh)\.exe(?:\s+\.)?$/iu;
+const WINDOWS_DEFAULT_POWERSHELL_TITLE_PATTERN = /^(?:Administrator:\s*)?[a-z]:[\\/].*[\\/](?:powershell|pwsh)\.exe(?:\s+\.)?$/iu;
 const AGENT_STATUS_WORD_TITLE_PATTERN =
   /^(?:[\s.:[\](){}!|/\\_-]*)(?:done|error|idle|thinking|working)(?:[\s.:[\](){}!|/\\_-]*)$/iu;
 const GHOST_PLACEHOLDER_SESSION_TITLE_PATTERN = /^👻(?:\s+Terminal Session)?$/u;
@@ -408,7 +411,7 @@ export function getSlotLabel(row: number, column: number): string {
 
 export function getSessionShortcutLabel(slotIndex: number, platform: 'default' | 'mac'): string {
   const shortcutNumber = Math.max(1, Math.floor(slotIndex) + 1);
-  return platform === 'mac' ? `⌘⌥${shortcutNumber}` : `⌃⌥${shortcutNumber}`;
+  return formatSidebarHotkeyLabel(`cmd+alt+${shortcutNumber}`, platform === 'mac' ? 'mac' : 'linux');
 }
 
 export function createSessionAlias(sessionNumber: number, slotIndex: number, displayId?: string | number): string {

@@ -20,10 +20,14 @@ fn left_column(line: &str) -> &str {
     line.split("          ").next().unwrap_or_default().trim()
 }
 
+/// Onboarding screens (sign-in, Amazon Bedrock setup) mark the highlighted row with an ASCII `>`
+/// where every other Codex list uses `›`.
+const ROW_MARKERS: [char; 2] = ['›', '>'];
+
 fn row(line: &str) -> Option<TerminalDialogRow> {
     let line = clean(line);
-    let selected = line.starts_with('›');
-    let line = line.strip_prefix('›').unwrap_or(line).trim_start();
+    let selected = line.starts_with(ROW_MARKERS);
+    let line = line.strip_prefix(ROW_MARKERS).unwrap_or(line).trim_start();
     let (number, label) = line.split_once(". ")?;
     let number = number.parse::<u32>().ok()?;
     if number == 0 || label.trim().is_empty() {
@@ -46,19 +50,79 @@ fn row(line: &str) -> Option<TerminalDialogRow> {
     })
 }
 
+/// One option of an unnumbered picker: `› Reset all memories  Delete local memory files…`.
+fn unnumbered_row(line: &str, number: u32) -> TerminalDialogRow {
+    let line = clean(line);
+    let selected = line.starts_with('›');
+    let text = line.trim_start_matches('›').trim_start();
+    let (label, description) = text
+        .split_once("  ")
+        .map(|(label, detail)| {
+            (
+                label.trim(),
+                Some(detail.split_whitespace().collect::<Vec<_>>().join(" ")),
+            )
+        })
+        .unwrap_or((text, None));
+    TerminalDialogRow {
+        number,
+        label: label.to_string(),
+        description,
+        selected,
+    }
+}
+
+/*
+CDXC:AgentScreenDetection 2026-09-27 WHY:
+Codex's safety-buffering menu ("Giving this request a little extra thought"), its precaution stop and pause screens, and similar pickers print no key-hint footer, so the footed-dialog parser skipped them and chat could only say "Codex is waiting for a choice".
+A menu without a footer is the highlighted row near the bottom with no Codex input box on screen, the same evidence the blocking fallback (`detect_codex_blocking_screen`) accepts; at most a short note may follow its rows.
+*/
+fn footerless_menu(text: &str, lines: &[String], end: usize) -> Option<()> {
+    let selected = (end.saturating_sub(8)..=end)
+        .rev()
+        .find(|&i| row(&lines[i]).is_some_and(|row| row.selected))?;
+    let composer_follows = lines[selected + 1..=end]
+        .iter()
+        .any(|line| clean(line).starts_with(['›', '»']) && row(line).is_none());
+    if composer_follows
+        || crate::session_chat_composer::session_chat_composer_input("codex", text).is_some()
+    {
+        return None;
+    }
+    let last_row = (selected..=end).rev().find(|&i| row(&lines[i]).is_some())?;
+    let rows = lines[selected.saturating_sub(12)..=last_row]
+        .iter()
+        .filter(|line| row(line).is_some())
+        .count();
+    let note_lines = lines[last_row + 1..=end]
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    (rows >= 2 && note_lines <= 3).then_some(())
+}
+
 const DIRECTORY_TRUST_ID_PREFIX: &str = "codex-directory-trust:";
+/// Codex 0.156's "Folder access" trust dialog. A separate prefix because it
+/// is answered differently from the onboarding one (see `payload`).
+const FOLDER_ACCESS_TRUST_ID_PREFIX: &str = "codex-folder-access-trust:";
 const UPDATE_PROMPT_ID_PREFIX: &str = "codex-update-prompt:";
 
 /// CDXC:AgentScreenDetection 2026-09-11 DECISION:
 /// User: the Codex update prompt card must read nicely, and its option must not show the raw install command.
 /// The card names both versions and says in words how Codex installs the update; the exact command stays readable under the card's terminal output, since the notice keeps the real screen for this dialog.
-/// SEE-ALSO: Codex tui/src/update_prompt.rs (the modal) and tui/src/update_action.rs (the commands it prints); server/src/session_chat_notice.rs keeps the screen tail.
+/// SEE-ALSO: Codex tui/src/update_prompt.rs (the modal) and tui/src/update_action.rs (the commands it prints); server/src/session_chat_notice/classify.rs keeps the screen tail.
 fn update_prompt_dialog(mut dialog: TerminalDialog) -> TerminalDialog {
-    let Some((_, versions)) = dialog.title.split_once("Update available!") else {
+    // "✨ Update available! 0.1.0 -> 0.2.0" before Codex 0.156, "Update available · 0.156.0 → 0.156.1" since.
+    let Some((_, versions)) = dialog
+        .title
+        .split_once("Update available!")
+        .or_else(|| dialog.title.split_once("Update available ·"))
+    else {
         return dialog;
     };
     let Some((current, latest)) = versions
         .split_once("->")
+        .or_else(|| versions.split_once('→'))
         .map(|(current, latest)| (current.trim(), latest.trim()))
         .filter(|(current, latest)| !current.is_empty() && !latest.is_empty())
     else {
@@ -100,7 +164,30 @@ fn update_prompt_dialog(mut dialog: TerminalDialog) -> TerminalDialog {
         "with the install method it was set up with"
     };
     let (current, latest) = (current.to_string(), latest.to_string());
-    dialog.id = format!("{UPDATE_PROMPT_ID_PREFIX}{}", dialog.id);
+    // CDXC:AgentScreenDetection 2026-09-23 WHY:
+    // Chat/terminal resizing reflows this prompt without changing its choices; raw screen hashes rejected valid answers. Retain the versions, full installer command and numbered choices in the identity, while the fresh capture supplies the current highlight.
+    let choices: Vec<_> = dialog
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.number,
+                format!(
+                    "{} {}",
+                    row.label,
+                    row.description.as_deref().unwrap_or_default()
+                )
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            )
+        })
+        .collect();
+    let identity = json!([current, latest, choices]).to_string();
+    dialog.id = format!(
+        "{UPDATE_PROMPT_ID_PREFIX}{:x}",
+        Sha256::digest(identity.as_bytes())
+    );
     dialog.title = format!("Update Codex to {latest}?");
     dialog.body = format!(
         "This session runs Codex {current}. Update now installs {latest} {method}. Codex quits to install it, so start it again in this session afterwards."
@@ -172,6 +259,9 @@ fn extended_thinking_dialog(lines: &[String]) -> Option<TerminalDialog> {
         input: None,
         input_value: String::new(),
         actions: Vec::new(),
+        side_question: None,
+        blocks: None,
+        picker: None,
     })
 }
 
@@ -240,6 +330,74 @@ fn directory_trust_dialog(content: &[&str]) -> Option<TerminalDialog> {
         input: None,
         input_value: String::new(),
         actions: Vec::new(),
+        side_question: None,
+        blocks: None,
+        picker: None,
+    })
+}
+
+/// CDXC:AgentScreenDetection 2026-09-26 WHY:
+/// Codex 0.156 replaced the onboarding trust screen with a "Folder access" list (a folder path, a "Trust this folder?" sentence, rows "Trust and continue" and "Quit", footer "enter continue · esc quit"). Unrecognized, it surfaced as a generic Codex dialog, so chat never treated it as a trust prompt.
+/// Its list wraps, so the onboarding answer (Up, then Enter) would land on Quit: rows are reached by moving from the captured highlight like the other numbered menus.
+fn folder_access_trust_dialog(content: &[&str]) -> Option<TerminalDialog> {
+    let heading = content.iter().position(|line| !clean(line).is_empty())?;
+    if clean(content[heading]) != "Folder access" {
+        return None;
+    }
+    let path_end = (heading + 1..content.len()).find(|&i| clean(content[i]).is_empty())?;
+    let folder = content[heading + 1..path_end]
+        .iter()
+        .map(|line| clean(line))
+        .collect::<String>();
+    if folder.is_empty() {
+        return None;
+    }
+    let first_row = content.iter().position(|line| row(line).is_some())?;
+    let mut rows: Vec<_> = content.iter().filter_map(|line| row(line)).collect();
+    if rows.len() != 2
+        || rows[0].number != 1
+        || rows[0].label != "Trust and continue"
+        || rows[1].number != 2
+        || rows[1].label != "Quit"
+        || rows.iter().filter(|row| row.selected).count() != 1
+        || path_end >= first_row
+    {
+        return None;
+    }
+    let context = content[path_end..first_row]
+        .iter()
+        .map(|line| clean(line))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // In a subfolder of a repository Codex adds a note that trust applies to
+    // the repository root before this sentence.
+    if !context.contains("Trust this folder?") {
+        return None;
+    }
+    let identity = serde_json::to_string(&(&folder, &context, &rows)).ok()?;
+    rows[1].label = "Quit Codex".to_string();
+    let name = folder
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()?;
+    Some(TerminalDialog {
+        id: format!(
+            "{FOLDER_ACCESS_TRUST_ID_PREFIX}{:x}",
+            Sha256::digest(identity.as_bytes())
+        ),
+        title: format!("Trust folder \"{name}\"?"),
+        body: format!("{folder}\n\n{context}"),
+        footer: "Choose an option to continue.".to_string(),
+        rows,
+        input: None,
+        input_value: String::new(),
+        actions: Vec::new(),
+        side_question: None,
+        blocks: None,
+        picker: None,
     })
 }
 
@@ -247,12 +405,12 @@ fn directory_trust_dialog(content: &[&str]) -> Option<TerminalDialog> {
 /// User: expose the "Implement this plan?" picker in chat so switching to the terminal is unnecessary.
 /// User: audit every Codex command and make its messages and interactions usable in chat, using the existing UX and improving it where needed.
 /// Numbered selectors, searchable menus, checkbox settings, and text forms retain their own selection, navigation, toggle, save, and cancel actions.
-/// SEE-ALSO: packages/core-ui/chat/session-chat-terminal-dialog.tsx and Codex tui/src/bottom_pane/list_selection_view.rs.
+/// SEE-ALSO: apps/desktop/src/app/native_chat/terminal_dialog.rs and Codex tui/src/bottom_pane/list_selection_view.rs.
 pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
     if let Some(pager) = crate::session_chat_codex_pager::detect_codex_transcript_pager(text) {
         return Some(pager);
     }
-    let lines: Vec<String> = text
+    let mut lines: Vec<String> = text
         .lines()
         .rev()
         .take(160)
@@ -269,13 +427,24 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
         return Some(dialog);
     }
     let end = lines.iter().rposition(|line| !line.trim().is_empty())?;
-    let footer_index = (end.saturating_sub(3)..=end).rev().find(|&i| {
+    let footer_index = match (end.saturating_sub(3)..=end).rev().find(|&i| {
         let line = clean(&lines[i]).to_ascii_lowercase();
         crate::session_chat_codex_blocking::is_codex_modal_footer(&line)
             || line == "q to quit"
             || line.starts_with("press enter to continue")
             || line.starts_with("press space to select or enter to save")
-    })?;
+            // Model migration, /import and app-link views: "Use ↑/↓ to move, press enter to confirm".
+            || (line.starts_with("use ") && line.contains(" to move"))
+    }) {
+        Some(index) => index,
+        None => {
+            footerless_menu(text, &lines, end)?;
+            // An empty stand-in footer, so the menu parses like every footed dialog.
+            lines.truncate(end + 1);
+            lines.push(String::new());
+            end + 1
+        }
+    };
     if lines[footer_index + 1..]
         .iter()
         .any(|line| clean(line).starts_with('›'))
@@ -284,14 +453,44 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
     }
     // A dialog is separated from scrollback by an empty band. Preserve blank
     // lines inside it, but stop at the last double-blank boundary before it.
-    let mut start = (1..footer_index)
+    // Blank padding under a short form (an MCP server form) sits between its
+    // rows and its footer, so the search starts at the last painted line.
+    let painted_end = (0..footer_index)
         .rev()
-        .find(|&i| lines[i].trim().is_empty() && lines[i - 1].trim().is_empty())
-        .map(|i| i + 1)
+        .find(|&i| !lines[i].trim().is_empty())
         .unwrap_or(0);
+    let band_above = |limit: usize| {
+        (1..limit)
+            .rev()
+            .find(|&i| lines[i].trim().is_empty() && lines[i - 1].trim().is_empty())
+            .map(|i| i + 1)
+            .unwrap_or(0)
+    };
+    let mut start = band_above(painted_end);
+    /*
+    CDXC:AgentScreenDetection 2026-09-27 WHY:
+    Codex's command, network and permission approvals (Codex 0.157's "Would you like to run the following command?" with its Environment and Reason lines and the command) print two blank lines above their rows, so the band above the rows was read as the dialog's top edge: the card lost its heading and every row, and a command approval fell back to a generic card with no command.
+    A dialog whose first line is a row reaches one band further up for its heading, as long as that stretch is a heading's few lines rather than scrollback.
+    */
+    let first_painted = (start..footer_index).find(|&i| !lines[i].trim().is_empty());
+    if start >= 2 && first_painted.is_some_and(|i| row(&lines[i]).is_some()) {
+        let heading_start = band_above(start - 2);
+        if start - heading_start <= 12 {
+            start = heading_start;
+        }
+    }
     // Onboarding and text-entry views use a single empty line above their
     // heading, unlike the standard list selection view's two-line band.
-    if let Some(named) = (start..footer_index).rev().find(|&i| {
+    // Blank paragraphs in a textarea are content, not a boundary before its title.
+    let named_start = if clean(&lines[footer_index]).contains("submit") {
+        (0..footer_index)
+            .rev()
+            .find(|&i| crate::session_chat_codex_blocking::is_codex_modal_footer(clean(&lines[i])))
+            .map_or(0, |i| i + 1)
+    } else {
+        start
+    };
+    if let Some(named) = (named_start..footer_index).rev().find(|&i| {
         clean(&lines[i]).starts_with("Tell us more (")
             || matches!(
                 clean(&lines[i]),
@@ -330,6 +529,24 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
             }
         }
     }
+    if clean(&lines[footer_index])
+        .to_ascii_lowercase()
+        .starts_with("enter continue")
+    {
+        if let Some(trust_heading) = lines[..footer_index]
+            .iter()
+            .rposition(|line| clean(line) == "Folder access")
+        {
+            if let Some(dialog) = folder_access_trust_dialog(
+                &lines[trust_heading..footer_index]
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            ) {
+                return Some(dialog);
+            }
+        }
+    }
     if clean(&lines[footer_index]) == "q to quit" {
         start = 0;
     } else if let Some(fullscreen) = lines[..footer_index].iter().rposition(|line| {
@@ -344,7 +561,23 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
         .iter()
         .map(|line| line.as_str())
         .collect();
-    let heading = content.iter().position(|line| !clean(line).is_empty())?;
+    let mut heading = content.iter().position(|line| !clean(line).is_empty())?;
+    // An MCP server form heads each field with its step ("Field 1/3"); the field's own prompt is
+    // what the card should ask, with the step kept only when there is more than one field.
+    let field_step = clean(content[heading])
+        .strip_prefix("Field ")
+        // "Field 1/1 (1 required unanswered)"
+        .and_then(|step| step.split_whitespace().next())
+        .and_then(|step| step.split_once('/'))
+        .filter(|(at, of)| {
+            !at.is_empty()
+                && !of.is_empty()
+                && at.chars().chain(of.chars()).all(|ch| ch.is_ascii_digit())
+        })
+        .map(|(at, of)| (at.to_string(), of.to_string()));
+    if field_step.is_some() {
+        heading = (heading + 1..content.len()).find(|&i| !clean(content[i]).is_empty())?;
+    }
     let title = if clean(&lines[footer_index]) == "q to quit" {
         let heading = content[heading]
             .split('/')
@@ -357,7 +590,13 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
             _ => heading.to_string(),
         }
     } else {
-        clean(left_column(content[heading])).to_string()
+        // Onboarding headings carry the same `>` its highlighted rows do ("> Import setup").
+        let heading = clean(left_column(content[heading]));
+        let heading = heading.strip_prefix("> ").unwrap_or(heading);
+        match &field_step {
+            Some((at, of)) if of != "1" => format!("{heading} (field {at} of {of})"),
+            _ => heading.to_string(),
+        }
     };
     if title.starts_with("Question ")
         || content
@@ -369,11 +608,42 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
     if title.len() > 200 {
         return None;
     }
+    /*
+    CDXC:AgentScreenDetection 2026-09-27 WHY:
+    Some Codex confirmations (the memories reset) print their options without numbers: the highlighted one behind `›`, the others indented to its label. They are answered by arrows from the highlight like every other row, so the number is only their position.
+    */
+    let footer_hint = clean(&lines[footer_index]).to_ascii_lowercase();
+    let unnumbered = (!content[heading + 1..]
+        .iter()
+        .any(|line| row(line).is_some())
+        && (footer_hint.contains("enter to confirm") || footer_hint.contains("enter to select")))
+    .then(|| {
+        let is_option = |line: &str| {
+            line.starts_with("› ") || (line.starts_with("  ") && !line[2..].starts_with(' '))
+        };
+        let selected = (heading + 1..content.len()).find(|&i| content[i].starts_with("› "))?;
+        let first = (heading + 1..=selected)
+            .rev()
+            .take_while(|&i| is_option(content[i]))
+            .last()?;
+        let last = (selected..content.len())
+            .take_while(|&i| is_option(content[i]))
+            .last()?;
+        (2..=9)
+            .contains(&(last + 1 - first))
+            .then_some(first..=last)
+    })
+    .flatten();
     let mut rows: Vec<TerminalDialogRow> = Vec::new();
     let mut body = Vec::new();
     let mut in_rows = false;
-    for line in &content[heading + 1..] {
-        if let Some(parsed) = row(line) {
+    for (offset, line) in content[heading + 1..].iter().enumerate() {
+        let index = heading + 1 + offset;
+        let parsed = row(line).or_else(|| {
+            let range = unnumbered.as_ref().filter(|range| range.contains(&index))?;
+            Some(unnumbered_row(line, (index + 1 - range.start()) as u32))
+        });
+        if let Some(parsed) = parsed {
             in_rows = true;
             rows.push(parsed);
         } else if in_rows && !line.trim().is_empty() && line.starts_with("     ") {
@@ -441,11 +711,34 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
         }
         Some(index)
     });
+    // CDXC:AgentScreenDetection 2026-09-25 WHY:
+    // Native Windows Codex renders text dialogs with a composer chevron instead of the block gutter. Restrict that marker to text-dialog headings so a selected list row cannot become an editable field.
+    let chevron_input = matches!(
+        title.as_str(),
+        "Name thread"
+            | "Rename thread"
+            | "Edit goal"
+            | "Save conversation"
+            | "Add marketplace"
+            | "Custom review instructions"
+            | "Export filename"
+            | "Save transcript"
+    ) || title.starts_with("Tell us more (")
+        // An MCP server form's free-text field ("› Type your answer").
+        || (field_step.is_some() && rows.is_empty());
+    let chevron_input = chevron_input
+        .then(|| {
+            content
+                .iter()
+                .position(|line| line.trim_start().starts_with('›'))
+        })
+        .flatten();
     let input = if title == "Remap Shortcut" {
         Some("key".to_string())
     } else if search_index.is_some() {
         Some("search".to_string())
-    } else if content.iter().any(|line| line.trim().starts_with('▌'))
+    } else if chevron_input.is_some()
+        || content.iter().any(|line| line.trim().starts_with('▌'))
         || lower.contains("type a name")
     {
         Some("text".to_string())
@@ -462,6 +755,30 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
                 .to_string()
         } else {
             left_column(content[index]).trim().to_string()
+        }
+    } else if let Some(index) = chevron_input {
+        let value = content[index..]
+            .iter()
+            .enumerate()
+            .map(|(line_index, line)| {
+                if line_index == 0 {
+                    line.trim_start()
+                        .strip_prefix('›')
+                        .unwrap_or(line)
+                        .trim_start()
+                } else {
+                    line.trim()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end()
+            .to_string();
+        // The MCP form's empty field shows its placeholder in the box.
+        if field_step.is_some() && value.starts_with("Type your answer") {
+            String::new()
+        } else {
+            value
         }
     } else if input.as_deref() == Some("text") {
         let input_start = content
@@ -506,7 +823,7 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
     actions.push("cancel".to_string());
     let identity = content.join("\n") + &footer;
     let id = format!("{:x}", Sha256::digest(identity.as_bytes()));
-    Some(update_prompt_dialog(TerminalDialog {
+    let mut dialog = TerminalDialog {
         id,
         title,
         body: body.trim().to_string(),
@@ -515,26 +832,32 @@ pub fn detect_codex_dialog(text: &str) -> Option<TerminalDialog> {
         input,
         input_value,
         actions,
-    }))
+        side_question: None,
+        blocks: None,
+        picker: None,
+    };
+    dialog.picker = crate::session_chat_resume_picker::codex_resume_picker(&dialog);
+    Some(update_prompt_dialog(dialog))
 }
 
 impl TerminalDialog {
     pub(crate) fn is_codex_directory_trust(&self) -> bool {
         self.id.starts_with(DIRECTORY_TRUST_ID_PREFIX)
+            || self.id.starts_with(FOLDER_ACCESS_TRUST_ID_PREFIX)
     }
 
     pub(crate) fn is_codex_update_prompt(&self) -> bool {
         self.id.starts_with(UPDATE_PROMPT_ID_PREFIX)
     }
 
-    fn payload(&self, params: &Map<String, Value>) -> Result<String, DomainStateError> {
+    pub(crate) fn payload(&self, params: &Map<String, Value>) -> Result<String, DomainStateError> {
         let invalid = || DomainStateError {
             code: "invalidParams",
             message: "That action is not offered by this Codex dialog.".to_string(),
         };
         if let Some(index) = params.get("choiceIndex").and_then(Value::as_u64) {
             let row = self.rows.get(index as usize).ok_or_else(invalid)?;
-            if self.is_codex_directory_trust() {
+            if self.id.starts_with(DIRECTORY_TRUST_ID_PREFIX) {
                 return Ok(match row.number {
                     1 => "\x1b[A\r",
                     2 => "2",
@@ -578,14 +901,10 @@ impl TerminalDialog {
                 return Err(invalid());
             }
             return Ok(if self.input.as_deref() == Some("search") {
-                "\x7f".repeat(self.input_value.chars().count()) + text
+                "\x7f".repeat(self.input_value.chars().count())
+                    + &crate::session_chat_send::sanitize_bracketed_paste_text(text)
             } else {
-                let clear = crate::session_chat_send::build_agent_tui_clear_input_for_text(
-                    &self.input_value,
-                )
-                .replace('\u{15}', "\x1b[117;5u")
-                .replace('\u{b}', "\x1b[107;5u");
-                format!("{clear}\x1b[200~{text}\x1b[201~\r")
+                crate::session_chat_send::wrap_terminal_bracketed_paste_text(text)
             });
         }
         if action == "key" && self.input.as_deref() == Some("key") {
@@ -666,6 +985,7 @@ impl TerminalDialog {
             "pageDown" => "\x1b[6~",
             "home" => "\x1b[H",
             "end" => "\x1b[F",
+            "cancel" if self.footer.starts_with("Browsing transcript · ") => "\x1b[27u",
             "cancel"
                 if self.id == crate::session_chat_codex_pager::CODEX_TRANSCRIPT_PAGER_ID
                     || self.footer.contains("q to quit") =>
@@ -695,25 +1015,42 @@ pub(crate) async fn answer_codex_dialog(
         return Err(stale());
     }
     let payload = dialog.payload(params)?;
+    let submitting_text = params.get("dialogAction").and_then(Value::as_str) == Some("submit")
+        && dialog.input.as_deref() == Some("text");
+    let mut steps = vec![
+        SessionChatSendStep::BeginLocalCommandOutput {
+            agent: Some("codex".to_string()),
+            command: dialog.title.clone(),
+            durable_id: None,
+        },
+        SessionChatSendStep::VerifyTerminalDialog {
+            agent: "codex".to_string(),
+            id: dialog.id.clone(),
+        },
+    ];
+    if submitting_text {
+        // CDXC:SessionChat 2026-09-25 WHY:
+        // Codex's paste detector swallowed Enter into the rename value when clear, paste and submit shared one write. Text dialogs need the same separate bursts as the main composer.
+        let clear =
+            crate::session_chat_send::build_agent_tui_clear_input_for_text(&dialog.input_value)
+                .replace('\u{15}', "\x1b[117;5u")
+                .replace('\u{b}', "\x1b[107;5u");
+        steps.push(SessionChatSendStep::Write(clear));
+        steps.push(SessionChatSendStep::SleepMs(100));
+    }
+    steps.push(SessionChatSendStep::Write(payload));
+    steps.push(SessionChatSendStep::SleepMs(150));
+    if submitting_text {
+        steps.push(SessionChatSendStep::Write("\r".to_string()));
+        steps.push(SessionChatSendStep::SleepMs(150));
+    }
+    steps.push(SessionChatSendStep::FinishLocalCommandOutput);
     execute_session_chat_send(
         &target.project_id,
         &target.session_id,
         &target.zmx_name,
         "session-chat-dialog",
-        vec![
-            SessionChatSendStep::BeginLocalCommandOutput {
-                agent: Some("codex".to_string()),
-                command: dialog.title,
-                durable_id: None,
-            },
-            SessionChatSendStep::VerifyTerminalDialog {
-                agent: "codex".to_string(),
-                id: dialog.id.clone(),
-            },
-            SessionChatSendStep::Write(payload),
-            SessionChatSendStep::SleepMs(150),
-            SessionChatSendStep::FinishLocalCommandOutput,
-        ],
+        steps,
     )
     .await
     .map_err(|error| DomainStateError {
@@ -729,7 +1066,9 @@ pub(crate) async fn answer_codex_dialog(
         && capture_session_terminal_text(&target.zmx_name)
             .await
             .and_then(|screen| detect_codex_dialog(&screen))
-            .is_some_and(|current| current.id == dialog.id)
+            .is_some_and(|current| {
+                current.id == dialog.id || (submitting_text && current.title == dialog.title)
+            })
     {
         return Err(DomainStateError {
             code: "invalidState",
@@ -741,7 +1080,7 @@ pub(crate) async fn answer_codex_dialog(
 
 /// Local commands print results outside Codex's conversation JSONL.
 /// CDXC:AgentScreenDetection 2026-09-13 SEE-ALSO:
-/// Compaction is intentionally excluded: session_chat_terminal_activity.rs owns its live card, and ContextCompaction records its result.
+/// Compaction is intentionally excluded: session_chat_terminal_activity/ owns its live card, and ContextCompaction records its result.
 pub(crate) fn command_has_local_output(text: &str) -> bool {
     matches!(
         text.split_whitespace().next().unwrap_or_default(),
@@ -826,22 +1165,54 @@ fn history_without_composer(text: &str) -> Vec<String> {
     }) {
         lines.truncate(composer);
     }
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+    while lines
+        .last()
+        .is_some_and(|line| line.trim().is_empty() || is_composer_gap_line(line))
+    {
         lines.pop();
     }
     lines
 }
 
+/// CDXC:AgentScreenDetection 2026-09-28 WHY:
+/// Codex's fullscreen view (the default since 0.157) draws a centred turn tip, the "↓ Back to bottom" pill and copy feedback in the gap above its composer, and moves them below every new output. Left in the history, the pre-send anchor ended on the tip, the only suffix still found after `/status` was the tip itself, now under the result, and the command's output came back empty. They are chrome, never output, so they are dropped with the composer. The indent test keeps a transcript line of the agent's own ("  Tip: …" in an answer) as text.
+fn is_composer_gap_line(line: &str) -> bool {
+    let text = line.trim();
+    line.len() - line.trim_start().len() >= 3
+        && [
+            "Tip:",
+            "↓",
+            "New activity",
+            "New ·",
+            "Copied",
+            "Copying",
+            "Copy ",
+        ]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
 /// Only newly printed command output, excluding the previous conversation and
 /// the returned composer. A live dialog has its own card instead.
-pub fn codex_command_output(before: &str, after: &str) -> Option<String> {
+pub fn codex_command_output(command: &str, before: &str, after: &str) -> Option<String> {
     if detect_codex_dialog(after).is_some() {
         return None;
     }
     let before = history_without_composer(before);
     let after = history_without_composer(after);
-    let output =
-        crate::session_chat_local_command::newly_printed_lines(&before, &after)?.join("\n");
+    /*
+    CDXC:AgentScreenDetection 2026-09-28 WHY:
+    Codex prints the command it ran (`/status`) on its own line above the result. When the pre-send tail is gone from a short grid (chat view parks fullscreen Codex at about 24 rows), the latest echo still attributes what follows it, the way Claude's echo does. With neither anchor there is no result: Codex keeps the newest read, so a guessed cut-off would overwrite a good one.
+    */
+    let printed =
+        crate::session_chat_local_command::newly_printed_lines(&before, &after).or_else(|| {
+            let command = command.trim();
+            let echo = after
+                .iter()
+                .rposition(|line| !command.is_empty() && clean(line) == command)?;
+            Some(after[echo..].to_vec())
+        })?;
+    let output = printed.join("\n");
     // A submitted terminal prompt belongs to the JSONL transcript, not this local command.
     let output = output
         .lines()

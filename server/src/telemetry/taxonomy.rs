@@ -25,7 +25,7 @@ Anything that does not match the table below is dropped with a debug log.
 use serde_json::{Map, Number, Value};
 
 /// Every agent id the catalog knows (`server/src/agents/helpers.rs`,
-/// `packages/shared/sidebar-agents.ts`), plus the literal `custom` bucket every
+/// `packages/shared/sidebar-agents.ts` (deleted 2026-10-01)), plus the literal `custom` bucket every
 /// unknown — i.e. user-authored — agent id collapses into.
 pub const KNOWN_AGENT_IDS: &[&str] = &[
     "amp",
@@ -40,6 +40,8 @@ pub const KNOWN_AGENT_IDS: &[&str] = &[
     "mastra",
     "devin",
     "droid",
+    "empryo",
+    "freebuff",
     "gemini",
     "grok",
     "hermes-agent",

@@ -294,6 +294,23 @@ function darwinComponentJobAction({ components, products }) {
   return 'build';
 }
 
+/*
+ * CDXC:Release 2026-09-16 WHY:
+ * The native Windows editor (VS Code REH for win32, platform windows-native-<arch>)
+ * has its own job per architecture (release-gpui-code-server-windows.yml) so the
+ * Windows packaging job no longer compiles it: 28 minutes on x64 and 50 on ARM64
+ * in 9.6.0, the largest cost of the release. Its only consumer is the matching
+ * Windows product, which awaits the artifact just in time before packaging.
+ */
+function windowsNativeComponentJobAction({ arch, components, products }) {
+  if (products[`windows-${arch}`]?.action !== 'build') return 'skip';
+  const component = components['code-server'];
+  if (!component) return 'build';
+  const published = new Set(Object.keys(component.publishedPlatforms ?? {}));
+  if (component.action === 'reuse' || published.has(`windows-native-${arch}`)) return 'reuse';
+  return 'build';
+}
+
 function planJobs({ components, products }) {
   const action = (productId) => products[productId]?.action ?? 'skip';
   const linuxPackages = ['deb', 'rpm', 'tar'].filter((format) => action(`linux-${format}-x64`) === 'build');
@@ -301,6 +318,8 @@ function planJobs({ components, products }) {
     android: action('android'),
     code_server_arm64: componentJobAction({ arch: 'arm64', components, products }),
     code_server_darwin_arm64: darwinComponentJobAction({ components, products }),
+    code_server_windows_arm64: windowsNativeComponentJobAction({ arch: 'arm64', components, products }),
+    code_server_windows_x64: windowsNativeComponentJobAction({ arch: 'x64', components, products }),
     code_server_x64: componentJobAction({ arch: 'x64', components, products }),
     gxserver_arm64: action('gxserver-linux-arm64'),
     gxserver_x64: action('gxserver-linux-x64'),
@@ -355,6 +374,7 @@ function planEstimates({ products }) {
   return { builtRunnerMinutes: built, savedRunnerMinutes: saved };
 }
 
+/** @param {Record<string, any>} options */
 export function computePlan({
   algorithmRevision = FINGERPRINT_ALGORITHM_REVISION,
   assetMetadata,

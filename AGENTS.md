@@ -1,424 +1,246 @@
 # Rules for Agents working in this Repository
 
+Longer procedures live in the tracked `ai/` folder; each section below names its reference file and when to read it. `docs/` is gitignored local material and never holds agent rules.
+
+### Where a fix or feature belongs (decide before you edit)
+
+Fix the place where the wrong decision is made, not the place where the symptom shows. Ask first: would the web build, the mobile app, the `ghostex` CLI or a remote client hit the same problem? If yes, the fix does not belong in one app's UI. Stop at the first layer that can own the change:
+
+1. **gxserver** (`server/src/`, Rust only; the old TypeScript gxserver is gone): anything about an agent session: what is typed into its terminal, reading its screen, hooks, activity, transcripts, lifecycle, git and worktrees, settings, CLI verbs. One change covers every client.
+2. **Session daemons**: zmx (macOS, Linux, Windows WSL) and wmx (native Windows, PowerShell) change together; Ghostex startup and paths stay in gxserver.
+3. **Rust cores**: `packages/gx-core` (sidebar), `packages/gx-chat-core` (the only chat brain: desktop, web and, through UniFFI, the phone), `packages/gx-protocol` (wire types), `packages/settings-catalog` (Settings search rows, setting defaults, option tables and the hotkey catalog, read by native Settings, Quick Access, `ghostex settings` and the Help generator).
+4. **Renderers** (`native_chat/`, `native_sidebar/`, `native_kanban/`, `native_automate/`): layout and input only; `apps/gpui-web` compiles the same files.
+5. **Host glue** (`apps/desktop/src/app/gx_chat/`, `gx_store/`): platform I/O only.
+
+Chat rules go only into `gx-chat-core`; the TypeScript chat brain and the React chat were deleted on 2026-09-25. Kanban and Automate are native GPUI views (`native_kanban/`, `native_automate/`); the React Kanban/Automate page was deleted on 2026-09-30. The desktop runs no JavaScript outside its CEF pages: the QuickJS app runtime was deleted on 2026-09-25, so never add a JavaScript engine or service back to it. When a fix lands higher than a layer that could own it, say why in your report. Full guide with examples: `ai/where-to-fix.md`.
+
 ### General notes
 
-- Multiple sub-agents are working in this repository. Don't be alarmed if something gets changed around your code. This is normal. Just get your work done without affecting the work of other sub-agents or breaking their work.
-- Don't get stuck on stale git locks. You can delete those and continue on your work without confirmation.
+- Multiple sub-agents work in this repository at the same time. Files changing around your code is normal; get your work done without affecting or breaking theirs.
+- Don't get stuck on stale git locks: delete them and continue without confirmation.
+- **Desktop changes reach the phone too** (user decision 2026-10-09): when the user asks for a change to the desktop app, also change the phone app (`apps/mobile/app`) to match wherever it makes sense there, but ask the user to confirm the phone part before starting it. Chat keeps its stricter rule (the GPUI and React Native chats always change together, see "Chat" below).
+- Project terms live in `TERMS.md`. When the user defines a new term or renames a concept, add or update its entry there in the same change.
+- Don't write any tests unless the user explicitly asks for them.
+- Never run `cargo xtask start` or any command that would restart the app unless the user asks you to.
+- **Exception: `cargo xtask start-server` (macOS).** Run it without asking whenever a gxserver change (`server/src/`, or a crate it compiles in such as `packages/find` or `packages/paths`) has to be proven against the live app, then test the fix for real (the GPUI web build, `ghostex` CLI verbs, `zmx history`) instead of reporting it untested. It rebuilds only gxserver, signs it and installs it into `/Applications/Ghostex.app` in place, then restarts just the daemon: the app window stays open and reconnects, and zmx sessions and their agents keep running through the ~2s gap. It never replaces zmx (it refuses when zmx changed; that needs `cargo xtask start`). Mention in your report that you ran it. Desktop-app changes still need `cargo xtask start`.
+- Never switch this folder to another branch. Several agents share one worktree, so it stays on `main` unless the user explicitly requests otherwise; work that needs another branch goes in a temporary copy-on-write folder copy.
+- **Never, ever run `cswap` to launch Claude without `--share-history`** (`cswap run`, a repro, a test, a throwaway session: no exceptions). A run without it unlinks that account's shared `projects/` and `history.jsonl` while its other sessions are live, which splits their transcripts across two folders and empties their chat views (2026-09-29). Copy the flags Ghostex itself uses: `cswap run <N> --share-history -- …`.
 
 ### Always provide clickable artifact links
 
-- Whenever you create or update an HTML file, Markdown file, Storybook story, image, then include a direct clickable Markdown link in your final response so the user can open it immediately.
-- Use `[descriptive label](target)` Markdown syntax, never a bare URL, plain path, or a link inside backticks. Use absolute paths for local HTML and Markdown files.
-- For Storybook, link directly to the rendered story on the running Storybook server, not only to its source file or navigation instructions. Verify that the server is reachable and the story exists before handing over the link. If it cannot be served, clearly explain that and provide the source link.
+Whenever you create or update an HTML file, Markdown file, or image, include a direct clickable `[descriptive label](target)` Markdown link in your final response: never a bare URL, plain path, or link inside backticks, and absolute paths for local HTML and Markdown files.
 
 ### Repository layout (restructured 2026-08-22)
 
-The repository root was restructured on 2026-08-22. Old top-level folders (`gpui/`, `native/`, `ghostex-web/`, `gxserver-rs/`, `sidebar/`, `shared/`, `components/`, `lib/`, `src/`, `zehn-rs/`, `ghostex-paths/`, `ghostex-history/`, `mobile-chat/`, `mobile-find/`, `ghostty/`, `tui2/`, `zmx/`, `code-server/`, `zehn/`) no longer exist at the root. If you are working from an old plan, transcript, or memory file, re-derive the path before you search or edit.
+The old top-level folders (`gpui/`, `native/`, `ghostex-web/`, `gxserver-rs/`, `sidebar/`, `shared/`, `components/`, `lib/`, `src/`, `zehn-rs/`, `ghostex-paths/`, `ghostex-history/`, `mobile-chat/`, `mobile-find/`, `ghostty/`, `tui2/`, `zmx/`, `code-server/`, `zehn/`) no longer exist. If you are working from an old plan, transcript, or memory file, re-derive the path before you search or edit.
 
-One-line vocabulary:
-
-- **`apps/`** = deliverables (things that ship and have an entry point).
-- **`views/`** = embedded pages an app ships (never call these "webviews" or "surfaces").
-- **`packages/`** = libraries imported by apps and by the server.
-- **`.dependencies/`** = ALL external-origin code, _including code we edit_.
-
-Current root:
+Vocabulary: **`apps/`** = deliverables (things that ship and have an entry point). **`views/`** = embedded pages an app ships (never "webviews" or "surfaces"). **`packages/`** = libraries imported by apps and by the server. **`.dependencies/`** = ALL external-origin code, _including code we edit_.
 
 ```
 Ghostex/
 ├── .dependencies/     # ALL external-origin code (edited or not)
-│   ├── ghostty/  ghostty-patches/  code-server/  zmx/
+│   ├── ghostty/  ghostty-patches/  code-server/  zmx/  wmx/
 │   └── zed/  cef-rs/  gpui-component/
 ├── apps/
 │   ├── desktop/       # Rust/GPUI desktop app (crate ghostex-gpui)
 │   │   ├── src/       # Rust
-│   │   ├── sidebar/   # CEF entry modules (main, chat, find, kanban, manage)
-│   │   └── views/     # embedded pages: modal-host, titlebar-host, manage, kanban, meo
-│   ├── web/           # ghostex-web submodule; static browser build of the shared workspace UI
+│   │   ├── sidebar/   # CEF page entries (find, kanban, manage)
+│   │   └── views/     # embedded page: manage (the Files view's embed page)
+│   ├── gpui-web/      # the desktop's GPUI UI compiled to wasm and served by `ghostex web`
 │   ├── mobile/
-│   │   ├── app/       # React Native / Expo submodule
-│   │   └── views/     # chat/ + find/ view bundles embedded by the RN app
+│   │   └── app/       # React Native / Expo submodule
 │   ├── editor/        # GhostexEditor daemon (Monaco prompt editor)
 │   └── history-cli/   # `ghostex-history` CLI crate
 ├── server/            # gxserver crate (binaries: gxserver, ghostex)
 ├── packages/
 │   ├── shared/        # cross-app contracts + logic
-│   ├── core-ui/       # the shared React app UI (sidebar, chat, find, settings, assets)
+│   ├── core-ui/       # the remaining React UI (editor input, tooltips, assets)
 │   ├── components/    # shadcn primitives (ui/) + utils.ts
+│   ├── settings-catalog/  # Rust Settings rows, defaults and hotkeys (crate ghostex-settings-catalog)
 │   ├── find/          # Rust prompt-history search (crate ghostex-find)
 │   └── paths/         # Rust path resolution (crate ghostex-paths)
-├── tooling/  media/  skills/  docs/
+├── ai/  tooling/  media/  skills/  docs/
 └── package.json  tsconfig.json  AGENTS.md  CHANGELOG.md  appcast*.xml  bun.lock …
 ```
 
-Imports: the `@/` alias maps to the **repo root only**, and every import uses the real path — `@/packages/shared/…`, `@/packages/core-ui/…`, `@/packages/components/…`, `@/packages/components/utils`. There are no per-package alias remaps, so every import is grep-able as a literal path.
+Imports: the `@/` alias maps to the **repo root only**, and every import uses the real path (`@/packages/shared/…`, `@/packages/core-ui/…`, `@/packages/components/…`, `@/packages/components/utils`). There are no per-package alias remaps, so every import is grep-able as a literal path.
 
 The full move map, per-file referencer inventory, and split log live in `docs/2026-08-22/repo-restructure/` (`PLAN.md`, `PROGRESS.md`, `REFERENCERS.md`, `SPLITS.md`). Read those before assuming a file is missing.
 
-#### Migration: submodules stranded at their old top-level path
-
-The restructure also moved the `code-server` and `zmx` **submodule** gitlinks into `.dependencies/`. Git cannot move a submodule's working tree as part of a gitlink rename, so a checkout that had any of them initialized before 2026-08-22 keeps the real tree at the old top-level path (now untracked) and gets an empty directory at the new one. A fresh clone is unaffected. `prepare-macos-runtime.sh` now hard-fails on this signature instead of packaging an app with a dead Code tab.
-
-Fast unblock, no move needed (`ZMX_ROOT=` for zmx):
-
-```sh
-GHOSTEX_CODE_SERVER_ROOT=$PWD/code-server bun run start
-```
-
-Proper repair — move the tree and fix its git pointers. code-server needs **four** fixes because of the nested `lib/vscode` submodule; repairing them is not cosmetic, since a broken gitdir degrades `rev-parse HEAD` to `development` in the build fingerprint and forces a full VS Code rebuild:
-
-```sh
-rmdir .dependencies/code-server
-mv code-server .dependencies/code-server
-echo 'gitdir: ../../.git/modules/code-server' > .dependencies/code-server/.git
-git config -f .git/modules/code-server/config \
-  core.worktree ../../../.dependencies/code-server
-echo 'gitdir: ../../../../.git/modules/code-server/modules/lib/vscode' \
-  > .dependencies/code-server/lib/vscode/.git
-git config -f .git/modules/code-server/modules/lib/vscode/config \
-  core.worktree ../../../../../../.dependencies/code-server/lib/vscode
-```
-
-`zmx` has no nested submodule, so it needs only the first two:
-
-```sh
-rmdir .dependencies/zmx && mv zmx .dependencies/zmx
-echo 'gitdir: ../../.git/modules/zmx' > .dependencies/zmx/.git
-git config -f .git/modules/zmx/config core.worktree ../../../.dependencies/zmx
-```
-
-Verify: `git -C .dependencies/code-server rev-parse HEAD` prints `390f119a145e…`, and `git submodule status .dependencies/code-server` shows a leading space (not `-` or `+`).
+**Submodules stranded at their old path.** A checkout that had the `code-server` or `zmx` submodule initialized before 2026-08-22 keeps the real tree at the old top-level path (now untracked) and an empty directory under `.dependencies/`; `prepare-macos-runtime.sh` hard-fails on this. Fast unblock: `GHOSTEX_CODE_SERVER_ROOT=$PWD/code-server cargo xtask start` (`ZMX_ROOT=` for zmx). The proper repair (move the tree and fix its gitdir pointers, four steps for code-server because of the nested `lib/vscode` submodule) is in `ai/submodule-repair.md`.
 
 ### Extensions system
 
-Ghostex extensions are separately shipped, hash-verified packages that can add full views, chat-bar panels, terminal panes, titlebar popups, and app modals. The gxserver registry, store, catalog, static serving, command lifecycle, and CLI live in `server/src/extensions/`. Desktop hosting, bridge context, launch routing, and runtime snapshots live in `apps/desktop/src/app/extensions/`. The Store and Installed UI lives in `packages/core-ui/extensions-modal/`, and the shared wire contract is `packages/shared/ghostex-extensions.ts`.
+Ghostex extensions are separately shipped, hash-verified packages that can add full views, chat-bar panels, terminal panes, titlebar popups, and app modals. Registry, store, catalog, static serving, command lifecycle, and CLI: `server/src/extensions/`. Desktop hosting, bridge context, launch routing, runtime snapshots: `apps/desktop/src/app/extensions/`. Store and Installed UI: the native Settings Extensions page, `apps/desktop/src/app/window/settings_modal/tabs/extensions/` (the React `packages/core-ui/extensions-modal/` was deleted on 2026-10-01). Shared wire contract: `packages/shared/ghostex-extensions.ts`.
 
-Extension source, manifests, schemas, publishing tools, and example extensions live in the separate sibling checkout at `/Users/madda/dev/_active/Ghostex-extensions`; do not add them to this repo or `.dependencies/`. Installed payloads are runtime data owned by gxserver, not source trees to edit in either checkout.
+Extension source, manifests, schemas, publishing tools, and example extensions live in the separate sibling checkout `/Users/madda/dev/_active/Ghostex-extensions`; do not add them to this repo or `.dependencies/`. Installed payloads are runtime data owned by gxserver, not source trees to edit in either checkout.
 
-### `apps/desktop/views/` — the desktop app's embedded pages
+### `apps/desktop/views/`: the desktop app's embedded pages
 
-`apps/desktop/views/` holds the React pages the desktop app ships inside CEF. `apps/desktop/vite.config.ts` builds them, together with the CEF entry modules in `apps/desktop/sidebar/`, into the app's HTML bundles:
+`apps/desktop/views/` holds the React page the desktop app ships inside CEF; `apps/desktop/vite.config.ts` builds it, together with the CEF entry module in `apps/desktop/sidebar/`, into the app's HTML bundle:
 
-- `apps/desktop/views/modal-host.tsx` → `modal-host.html` (app modals, dropdowns, toasts).
-- `apps/desktop/views/titlebar-host.tsx` → `titlebar-host.html`, with its implementation split across `apps/desktop/views/titlebar/`. The desktop app only loads this page for the Tips and Resources dropdown panels. **The gpui titlebar itself is native Rust, not this page.** The project name, the Agents/Code/Browser/Kanban/Automate/Docs mode tabs, the buttons, and the tooltips are drawn by `render_titlebar` / `render_mode_tab` in `apps/desktop/src/app/render/mode_switcher_and_titlebar.rs`; the titlebar menus, popups, tips and resources behaviour live in `apps/desktop/src/app/titlebar/`; the mode-tab list is built by `titlebar_mode_switcher_items` in `apps/desktop/src/app/helpers/titlebar.rs` (with thin wrappers in `apps/desktop/src/app/workarea.rs` and `apps/desktop/src/app/model/runtime_state.rs`). Titlebar work for the desktop app belongs in those Rust files, not in `titlebar-host.tsx`.
-- `apps/desktop/views/manage.tsx` (+ `apps/desktop/views/manage/`) is the Docs surface, loaded through `apps/desktop/sidebar/manage-main.tsx`.
-- `apps/desktop/views/tasks-placeholder.tsx` (+ `apps/desktop/views/project-board/`) is the Kanban surface, loaded through `apps/desktop/sidebar/kanban-main.tsx`.
-- `apps/desktop/views/meo/` is the markdown editor behind the Docs surface, reached through `manage.tsx` → `meo/editor.ts`.
-- `apps/desktop/views/project-board-shared.ts` and `apps/desktop/views/combined-sidebar-mode.ts` are shared logic consumed by those pages.
+- **There is no React modal host.** Every app modal (Settings and its pages, Accounts, Agents Hub, Quick Access, Add Project, onboarding, the Git, worktree, rename, note, delayed-send, remote and update dialogs) is a native GPUI window opened through `try_open_native_app_modal` (`apps/desktop/src/app/native_app_modal_lifecycle.rs`); only extension modals still load a CEF page, their own. The React `modal-host.tsx`/`modal-host.html`, every modal component in `packages/core-ui/`, the `packages/components/ui/` primitives only they used, their stories and tests, and the onboarding sandbox were deleted on 2026-10-01. Native ports cite those files with "(deleted 2026-10-01)"; find them in git history. The dormant Rust path that would load `modal-host.html` (`open_gpui_app_modal_window_inner` for non-extension kinds, `AppModalHostBridgeSurface`) is still there.
+- **The window chrome is native Rust; there is no titlebar page** (the React `titlebar-host.html` that last drew the Tips and Resources panels was deleted on 2026-09-26). There is no titlebar row, and the work area header (project breadcrumb, Start/Open/Commit, the `⋯` menu, the panel toggles) is drawn by `apps/desktop/src/app/render/workarea_header/`; which views are open is the view panel's own tab strip, `apps/desktop/src/app/render/view_tab_strip.rs`, with its menus in `app/view_tab_menus.rs` and its model in `app/view_panel.rs`. Menus, popups, tips and resources behaviour live in `apps/desktop/src/app/titlebar/`, and the Tips and Resources panels are drawn by `apps/desktop/src/app/window/titlebar_panels/`; the view list comes from `titlebar_mode_switcher_items` in `apps/desktop/src/app/helpers/titlebar/mode_switcher.rs` (thin wrappers in `app/workarea.rs` and `app/model/runtime_state.rs`). This work belongs in those Rust files.
+- `manage.tsx` (+ `manage/`) is only the Files view's embed page (`manage.html?embed=1`, loaded through `apps/desktop/sidebar/manage-main.tsx`): the native Docs view (`apps/desktop/src/app/native_docs/`) shows HTML files, Excalidraw drawings, video and audio in it. The React Docs app and its `meo/` editor were deleted on 2026-09-30.
+- There is no Kanban/Automate page: the React one (`tasks-placeholder.tsx`, `project-board/`, `kanban.html`) was deleted on 2026-09-30, and the desktop draws both views natively (`apps/desktop/src/app/native_kanban/`, `native_automate/`); find it in git history when a native port cites it.
 
-Shared gxserver logic lives in `packages/shared/` (for example `packages/shared/gxserver-presentation-cache.ts`); the desktop runtime client is `apps/desktop/sidebar/gxserver-runtime.ts` (+ `gxserver-runtime/`), and the web app has its own client at `apps/web/src/connections/gxserver-client.ts`.
-
-The shared React app UI is `packages/core-ui/` (`packages/core-ui/sidebar-app.tsx`), mounted by the desktop app through `apps/desktop/sidebar/main.tsx` and by the web app. Its icons are in `packages/core-ui/assets/`.
+Shared gxserver contracts live in `packages/shared/` (for example `gxserver-protocol.ts`); the desktop and the GPUI web build talk to gxserver from Rust (`apps/desktop/src/app/gx_store/`, `apps/gpui-web/src/app/gx_store/`, both through `gx_rpc` in `gx_store/rpc.rs`). The React web app was deleted on 2026-09-24; `packages/core-ui/` is what is left of the React UI (the GhostexEditor's Lexical input, tooltips and helpers the Files embed page imports; the Settings search catalog, setting defaults and hotkey catalog moved to the Rust crate `packages/settings-catalog` on 2026-10-01), and the React sidebar that lived there (`sidebar-app.tsx` and its cards, sections and stories) was deleted with it, as were its last model files and the `debug:sessions` TUI that used them (2026-10-01); find it in git history when a native port cites it. The desktop sidebar is native Rust (`apps/desktop/src/app/native_sidebar/` for the renderer, `apps/desktop/src/app/gx_store/` for the store that feeds it), the TypeScript sidebar page and its `index.html` entry were deleted on 2026-09-21, and the desktop's QuickJS app runtime (`apps/desktop/sidebar/service/`, `gxserver-runtime/`, `native-quick-access/`, the `rquickjs` engine and its bundle) was deleted on 2026-09-25 after its last behaviour moved to gxserver, `gx-core` and `gx_store/` (`docs/2026-09-25/app-runtime-port/`); the chat's socket to gxserver is Rust too (`packages/gx-chat-client`). Client storage (`client-storage.sqlite3`) starts and is read in Rust (`packages/client-storage-native`, crate `ghostex-client-storage`, the Rust side of `packages/client-storage/`).
 
 ### Repository Search Routing
 
-This repository contains Ghostex app code plus large external terminal/editor code. Start searches in the smallest app-owned area that matches the task, and only expand after the first pass doesn't find what you need.
+Start in the smallest app-owned area that matches the task and expand one layer at a time, saying why the next folder is relevant before searching a large external tree.
 
-Default search posture:
+- **`.dependencies/**` is THE exclusion for external code**: one `-g '!.dependencies/**'` replaces the old per-tree ghostty/tui2-vendor/code-server excludes. Also exclude `node_modules/**`, `.git/**`, `dist/**`, `build/**`, `out/**`, `target/**`, `storybook-static/**`, `tmp/**`, `artifacts/**`, `.cache/**`, `.turbo/**`, `.vite/**`, `.zig-cache/**`, `zig-out/**`, and `DerivedData/**`.
+- Do not search `.dependencies/ghostty/` first just because a symbol, setting, file, or bug report mentions "ghostty", "terminal", "session", "restore", "fork", "launch", or "pane"; many Ghostex-owned files use those words. Search it only when the task is explicitly about upstream Ghostty behaviour, the embedded Ghostty source, Zig terminal internals, Ghostty macOS internals, or a build/test failure already under `.dependencies/ghostty/**`, and then target its `src/`, `macos/`, `pkg/`, or `test/`. Ghostex's own patch series on top of upstream is `.dependencies/ghostty-patches/`, re-applied by `tooling/sync-ghostty.sh`.
 
-- **`.dependencies/**` is THE exclusion for external code.** Everything imported or vendored now lives there, so a single `-g '!.dependencies/**'` replaces the old per-tree ghostty/tui2-vendor/code-server excludes. Also exclude build, dependency, and cache trees: `node_modules/**`, `.git/**`, `dist/**`, `build/**`, `out/**`, `target/**`, `storybook-static/**`, `tmp/**`, `artifacts/**`, `.cache/**`, `.turbo/**`, `.vite/**`, `.zig-cache/**`, `zig-out/**`, and `DerivedData/**`.
-- Do not search `.dependencies/ghostty/` first just because a symbol, setting, file, or bug report mentions "ghostty", "terminal", "session", "restore", "fork", "launch", or "pane"; many Ghostex-owned files use those words.
-- If a targeted app-owned search misses, expand one layer at a time and explain why the next folder is relevant before searching large external trees.
+Where to look first, by task:
 
-Search these app-owned areas first by task:
+- **Desktop app shell** (window lifecycle, startup, terminals/panes, titlebar, session restore/fork launch plans, terminal host integration): `apps/desktop/src/`, `apps/desktop/sidebar/`, `apps/desktop/native/macos/`, `apps/desktop/scripts/`, `packages/core-ui/`, `packages/shared/`, `tooling/`.
+- **Frontend UI** (the remaining React components): `packages/core-ui/`, `packages/components/` (+ `ui/`), `packages/shared/`, `apps/desktop/sidebar/`, `apps/desktop/views/` (the Files embed page). App modals and Settings are native: `apps/desktop/src/app/window/`.
+- **Web app**: `apps/gpui-web/` (the desktop's GPUI source compiled to wasm; see its README), then the desktop files it symlinks.
+- **Session grid, prompts, agent metadata, workspace/project state, contracts, shared tests**: `packages/shared/`, then the consuming surface in `packages/core-ui/`, `apps/desktop/sidebar/`, `apps/desktop/views/`, `apps/mobile/app/`, or `server/src/`.
+- **Server, remote protocol, hooks, authentication, remote setup**: `server/src/`, `packages/shared/`, `tooling/`. The crate (`gxserver`; binaries `gxserver` and `ghostex`) is heavily modularized: `server/src/server/` (HTTP/WS core plus per-concern submodules), `agents/`, the flat `session_chat_*.rs` family, `domain/`, `zmx/`, `typed_operations/`, `portless/`, `agent_hooks/`.
+- **Extensions**: the folders in the Extensions section above. Search `/Users/madda/dev/_active/Ghostex-extensions` only for manifests, authoring/publishing tooling, or example-extension code.
+- **zmx behaviour**: `.dependencies/zmx/src/` + `.dependencies/zmx/test/`, the deliberate exception to the `.dependencies/**` exclusion because Ghostex edits it. The canonical contract for the Ghostex private OSCs (`ZMX_REFRESH`, `ZMX_VISIBLE=<rows>,<cols>`, `ZMX_CHAT=<rows>,<cols>`, `ZMX_HIDDEN=<rows>,<cols>`) is `appendClientInputMessages` in `.dependencies/zmx/src/loop.zig`; the three emitters (`apps/desktop/src/terminal_model.rs`, which the GPUI web build compiles too, `server/src/terminal_ws.rs`, `apps/mobile/app/src/terminal/zmxDisplay.ts`) must keep byte-identical sequences and a 200-column constant equal to `RESTING_GRID_COLS` in `.dependencies/zmx/src/ipc.zig`.
+- **Prompt-history search** (`ghostex f`, the Find surface): `packages/find/` engine, `server/src/agent_prompt_search.rs` API, `apps/desktop/src/app/window/find_prompts/` the desktop window, `apps/mobile/app/src/find/` (in the phone submodule) the phone's native Find screens.
+- **Mobile**: `apps/mobile/` is the only active mobile app (Android, via the React Native/Expo submodule `apps/mobile/app`). Its chat is native React Native views on the Rust chat core (`apps/mobile/app/src/chat/`, `packages/gx-chat-mobile`), its Find is native React Native screens over the `ghostex` CLI's prompt-search verbs (`apps/mobile/app/src/find/`; user decision 2026-10-01, the WebView page and its `build:mobile-find` bundle are gone), and `cargo xtask generate-mobile-chat-agents` writes the phone's list of chat-capable agents from `packages/shared/session-chat-agents.ts` with a script that lives in `apps/mobile/app/scripts/`. The retired iOS and Termux-fork Android repos under `/Users/madda/dev/_active/ghostex-deprecated/` must not be restored as release inputs.
+- **Assets, sounds, icons, release tooling**: `media/`, `apps/desktop/assets/`, `packages/core-ui/assets/`, `tooling/`, `tooling/release-gpui/`.
 
-- Desktop app shell, window lifecycle, app startup, terminals/panes, titlebar, session restore/fork launch plans, terminal host integration: `apps/desktop/src/`, `apps/desktop/sidebar/`, `apps/desktop/native/macos/`, `apps/desktop/scripts/`, `packages/core-ui/`, `packages/shared/`, and `tooling/`.
-- Frontend UI, React components, settings, project/sidebar interactions, Storybook stories: `packages/core-ui/`, `packages/components/`, `packages/components/ui/`, `packages/shared/`, `apps/desktop/sidebar/`, `apps/desktop/views/` (for the modal host, titlebar host, Docs/manage, Kanban, and `meo` pages listed above).
-- Web app: `apps/web/src/`, then the shared `packages/core-ui/` and `packages/shared/` code it builds on.
-- Session grid, prompts, agent metadata, workspace/project state, contracts, shared tests: `packages/shared/`, then the consuming surface in `packages/core-ui/`, `apps/desktop/sidebar/`, `apps/desktop/views/`, `apps/mobile/views/`, or `server/src/`.
-- Server, remote protocol, hooks, authentication, remote setup: `server/src/`, `packages/shared/`, `tooling/`. The server crate is heavily modularized: `server/src/server/` (HTTP/WS core in `mod.rs` plus per-concern submodules), `server/src/agents/`, the flat `server/src/session_chat_*.rs` family, `server/src/domain/`, `server/src/zmx/`, `server/src/typed_operations/`, `server/src/portless/`, and `server/src/agent_hooks/`. Crate name is `gxserver`; it builds the `gxserver` and `ghostex` binaries.
-- Extensions: start with `server/src/extensions/` for registry, install, serving, lifecycle, API, and CLI behavior; `apps/desktop/src/app/extensions/` for desktop hosting, bridge context, and launch routing; `packages/core-ui/extensions-modal/` for Store and Installed UI; and `packages/shared/ghostex-extensions.ts` for the shared contract. Search `/Users/madda/dev/_active/Ghostex-extensions` only for extension manifests, authoring/publishing tooling, or example-extension code.
-- zmx behavior: `.dependencies/zmx/src/` + `.dependencies/zmx/test/`. This is the deliberate exception to the `.dependencies/**` exclusion — Ghostex edits it. The canonical contract for the Ghostex private OSCs (`ZMX_REFRESH`, `ZMX_VISIBLE=<rows>,<cols>`, `ZMX_CHAT=<rows>,<cols>`, `ZMX_HIDDEN=<rows>,<cols>`) is `appendClientInputMessages` in `.dependencies/zmx/src/loop.zig`; the four emitters — `apps/desktop/src/terminal_model.rs`, `server/src/terminal_ws.rs`, `apps/web/src/terminal/session-terminal.tsx`, `apps/mobile/app/src/terminal/zmxDisplay.ts` — must keep byte-identical sequences and a 200-column constant equal to `RESTING_GRID_COLS` in `.dependencies/zmx/src/ipc.zig`.
-- Prompt-history search (`ghostex f`, the Find surface): `packages/find/` for the engine, `server/src/agent_prompt_search.rs` for the API, `packages/core-ui/find/` for the shared UI.
-- Mobile app work: `apps/mobile/` is the only active mobile app and releases Android through the React Native/Expo project in `apps/mobile/app` (a git submodule). Its embedded chat and find pages are `apps/mobile/views/chat/` and `apps/mobile/views/find/`, bundled by `bun run build:mobile-chat` / `bun run build:mobile-find`. The retired native iOS and Termux-fork Android repositories live under `/Users/madda/dev/_active/ghostex-deprecated/` and must not be restored as active release inputs.
-- Assets, sounds, icons, and release tooling: `media/`, `apps/desktop/assets/`, `packages/core-ui/assets/`, `tooling/`, and `tooling/release-gpui/`.
-
-Search external Ghostty code only when the task is explicitly about upstream Ghostty behavior, the embedded Ghostty source, Zig terminal internals, Ghostty macOS internals, or a build/test failure whose failing file is already under `.dependencies/ghostty/**`. Even then, target the relevant subfolder such as `.dependencies/ghostty/src/`, `.dependencies/ghostty/macos/`, `.dependencies/ghostty/pkg/`, or `.dependencies/ghostty/test/`, and continue excluding `.dependencies/ghostty/.zig-cache/**` and `.dependencies/ghostty/zig-out/**`. Ghostex's own patch series on top of upstream is `.dependencies/ghostty-patches/`, re-applied by `tooling/sync-ghostty.sh`.
-
-Preferred `rg` shape for first-pass searches:
+Preferred first-pass `rg` shape (add `apps/desktop/views`, `packages/components`, or `apps/mobile/app/src` only when the task is about those):
 
 ```bash
 rg -n "pattern" apps/desktop/src apps/desktop/sidebar packages/core-ui packages/shared \
-  server/src apps/web/src tooling \
+  server/src tooling \
   -g '!.dependencies/**' -g '!node_modules/**' -g '!storybook-static/**' -g '!tmp/**' \
   -g '!dist/**' -g '!build/**' -g '!out/**' -g '!target/**' -g '!artifacts/**' -g '!.git/**'
 ```
 
-Add `apps/desktop/views` to that list only when the task is about the desktop modal host, titlebar host, Docs/manage, Kanban, or `meo` pages, or about the shared `apps/desktop/views/*.ts` logic. Add `packages/components` for shadcn primitives, and `apps/mobile/views` for the mobile embedded pages.
+### Prompt-history search is Rust; the old Zig Zehn source is gone
 
-### Prompt-history search: it is Rust; the old Zig Zehn source is gone
+`ghostex f` runs the picker **in-process** from the `packages/find/` Rust crate (`ghostex-find`), compiled into gxserver and the `ghostex` CLI. There is no `bin/zehn` to stage, no `GHOSTEX_ZEHN_BIN`, and no `ZEHN_ZIG` (releases still need Zig 0.16 for ghostty and zmx, and 0.16 is the repo's only Zig toolchain). The Zig `zehn` submodule was removed: never restore, build, or bundle it, or treat it as the spec for new work; change `packages/find/` instead. The terminal picker and the native Search by Prompt window share one key map (agents `^g`, projects `^j`, moved from `^t`/`^r` because browsers reserved Ctrl+T and Ctrl+R), and they and the phone's native Find screens (`apps/mobile/app/src/find/`, touch only) share the same scanner, matcher, ranking, Codex cache, and favorites file through gxserver, so a prompt starred in one is starred in the others. Anything that makes them rank or star differently is a bug.
 
-`ghostex f` used to spawn a bundled Zig binary built from the `zehn` submodule. It does not any more. Prompt-history search is the `packages/find/` Rust crate (crate name `ghostex-find`), compiled into gxserver and the `ghostex` CLI, so:
+### Session daemons: zmx (POSIX, including WSL) and wmx (native Windows)
 
-- `ghostex f` runs the picker **in-process**. There is no `bin/zehn` to stage, no `GHOSTEX_ZEHN_BIN`, and no `ZEHN_ZIG`. (Releases do still require Zig 0.16 — for ghostty and zmx, not for zehn — and 0.16 is now the repo's _only_ Zig toolchain.)
-- The old Zig `zehn` submodule was removed after the Rust port replaced it. Never restore it, build it, bundle it, or treat it as the spec for new work — change `packages/find/` instead.
-- Two hotkeys moved in **both** the terminal picker and the GUI so the surfaces share one key map: agents is `^g` (was `^t`) and projects is `^j` (was `^r`), because browsers reserve Ctrl+T and Ctrl+R and will not hand them to a page.
-- The GUI (`packages/core-ui/find/`) and `ghostex f` share the same scanner, matcher, Codex cache, and favorites file, so a prompt starred in one is starred in the other. Anything that would make them rank or star differently is a bug.
+`.dependencies/wmx/` is the independent [maddada/wmx](https://github.com/maddada/wmx) submodule, the native Windows ConPTY counterpart to `.dependencies/zmx/`; its README holds the shared API/behaviour table and its AGENTS.md the maintenance rules. App-specific startup and paths belong in `server/src/zmx/scripts_windows.rs`, not wmx. Whenever you change a Ghostex-consumed zmx feature, inspect the matching wmx implementation and update both providers or explain why the other is unaffected; visibility OSCs, the 200-column resting grid, client leadership, attach/detach persistence, history/refresh, title coalescing, and prompt-editor capabilities must stay aligned. Run wmx's real Windows smoke script after changing these contracts. Each provider has its own wire generation; bump only for incompatible IPC changes. Existing `nativeSessionProtocol: 1` sessions migrate as wmx generation 1 without being killed.
 
-### Windows session parity: wmx
+**zmx wire generation.** A zmx daemon keeps running the binary that spawned it and talks to the bundled client over the private IPC contract in `.dependencies/zmx/src/ipc.zig`, versioned by `WIRE_GENERATION` (printed by `zmx version`, recorded per session). On every gxserver start, the wire-cycle pass in `server/src/zmx/wire_cycle.rs` kills every live daemon whose recorded generation differs from the bundled binary's and lets the session resume lazily through wake-on-open. **Cycling kills the agent running inside the session** (in-flight subagents, background jobs, and unfinished tool calls are lost), which is why only a generation bump, never binary identity, may cycle daemons. Full mechanism and history: `ai/zmx-wire-generation.md`. Rules when editing zmx:
 
-`.dependencies/wmx/` is the independent [maddada/wmx](https://github.com/maddada/wmx) submodule, the native Windows ConPTY counterpart to `.dependencies/zmx/`. Its README contains the shared API/behavior table and its AGENTS.md contains maintenance rules. The server selects wmx on native Windows and zmx on POSIX, including WSL. App-specific startup and paths belong in `server/src/zmx/scripts_windows.rs`, not wmx.
-
-Whenever changing a Ghostex-consumed zmx feature, inspect the matching wmx implementation and update both providers or explain why the other is unaffected. In particular, keep visibility OSCs, the 200-column resting grid, client leadership, attach/detach persistence, history/refresh, title coalescing, and prompt-editor capabilities aligned. Run wmx's real Windows smoke script after changes to these contracts. Each provider has its own wire generation; bump only for incompatible IPC changes. Existing `nativeSessionProtocol: 1` sessions migrate as wmx generation 1 without being killed.
-
-### Changing zmx: the wire generation and the wire-cycle pass
-
-A zmx daemon keeps running the code of the binary that spawned it, and the bundled zmx client talks to it over a private IPC tag contract (`.dependencies/zmx/src/ipc.zig`). When that contract breaks (tags renumbered, a payload layout changed, an existing tag given a new meaning), a new client and a surviving old daemon cannot talk at all: `zmx attach` shows a blank pane and every request is ignored. gxserver therefore runs a **wire-cycle pass** on every startup (`cycle_wire_incompatible_zmx_session_daemons` in `server/src/zmx/wire_cycle.rs`, called from `server/src/server/mod.rs`):
-
-- zmx declares the generation of the contract it speaks as `WIRE_GENERATION` in `ipc.zig`, printed by `zmx version` as a `wire_generation\t<n>` line. Every provider start records that number in the session's `providerState` (`zmxWireGeneration`).
-- On startup, every live daemon whose recorded generation differs from the bundled binary's (or that has no record at all) is killed via `zmx kill`, then SIGTERM/SIGKILL, and marked sleeping. The session is restored lazily through the ordinary wake-on-open path with its saved agent resume command (`claude --resume …`, etc.). The log event is `zmxIncompatibleSessionDaemonCycled` in `~/.local/state/ghostex/logs/gxserver.jsonl`.
-- A daemon whose generation matches is left alone no matter how different its binary is. Rebuilding, re-signing, and reinstalling zmx with an unchanged generation cycles nothing.
-- **Cycling kills the agent running inside the session.** Killing the daemon hangs up the PTY, so a Claude Code / Codex process dies mid-turn. The resume brings the conversation back, but in-flight background subagents, background Bash jobs, and unfinished tool calls are lost. Before 2026-09-03 the pass compared binary identity instead, and three additive zmx rebuilds in one day cycled 57 sessions, several with agents mid-task; that is why the generation number exists.
-- Sessions stamped by the retired binary-identity scheme (`zmxBinaryStamp`) count as generation 1, since every binary since the 2026-08-23 tag renumbering speaks it. Do not "clean up" that migration.
-
-What this means when you edit zmx:
-
-- **Bump `WIRE_GENERATION` exactly when an old daemon can no longer serve a new client**: a `Tag` value renumbered or removed, the payload layout of an existing tag changed (`Resize`, `Visibility`, the `Init` header, a JSON reply a client parses strictly), an existing tag given a new meaning, or a client that starts to _require_ a reply to a new tag without a compatibility probe. The bump is the whole mechanism; you do not add cycling code. Update the frozen-tag tests in `ipc.zig`, the `CDXC:ZmxWireGeneration` comment there with the date and what moved, and every emitter listed under "zmx behavior" in the search routing above.
-- **Do not bump for additive or internal changes**: a new tag old daemons drop through their `_` arm while clients tolerate the silence (`Visibility`, `GridInfo` are the models), a daemon-side bug fix, a log line, a performance change, or an upstream merge that leaves the framing alone. If the new client needs an answer from the daemon, do what `SendAcked` does: probe first, and treat no reply as "old daemon", so the change stays additive.
-- **A bump restarts every live session on the next `bun run start`.** Say so in your report, check `ghostex sessions` for `running` entries as in the commit rules below, and let the user pick a quiet moment to install. Sessions whose agent is idle lose nothing but a resume; sessions mid-task lose background work.
-- **Never skip the stamp or bypass the pass** with an env switch, a build flag, or by leaving `wire_generation` out of `zmx version`. A binary that does not print the line makes gxserver log `zmxWireGenerationUnreadable` and cycle nothing, which turns the next real wire break into blank panes.
-- Verify with `zmx version` from `.dependencies/zmx/zig-out/bin/zmx` and run `zig build test` inside `.dependencies/zmx` before shipping the binary. On macOS the plain Zig build can fail inside libc++ with an `INFINITY` error from the current SDK; `prepare-macos-runtime.sh` builds through an SDK overlay and an `xcrun` shim to work around it, so build the way it does rather than patching the SDK.
-- `ghostex server stop` stops only the control plane and leaves daemons running; `ghostex server stop-all` kills every tracked zmx session. Neither is a substitute for the wire-cycle pass and neither should be used to "test" a zmx change on a machine with live agents.
+- Bump `WIRE_GENERATION` exactly when an old daemon can no longer serve a new client: a `Tag` renumbered or removed, an existing tag's payload layout or meaning changed, or a client that requires a reply to a new tag without a compatibility probe. The bump is the whole mechanism; add no cycling code. Update the frozen-tag tests and the `CDXC:ZmxWireGeneration` comment in `ipc.zig` and the four emitters listed under "zmx behaviour" above.
+- Do not bump for additive or internal changes (a new tag old daemons drop through `_` while clients tolerate the silence, a daemon-side fix, a log line, a perf change, an upstream merge that leaves the framing alone). If the new client needs an answer, do what `SendAcked` does: probe first and treat no reply as "old daemon".
+- A bump restarts every live session on the next `cargo xtask start`: say so in your report, check `ghostex sessions` for `running` entries, and let the user pick a quiet moment to install.
+- Never skip the stamp or bypass the pass (env switch, build flag, or leaving `wire_generation` out of `zmx version`); an unreadable generation cycles nothing and turns the next real wire break into blank panes. Sessions stamped by the retired `zmxBinaryStamp` scheme count as generation 1; do not "clean up" that migration.
+- Verify with `zmx version` from `.dependencies/zmx/zig-out/bin/zmx` and `zig build test` inside `.dependencies/zmx` before shipping; on macOS build the way `prepare-macos-runtime.sh` does rather than patching the SDK.
+- `ghostex server stop` / `stop-all` do not replace the pass and must not be used to "test" a zmx change on a machine with live agents.
 
 ### CDXC comments: why the code exists, and what the user decided
 
-`CDXC:<Area> <yyyy-MM-dd> <KIND>:` comments are the codebase's memory of non-obvious reasons and of decisions the user made while prompting agents. They are greppable (`rg 'CDXC:RemotePairing'`), and they are the first thing to read before changing behaviour in an area. Read them first, write them sparingly, and keep them true.
+`CDXC:<Area> <yyyy-MM-dd> <KIND>:` comments are the codebase's memory of non-obvious reasons and of decisions the user made while prompting agents. They are greppable (`rg 'CDXC:RemotePairing'`; `rg 'CDXC:.* DECISION:'` lists every user decision) and are the first thing to read before changing behaviour in an area. Read them first, write them sparingly, keep them true. Full text with good and bad examples: `ai/cdxc-comments.md`.
 
-They serve three purposes, and a comment that serves none of them should not be written:
-
-1. **Explain WHY a piece of code was added**, so the same bug or regression is not reintroduced later: the symptom, the constraint, or the failed alternative that led to the current shape of the code. Not what the code does; the code already says that.
-2. **Log decisions the user made** (product behaviour, UX, technical direction, deliberate exclusions), so a later agent that wants to go against one finds it and raises the conflict with the user instead of silently overriding it.
-3. **Link functionality spread over several areas**, so one grep of the area tag finds every emitter, consumer, and contract of a feature across `apps/`, `packages/`, `server/`, and the edited parts of `.dependencies/`.
-
-#### Kinds
-
-The kind marker says which purpose a comment serves, so decisions are distinguishable from agent reasoning and each kind is greppable on its own (`rg 'CDXC:.* DECISION:'` lists every user decision in the repo):
-
-- `DECISION` — an instruction the user gave. Quote or closely paraphrase the user's words. Only the user creates decisions; an agent's own design choice is a `WHY`.
-- `WHY` — a non-obvious reason, an external constraint, or an approach that was tried, failed, and must not be retried.
-- `SEE-ALSO` — the other files, tags, or contracts that must stay in lockstep with this code. Use it only where a feature spans crates, apps, or the zmx/ghostty trees.
-
-Comments written before the kind marker existed (2026-09-03) read as `WHY`. Do not retrofit them.
-
-#### When to write one
-
-Write a CDXC comment only if at least one of these holds:
-
-1. A reader of the diff would reasonably ask "why not the obvious way?"
-2. The user gave an explicit instruction that this code implements.
-3. An earlier approach was tried and removed, and must not come back.
-4. This file is one of several that must change together.
-
-Otherwise do not write one. Ordinary code, renames, mechanical refactors, obvious fixes, and anything the diff already explains get no CDXC comment.
-
-Anti-patterns seen in this tree; do not write these:
-
-- Lists of things the code "never touches" or "must not expose" (boundary or privacy disclaimers written for the agent's own reassurance).
-- Restating the function signature, the control flow, or the type layout.
-- A new dated entry for every iteration on the same day. Collapse them into one comment that states the final decision.
-- A tag that names a single change, PR, task, or file instead of a feature.
-
-#### Areas: no sprawl
-
-`<Area>` names a user-facing feature or a shared contract, never a single change, file, or task. The canonical list lives in **`ai/AREAS.md`**, one line per area. The list is deliberately small and grows rarely:
-
-- Before writing a tag, look it up in `ai/AREAS.md` and use the existing area that covers the feature, even if your change is a sub-feature of it. Put the specific detail in the comment text, not in the tag.
-- Never derive a tag from a file name, a struct name, a surface name (`GPUI…`, `React…`), or a task title.
-- Create a new area only when no existing area covers the feature at all, the feature is user-visible or a cross-crate contract, and you expect several comments to share it. Add the line to `ai/AREAS.md` in the same commit and say so in your report. A new area for one comment is wrong; use the closest existing one.
-- Do not create variants of an existing area (`SidebarSessions` next to `Sessions`, `CommandPaneActions` next to `CommandPane`). If a sub-feature needs its own grep handle, mention the sub-feature word in the comment text.
-
-#### Format and placement
-
-- One line `CDXC:<Area> <yyyy-MM-dd> <KIND>:` followed by the reasoning in plain sentences. Date only, no time of day. No manual line wrapping inside the comment; break at sentence ends.
-- Prefer a doc comment on the item that owns the behaviour: `///` or `//!` in Rust, JSDoc `/** */` in TS, `///` in Zig, a block comment in CSS. Add a short inline comment only for the specific line or variable the decision is about. In split module directories, put it in the per-concern file, never in `mod.rs` or `index.ts`.
-- Keep them current: when requirements change, replace the comment (new date, new text, one sentence on what it supersedes) instead of stacking entries. Delete a CDXC comment when the code it explained is gone.
-- Every explicit product or UX decision the user gives you gets one `DECISION` comment next to the code that implements it. Routine requests ("fix this bug", "rename this") do not.
-
-#### Conflicts with a DECISION
-
-When your task would change behaviour covered by a `DECISION` comment, stop and tell the user: quote the comment, state what the task wants instead, and ask which one wins. If the user confirms the change, update the comment in the same commit. Never delete or weaken a `DECISION` comment without that exchange.
-
-Good examples:
-
-```
-/// CDXC:ZmxWireGeneration 2026-09-03 WHY:
-/// Cycling used to compare binary identity and restarted 57 live sessions after three additive rebuilds in one day.
-/// Only a generation bump may cycle daemons.
-/// SEE-ALSO: server/src/zmx/wire_cycle.rs, .dependencies/zmx/src/ipc.zig.
-```
-
-```
-/**
- * CDXC:Settings 2026-05-13 DECISION:
- * User: the Settings modal is 20% wider than the first section-sidebar layout and uses a taller viewport so more settings stay visible without scrolling.
- */
-```
-
-Bad example (describes the code, records no decision, not worth a comment):
-
-```
-// CDXC:Sessions 2026-09-03 WHY: loop over sessions and render a row for each.
-```
+- **Kinds.** `DECISION` is an instruction the user gave: quote or closely paraphrase their words; only the user creates decisions, and an agent's own design choice is a `WHY`. `WHY` is a non-obvious reason, an external constraint, or an approach that was tried, failed, and must not be retried. `SEE-ALSO` lists the other files, tags, or contracts that must stay in lockstep, used only where a feature spans crates, apps, or the zmx/ghostty trees. Comments written before 2026-09-03 without a kind read as `WHY`; do not retrofit them.
+- **Write one only if** a reader of the diff would ask "why not the obvious way?", the user gave an explicit instruction the code implements, an earlier approach was removed and must not come back, or the file is one of several that must change together. Every explicit product or UX decision from the user gets one `DECISION` comment next to the code; routine requests ("fix this bug", "rename this") do not. Never write: what the code does, "never touches / must not expose" disclaimers, a new dated entry per iteration on the same day (collapse into the final decision), or a tag naming a single change, PR, task, or file.
+- **Areas.** `<Area>` names a user-facing feature or a shared contract and must come from `ai/AREAS.md`; use the existing area even for a sub-feature and put the detail in the text. Never derive a tag from a file, struct, surface (`GPUI…`, `React…`), or task name, and never create variants of an existing area. Create a new area only when nothing covers the feature, it is user-visible or a cross-crate contract, and several comments will share it; add its line to `ai/AREAS.md` in the same commit and say so in your report.
+- **Format.** One line `CDXC:<Area> <yyyy-MM-dd> <KIND>:` then plain sentences (date only, no manual wrapping), as a doc comment on the item that owns the behaviour (`///`/`//!` in Rust, `/** */` in TS, `///` in Zig, block comment in CSS), in the per-concern file, never `mod.rs` or `index.ts`. When requirements change, replace the comment (new date, one sentence on what it supersedes) instead of stacking; delete it when the code is gone.
+- **Conflicts with a DECISION.** When your task would change behaviour covered by one, stop and tell the user: quote the comment, state what the task wants instead, and ask which wins. If the user confirms the change, update the comment in the same commit. Never delete or weaken a `DECISION` without that exchange.
 
 ### Ghostex Help must stay true to the product
 
-`skills/ghostex-help/` is what an agent reads when a user asks "how do I…" or "change X for me" inside Ghostex (`ghostex guide`, `ghostex settings`, the titlebar Help button). A wrong or missing answer there is a customer-facing bug, so the guide is part of the feature, not documentation you fill in later.
+`skills/ghostex-help/` is what an agent reads when a user asks "how do I…" or "change X for me" inside Ghostex (`ghostex guide`, `ghostex settings`, the titlebar Help button). A wrong or missing answer there is a customer-facing bug, so the guide is part of the feature, not documentation to fill in later. **The test:** would a customer plausibly ask about it, or ask an agent to set it up? If yes, the guide must answer; internal mechanisms, refactors, fixes that restore documented behaviour, and details nobody would ask about leave it alone.
 
-**The test for whether your change belongs in the guide:** would a customer plausibly ask about it, or ask an agent to set it up? If yes, the guide must be able to answer. If it is an internal mechanism, a refactor, a fix that restores documented behaviour, or a detail nobody would ask about, leave the guide alone.
-
-Update in the same commit when you:
-
-- Add, remove, or rename a titlebar view, a sidebar surface, a Settings page, or a titlebar button.
-- Add or change something a user does on purpose: a way to start or control agents, sessions, chats, worktrees, the board, automations, remote or mobile access, notifications, or the browser and editor.
-- Add or change a `ghostex` CLI verb that users or agents run by hand.
-- Change how one of the seven Help sample questions is answered (they are listed at the end of `skills/ghostex-help/references/features.md`).
-- Add, rename, or retire a setting, an option value, a default, or a hotkey. This part is generated: run `bun run help:generate` and commit the output (`bun run typecheck` fails when it is stale).
-
-Where it goes:
-
-- `skills/ghostex-help/references/features.md` (hand-written): one paragraph per feature, in the product's own words for views, buttons, and settings, ending with the settings keys or CLI commands that make the change. Edit the existing section; do not append a changelog.
-- `skills/ghostex-help/references/overview.md`: only when the window layout or a core concept (project, session, view, extension, gxserver) changes.
-- `references/settings.md`, `references/hotkeys.md`, `references/settings-catalog.json`: generated by `tooling/ghostex-help/generate.ts` from the Settings modal search rows (`packages/core-ui/settings-modal/search-catalog.ts`, `search.ts`), the settings defaults, and the shared hotkey catalog. Never edit them by hand. Setting titles and subtitles come from those search rows, so write them for a customer, not for yourself.
-- The seven sample questions and the "Ask anything about Ghostex" row live in `apps/desktop/src/app/titlebar/help_menu.rs`. They are a user decision: change them only on the user's instruction.
-
-Do not add: implementation details, file paths, internal state, debugging and diagnostics rows, or anything a customer would never ask about. When in doubt, write the one sentence a support person would say and stop.
-
-The gxserver binary embeds the reference files with `include_str!`, so `ghostex guide` always prints the docs matching the installed CLI; the copies in `~/.agents/skills/ghostex-help` refresh when the skill is reinstalled.
+- Update it in the same commit when you add, remove, or rename a titlebar view, sidebar surface, Settings page, or titlebar button; add or change something a user does on purpose (agents, sessions, chats, worktrees, the board, automations, remote or mobile access, notifications, the browser and editor); add or change a `ghostex` CLI verb users or agents run by hand; change how one of the seven Help sample questions is answered; or add, rename, or retire a setting, option value, default, or hotkey.
+- Hand-written: `references/features.md` (one paragraph per feature in the product's own words, ending with the settings keys or CLI commands; edit the existing section, never append a changelog) and `references/overview.md` (only when the window layout or a core concept changes). Generated from the Settings catalog crate (`packages/settings-catalog`: the Settings search rows, defaults, and hotkey catalog) by `cargo xtask help-generate` (commit the output; `cargo xtask typecheck` fails when stale; never hand-edit): `settings.md`, `hotkeys.md`, `settings-catalog.json`. Setting titles and subtitles come from those search rows, so write them for a customer. The seven sample questions in `apps/desktop/src/app/titlebar/help_menu.rs` are a user decision: change them only on instruction.
+- Do not add implementation details, file paths, internal state, debugging rows, or anything a customer would never ask about. When in doubt, write the one sentence a support person would say and stop. gxserver embeds the reference files with `include_str!`, so `ghostex guide` always matches the installed CLI. Full text: `ai/ghostex-help-upkeep.md`.
 
 ### Bundled agent skills ship from GitHub main, not only from releases
 
-gxserver installs the bundled skills under `skills/` (Ghostex CLI, Ghostex Help, Browser Use, and the rest) by downloading them from this repository's `main` branch, checked against their git blob shas, with the copy inside the app bundle as the offline source. Every gxserver start also refreshes installed skills whose files differ from `main`. Code: `server/src/agent_skills_remote.rs` (download, verification, startup refresh) and `server/src/agent_skills.rs` (install and copy).
+gxserver installs the bundled skills under `skills/` by downloading them from this repository's `main` branch (verified against git blob shas, app-bundle copy as the offline source) and refreshes installed skills that differ from `main` on every start (`server/src/agent_skills_remote.rs`, `server/src/agent_skills.rs`). So a push to `main` touching `skills/**` reaches every installed Ghostex on its next start: treat skill edits as customer-facing and never push a half-finished skill. A skill must keep working with the CLI verbs of the oldest release still in use; when it needs a new verb, say so in the skill text and prefer `ghostex guide` over copying details in. `bundled_cli_skill_assets` in `apps/desktop/scripts/build-macos-app.sh` still needs every skill name for offline installs. `GHOSTEX_AGENT_SKILLS_REMOTE=off` (or `gxserver agent-skills install --offline` for one command) turns the download off; use it when testing local skill edits so a Reinstall does not fetch `main` over them.
 
-- A push to `main` that touches `skills/**` reaches every installed Ghostex on its next start, without a release. Treat skill edits as customer-facing changes and never push a half-finished skill to `main`.
-- A skill must keep working with the CLI verbs of the oldest release still in use. When a skill needs a new verb, say so in the skill text, and prefer `ghostex guide` (embedded in the binary) over copying details into the skill.
-- `bundled_cli_skill_assets` in `apps/desktop/scripts/build-macos-app.sh` still needs every skill name so offline installs and first launch work without a network.
-- `GHOSTEX_AGENT_SKILLS_REMOTE=off` turns the download off. Use it when testing local skill edits from a checkout so a Reinstall does not fetch `main` over them; `gxserver agent-skills install --offline` does the same for one command.
+### Chat: one Rust brain, native renderers
 
-### Don't write any tests at all except if explicitly asked to do so by the user
+The sidebar's behaviour is Rust (`packages/gx-core/` for the rules, `apps/desktop/src/app/gx_store/` for the store and its gxserver calls, `apps/desktop/src/app/native_sidebar/` for the renderer). Chat follows the same shape, and `packages/gx-chat-core/` is its only brain on every client. Port history: `docs/2026-09-21/rust-chat/PLAN.md`.
 
-### Never generate fallbacks when the right solution is to actually correct the behavior itself to fix the issue. Fallbacks should be used in rare cases only because they add complexity and hide issues and introduce useless logic.
+- Chat rules (messages, streaming, tool grouping, questions, approvals, drafts, queues, errors, settings, transcript presentation) go only into `packages/gx-chat-core/`. The desktop app and the GPUI web build both run it through the same chat host, `apps/desktop/src/app/gx_chat/` (the web build links those files and swaps in its own `worker.rs`, `storage_backend.rs` and `platform.rs`), and both reach gxserver through `packages/gx-chat-client` (one chat socket per machine, native or browser). The QuickJS chat runtime, the `chatBrain` setting, the chat broker, the TypeScript chat brain, the React chat, the phone's WebView chat and the replay gates were deleted on 2026-09-25 (user decisions); do not bring any of them back. The chat's shared visual constants (JSON read by the renderers and the core) live in `packages/gx-chat-core/visual/`.
+- Drawing changes go in `apps/desktop/src/app/native_chat/`, which renders the core's document; `apps/gpui-web` compiles the same files. Keep the document's JSON contract described in `packages/gx-chat-core/src/lib.rs`. Chat must work without a CEF page: rendering, background work, subscriptions, timers and persistence.
+- Mobile uses the Rust chat core: native React Native views (`apps/mobile/app/src/chat/`) fed by `gx-chat-core` through UniFFI (`packages/gx-chat-mobile`; user decisions 2026-09-21 and 2026-09-25, native only). What is left in `packages/core-ui/chat/` is not a chat: it is the Lexical prompt input of the GhostexEditor helper and its helpers (the Markdown renderer and the draft storage went with the React modal host on 2026-10-01).
+- **The GPUI chat and the React Native chat must match** (user decision 2026-09-26): unless the user says otherwise, every chat fix, feature or visual change lands in both in the same change. Put the rule in `gx-chat-core` so both get it at once; when the fix is in drawing or input, change `apps/desktop/src/app/native_chat/` and `apps/mobile/app/src/chat/` together. If one platform cannot do it (an RN `TextInput` cannot replace the text it shows, for example), say so in your report instead of leaving the two apart silently.
+- A chat bug about the session itself (what reaches the terminal, what the agent's screen shows, what the transcript records) is a gxserver fix, not a chat-core fix, so it works for every client at once.
+- When a chat message did not send (Enter did nothing, the message came back, a send error), read `ai/chat-send-debugging.md` first: gxserver logs every refused send with the terminal screen it saw.
+- Keep shared storage ownership, validation, budgets, revision checks, and recovery rules in `packages/client-storage/`. On the desktop the file is read and written by the Rust storage doors (`packages/client-storage-native`, `gx_store/sidebar_ui_storage.rs`, `gx_store/records_storage.rs`), which enforce the catalog's bounds; they must preserve existing saved data when migrating from browser storage.
+- Preserve the chat's theme, font, zoom, transcript width, verbose/simple modes, file previews, keyboard controls, scrolling and composer actions. Verify the result in the GPUI chat and report any unverified interaction explicitly.
+- **Test the GPUI chat in a browser (Ghostex web GPUI), not the user's window.** `apps/gpui-web` compiles the desktop's own `native_chat/`, sidebar and terminal files (symlinked) to wasm against the live gxserver. Run `cargo xtask web-build` and `ghostex web --dist-dir "$PWD/apps/gpui-web/www/dist" --no-open` (the built page and its bootstrap on :4173), or keep that running and use `cargo xtask web-dev` for the Vite dev server on :4174, and open `http://localhost:4174/?session=<projectId>:<sessionId>` (or :4173 for the built page). It runs the same Rust chat host and core as the desktop, so a chat fix can be proven there; drafts live in the page's own client storage (a fresh headless profile starts empty, so test a reload inside one run). It also compiles the desktop's own store executor files (`gx_store/`: sidebar actions, create, groups, the Git menu, Quick Access, the native dialogs), so a sidebar action can be proven there too; what a page cannot do (Finder, panes, CEF dialogs, remote tunnels) answers with a toast. If desktop changes broke its build, add the missing symlinks or web stand-ins as its README describes. Drive a throwaway agent with `ghostex create-agent` (without `--defer-start`, which leaves the agent unstarted until a client opens it), `ghostex send-session-chat-message` and `answer-session-chat-prompt`, and read its terminal with `ghostex read-text <selector>` (every platform; `send-text`/`send-key` type into it) or the bundle's `zmx history <zmxName>` (`wmx.exe history` from the running gxserver's folder on native Windows). The page is a canvas: `node shot.mjs out.png --url … --click x,y --wheel x,y,dy --type …` clicks, scrolls and screenshots headlessly (set `SHOT_CHROME` to Playwright's `chrome-headless-shell` when Chrome for Testing never commits a navigation); with `$ghostex-browser-use` (cua-driver's typed browser tools in an isolated Chrome profile) the page drives like any page: `browser_click` refs with `input_route: "dom_event"` run the mirrored node's click, `browser_type` types into mirrored text fields, and `get_browser_state` with `include_screenshot: true` takes the picture (the README's accessibility section has the limits). Foreground clicks or typing steal the user's keystrokes; never use them.
 
-Example of adding bad fallback code:
+### Never generate fallbacks when the right solution is to correct the behaviour itself
 
-Agent: I found the likely root cause: the Ghostty/Restty path is generating local font sources from your configured terminal font family, and VS Code webviews are blocking the local-fonts permission. I'm patching that helper to fall back cleanly instead of passing unusable local-font sources into Restty.
-
-Example of what you should do instead:
-
-We should make it not fall back but instead just do the right thing from the start. Yes. The clean fix is to stop generating local font sources at all when the current webview environment can't use the local-fonts capability. I'm wiring that check into the Restty font-source helper so Ghostty starts in the correct mode instead of trying-and-failing first.
+Fallbacks add complexity, hide issues, and introduce useless logic, so they are for rare cases only. Bad: "VS Code webviews block the local-fonts permission, so I'm patching the helper to fall back cleanly instead of passing unusable local-font sources into Restty." Right: stop generating local font sources at all when the current webview environment cannot use the local-fonts capability, so Ghostty starts in the correct mode instead of trying and failing first.
 
 ### Native layout and hit-testing discipline
 
-This applies to the active desktop app (GPUI views, CEF pages, AppKit shims, Ghostty terminal hosts). The historical WKWebView wording below refers to the deprecated macOS Swift app; the rule itself is unchanged for the desktop app.
+Applies to the active desktop app (GPUI views, CEF pages, AppKit shims, Ghostty terminal hosts; WKWebView wording refers to the deprecated Swift app, rule unchanged). Lay out interactive AppKit, WKWebView, CEF, Ghostty, sidebar, titlebar, pane, and divider regions as non-overlapping sibling or child frames. Do not solve click, drag, hover, or focus bugs by stacking transparent views, extending webviews under native chrome, adding broad parent/window hit-test routing, or hiding overlap between interactive regions. Use real, exact native views for interactive boundaries such as splitters and sidebar dividers: make the visible divider itself the grab target rather than adding invisible overlap, and keep visual-only chrome non-interactive.
 
-Ghostex native UI should be built with strict normal layout ownership: lay out interactive AppKit, WKWebView, CEF, Ghostty, sidebar, titlebar, pane, and divider regions as non-overlapping sibling or child frames wherever possible. Do not solve click, drag, hover, or focus bugs by stacking transparent views, extending webviews under native chrome, adding broad parent/window hit-test routing, or creating hidden overlap between interactive regions.
-
-Use real, exact native views for interactive boundaries such as splitters and sidebar dividers. If a divider should be easy to understand, make the visible divider itself the grab target rather than adding invisible overlap over adjacent content. Keep visual-only chrome as non-interactive layers or non-overlapping decoration instead of views that can compete for input.
-
-Before adding any `hitTest` override, NSWindow pre-dispatch mouse routing, synthetic coordinate rerouting, invisible interactive overlay, or intentional overlap between interactive regions, the agent must stop and explain the proposed exception to the user, including why strict normal layout cannot solve it. The agent must get explicit user confirmation before implementing that exception.
-
-Native child windows are the accepted pattern for app modals, dropdowns, command palette, rename, Resources, Tips & Tricks, and similar overlay surfaces. Those windows own their own frames and input, so they should not be replaced with main-window transparent webview overlays or root-level hit-test shields.
+Before adding any `hitTest` override, NSWindow pre-dispatch mouse routing, synthetic coordinate rerouting, invisible interactive overlay, or intentional overlap between interactive regions, stop, explain to the user why strict normal layout cannot solve it, and get explicit confirmation. Native child windows are the accepted pattern for app modals, dropdowns, command palette, rename, Resources, Tips & Tricks, and similar overlays; they own their own frames and input and must not be replaced with main-window transparent webview overlays or root-level hit-test shields.
 
 ### Shared UI controls: one component per control kind
 
-Some controls are deliberately owned by a single shared component so every surface renders the same thing. Use them instead of hand-rolling a lookalike out of `Button`s or raw `ToggleGroup`s, and change the shared component (plus its story) when the look must change:
+Some controls are deliberately owned by a single shared component so every surface renders the same thing. Use them instead of hand-rolling a lookalike out of buttons, and change the shared component when the look must change (the React originals, `packages/components/ui/segmented-control.tsx` and `switch.tsx`, were deleted on 2026-10-01 with the React modal host):
 
-- **Segmented single-select** ("pick exactly one of N", e.g. Sidebar version, Preset, Add Worktree mode, Automate schedule/execution): `packages/components/ui/segmented-control.tsx` — `SegmentedControl` / `SegmentedControlItem`. It renders the stock shadcn ButtonGroup shape: one bordered rounded container, flat segments sharing a hairline, only the outer corners rounded, and a highlighted fill on the selected segment. Story: `Components/Segmented Control`. Its canonical CSS lives unlayered in `packages/core-ui/styles.css` and is mirrored in `apps/desktop/views/project-board/styles.ts` because the Kanban/Automate page loads only `shadcn.generated.css`.
-- **Toggle switch**: `packages/components/ui/switch.tsx` — one shape app-wide (6px track, 4px thumb). Don't reintroduce per-surface pill overrides.
-- **Focus ring**: the chat composer's ring is the reference — 3px at `ring-ring/20` plus `border-ring`. Every shared primitive uses that value; never raise it back to `ring-ring/50` or `/30`. Surfaces that deliberately have no ring (the modal tab rails) stay ringless.
+- **Segmented single-select** ("pick exactly one of N": Sidebar version, Preset, Add Worktree mode, Automate schedule/execution): `modal_segmented_control` / `modal_bordered_segmented_control` in `apps/desktop/src/app/window/native_modal_kit/segmented_and_rail.rs`, the stock shadcn ButtonGroup shape with a highlighted fill on the selected segment.
+- **Toggle switch**: `modal_switch` in `apps/desktop/src/app/window/native_modal_kit/controls.rs`, one shape app-wide. Don't reintroduce per-surface pill overrides.
+- **Focus ring**: the chat composer's ring is the reference, 3px at `ring-ring/20` plus `border-ring`. Every shared primitive uses that value; never raise it back to `ring-ring/50` or `/30`. Surfaces that deliberately have no ring (the modal tab rails) stay ringless.
 
 ### UX mockups: one HTML file per screen, annotation-friendly classes
 
-When asked to mock up a UI or a flow, build it as static HTML, not as Storybook stories or product code:
-
-- **Location**: `docs/<today's date, YYYY-MM-DD>/<topic>/`, for example `docs/2026-09-03/mobile-setup/`. One folder per mockup topic.
-- **One screen per file.** Each screen or state the user should react to is its own `.html` file (`mobile-03-scan.html`, `desktop-remote-settings.html`), plus an `index.html` hub that links every screen in flow order. Shared styles and scripts go in `shared.css` / `shared.js` in the same folder. Show a phone or desktop frame on the left and short design notes on the right; keep the page full width.
-- **Name everything the user might point at.** The user gives feedback by selecting elements, and the feedback arrives as a CSS selector path. Generic paths like `.rows > .row` or `.steps > .step` are useless, so add a descriptive class or data attribute to every landmark: each device frame (`data-screen="scan-found-tailscale"`), each card (`.easy-connect-card`, `.tailscale-card`), each row or step (`.remote-login-row`, `.step-scan-tailscale-code`, `.adv-served-ports`), each primary button (`.connect-btn`, `.save-and-connect-btn`), each sheet or popover (`.tailscale-password-sheet`, `.android-install-popover`), and each notes block (`.notes-what-changed`). Put the descriptive class on the element the user would click, not on an inner wrapper. Add a short selector cheat sheet to `index.html`.
-- **Copy rules.** Ghostex runs on macOS, Linux and Windows, so product copy says "computer" (or the machine's name), never "Mac", and describes platform features neutrally ("SSH access", with the per-OS name in a parenthetical only where the user has to go and find it). Feature names are the user-facing ones ("Easy Connect", not "Tailcat").
-- **Match the app's look.** Use the desktop app's Kanban / Automate visual language (near-black page, `#161616` panels, `#1d1d1d` cards, hairline borders, 8px controls / 12px sections) unless told otherwise.
-- **Verify by rendering.** Screenshot the pages with headless Chrome before reporting, and fix clipping, overflow and collapsed flex children.
-- Mockups are documentation: they do not touch product code, and the folder is committed like any other `docs/` folder.
+When asked to mock up a UI or a flow, build static HTML under `docs/<YYYY-MM-DD>/<topic>/`, never product code: one `.html` per screen or state plus an `index.html` hub in flow order, shared `shared.css` / `shared.js`, short design notes above or below the device frame (never beside it), and a frame that keeps its real width and scrolls sideways on a narrow window instead of squashing. Feedback arrives as CSS selector paths, so every landmark the user might point at (frames, cards, rows, steps, buttons, sheets, notes) gets a descriptive class or data attribute on the element they would click, plus a selector cheat sheet in `index.html`. Copy says "computer", never "Mac", and uses user-facing feature names ("Easy Connect", not "Tailcat"). Match the Kanban / Automate look (near-black page, `#161616` panels, `#1d1d1d` cards, hairline borders) unless told otherwise, and screenshot with headless Chrome to fix clipping and overflow before reporting. Full conventions: `ai/ux-mockups.md`.
 
 ### Destructive git/file operations safety rule
 
-Never interpret "revert your changes" or "revert what you did" as permission to reset, restore, clean, delete, or otherwise discard the whole worktree. Other agents and the user may have unrelated uncommitted or untracked work in the same repo.
-
-Before running any destructive command, including but not limited to `git restore .`, `git checkout -- .`, `git reset --hard`, `git clean`, `rm -rf`, or deleting untracked files, you must:
-
-1. Show the user the exact files/directories that would be affected.
-2. Explain whether each file is tracked or untracked.
-3. Confirm that those files are definitely your own changes, not user work.
-4. Ask for explicit approval before executing the destructive command.
-
-If the user asks to revert only the agent's changes, use surgical reversal: inspect diffs, identify the exact hunks/files you changed, and revert only those. When uncertain, stop and ask. Never use broad restore/clean commands as a shortcut.
+"Revert your changes" never means resetting, restoring, cleaning, or deleting the whole worktree; other agents and the user have unrelated uncommitted and untracked work here. Before any destructive command (`git restore .`, `git checkout -- .`, `git reset --hard`, `git clean`, `rm -rf`, deleting untracked files, and the like): show the user the exact files/directories affected, say whether each is tracked or untracked, confirm they are definitely your own changes and not user work, and get explicit approval. To revert only your own changes, inspect diffs and revert exactly the hunks/files you changed. When uncertain, stop and ask; never use broad restore/clean commands as a shortcut.
 
 ### Never lose other agents' uncommitted work
 
-Multiple agents and the user work in this same checkout at the same time. Files you touched earlier in your session, or that you read a while ago, may have been changed by someone else since. Treat every uncommitted change you did not make yourself as protected user work.
+Files you touched earlier in your session, or read a while ago, may have been changed by someone else since. Treat every uncommitted change you did not make yourself as protected user work.
 
-- Before editing a file you last read a while ago (or that you carry from an earlier plan/worktree/thread), re-read its current on-disk content first and apply your change to that, as a targeted edit. Never write back a whole file from a stale copy in your context: that silently erases every change other agents made to it in between, with no way to recover it from git.
+- Before editing a file you last read a while ago (or carry from an earlier plan, worktree, or thread), re-read its current on-disk content and apply your change to that as a targeted edit. Never write back a whole file from a stale copy in your context: that silently erases every change other agents made in between, with no way to recover it from git. (On 2026-07-09 an automated batch commit did exactly this to the uncommitted CEF sidebar persistence fix in what is now `apps/desktop/src/cef/shell/`; the fix vanished without a trace and had to be re-diagnosed from scratch.)
 - Never run `git checkout`, `git restore`, `git stash`, or `git reset` on a path that has hunks you did not author.
-- When committing, never selectively drop pending hunks in files you commit. Either include a file's whole pending diff, or split it hunk-by-hunk only if you verify afterwards (`git status` + `git diff`) that every hunk you excluded still exists in the working tree. A batch "split the working tree into topical commits" pass must end with zero silently-vanished hunks.
-- If you find changes in a file you are about to modify that you cannot attribute to your own task, keep them intact and mention them to the user instead of "cleaning them up".
-
-Example of what this rule prevents (happened on 2026-07-09): one agent added the desktop sidebar persistence fix (`cef_app_ui_profile_cache_path`, in the CEF shell code that is now `apps/desktop/src/cef/shell/` — its pre-restructure path was `gpui/src/cef/shell.rs`) as uncommitted working-tree state. Later that day, a concurrent agent's titlebar/attention work was committed in an automated batch that wrote that file from a version without the fix. The fix had never been committed anywhere, so it vanished without a trace, the user's bug came back, and the fix had to be re-diagnosed and re-applied from scratch.
-
-Corollary: after you verify a surgical bug fix, tell the user it should be committed promptly (or commit it when they ask) so concurrent agents cannot wipe it.
+- When committing, never selectively drop pending hunks in files you commit. Include a file's whole pending diff, or split hunk-by-hunk only if you verify afterwards (`git status` + `git diff`) that every excluded hunk still exists in the working tree. A batch "split the working tree into topical commits" pass must end with zero silently-vanished hunks.
+- Changes you cannot attribute to your own task stay intact; mention them to the user instead of "cleaning them up".
+- After you verify a surgical bug fix, tell the user it should be committed promptly (or commit it when they ask) so concurrent agents cannot wipe it.
 
 ### Rules for running commands
 
-- Never run "bun run start" or any command that would restart the app unless I ask you to.
-- TypeScript is gated by three configs, not one: `bun run typecheck` (root — `packages/shared`, `packages/core-ui`, `packages/components`, `apps/desktop/views`, `apps/mobile/views`), `bun run web:typecheck` (`apps/web/tsconfig.json`), and `bun run desktop:typecheck` (`apps/desktop/tsconfig.json`, which covers `apps/desktop/sidebar/` and `apps/desktop/views/`). A change under `apps/desktop/sidebar/` is only checked by `desktop:typecheck`.
-- Run desktop-crate cargo commands **from inside `apps/desktop/`**, not with `--manifest-path` from the repo root. The crate pins its own toolchain in `apps/desktop/rust-toolchain.toml` (1.95.0), and `--manifest-path` from the root resolves the root toolchain instead and fails on dependency code that needs the pin.
-- Local Rust builds of `apps/desktop/` and `server/` require `sccache` on PATH: both crates set `rustc-wrapper = "sccache"` in their `.cargo/config.toml` (cargo reads it only when run from inside the crate directory). If cargo fails with `could not execute process 'sccache'`, install it with `brew install sccache`; never work around it by deleting the config or building with `--manifest-path` from the root. Setup details are in README.md, "Building from source".
+- Dev, start, build and check commands are `cargo xtask <command>` run from the repository root (the `tooling/xtask/` crate; the alias is in the root `.cargo/config.toml`; `cargo xtask help` lists them). Only the release scripts stay in `package.json` (`bun run release:*`), plus `bun run start`, a plain alias for `cargo xtask start` (user decision 2026-10-02; extra arguments pass through, e.g. `bun run start --optimized`). Add a new dev command to the xtask, not to `package.json`.
+- TypeScript is gated by two configs, not one: `cargo xtask typecheck` (root: `packages/shared`, `packages/core-ui`, `packages/components`, `apps/desktop/views`) and `cargo xtask desktop-typecheck` (`apps/desktop/tsconfig.json`, covering `apps/desktop/sidebar/` and `apps/desktop/views/`). A change under `apps/desktop/sidebar/` is only checked by `desktop-typecheck`.
+- Run desktop-crate cargo commands **from inside `apps/desktop/`**, never with `--manifest-path` from the repo root: the crate pins its toolchain in `apps/desktop/rust-toolchain.toml` (1.95.0), and `--manifest-path` from the root resolves the root toolchain and fails on dependency code that needs the pin.
+- Local Rust builds of `apps/desktop/` and `server/` require `sccache` on PATH (`rustc-wrapper = "sccache"` in each crate's `.cargo/config.toml`, which cargo reads only when run from inside the crate directory). If cargo fails with `could not execute process 'sccache'`, run `brew install sccache`; never delete the config or build with `--manifest-path` from the root. Setup details: README.md, "Building from source".
+
+### `cargo xtask start` is a fast dev build, not a release build (macOS)
+
+The local start is tuned so a small edit rebuilds and relaunches in about 10 seconds. Keep it that way, and don't mistake its shortcuts for bugs. Details, measurements and the rejected alternatives: `ai/local-start-performance.md`.
+
+- **The `ghostex-gpui` and `gxserver` crates compile at opt-level 0** (their dependencies stay fully optimized). Never judge performance (scroll stutter, frame times, CPU use, startup time) from a default start: rebuild with `cargo xtask start --optimized` first, and say which build you measured. `cargo xtask build` and releases are always fully optimized.
+- **code-server is not inside local-start bundles.** Each build is cloned once into `build/dev-components.noindex/code-server/<arch>-<hash>/`; the bundle keeps only `Web/code-server/lib/node` and a `Web/local-start-code-server-root` pointer. Editing `.dependencies/code-server` still works: the next start rebuilds it into a new folder. Don't "restore" the missing payload to the bundle.
+- **Staging copies binaries only when their source changed**, so existing signatures are reused. Never go back to `rm -rf` + `cp` or a plain `rsync` for signed payloads in `build-macos-app.sh`; use `stage_file_if_changed` / `stage_tree_if_changed`.
+- **The start keeps the running gxserver when its build identity is unchanged** and stops it only when the bundled gxserver changed. `server/rust-toolchain.toml` pins the same Rust version as `apps/desktop/rust-toolchain.toml`; bump both together.
+- **Never install a build into `/Applications` by hand** (`ditto` to `Ghostex-new.app`, `mv Ghostex.app Ghostex.old-<time>.app`, and the like). Every hand install left a 1.7GB copy behind. `cargo xtask start` is the only install path. If it reports that macOS App Management blocks it, tell the user to turn App Management on for Ghostex or their terminal and stop there. The start deletes leftover `Ghostex.old-*`, `Ghostex.broken-*` and `Ghostex-new` copies, and prunes rustc incremental caches to the newest one per binary.
+- **Adding work to the start path:** put it behind a content-hash stamp (`build-cache.sh`) so an unchanged start skips it, and measure an unchanged start (target: under 10s) and a one-line Rust edit before and after. `cargo xtask start --build-only` times the build half without installing or relaunching the app.
 
 ### Before committing and pushing: formatting and file-size upkeep
 
-Before you commit and push, check whether other agents are currently working in **this same worktree/folder**: run `ghostex sessions` (see `ghostex --help`). The list is grouped by project path — only look at the group whose path matches the folder you are working in; sessions in other projects or other worktrees do not block anything. Your own session counts as one `running` entry in that group.
+Before you commit and push, run `ghostex sessions` (see `ghostex --help`) and look only at the group whose project path matches the folder you are working in; your own session is one `running` entry there, and sessions in other projects or worktrees do not block anything. Full procedure and the exact commands: `ai/formatting-and-file-size.md`.
 
-- **If any _other_ session in this worktree is `running`**: do NOT run a repo-wide formatting pass or start file splits — that would sweep their uncommitted work into your commit or create churn under them. Format only the files you yourself changed, then commit path-scoped as usual.
-- **If no other session in this worktree is `running`** (everything else is `sleep` or the list is empty): run the full-repo formatting pass and the file-size upkeep pass below, then commit (your changes plus the formatting together, or as a separate `chore: Formatting` commit) and push.
+- **Another session in this worktree is `running`**: format only the files you yourself changed and commit path-scoped. No repo-wide formatting pass and no file splits, which would sweep their uncommitted work into your commit or create churn under them.
+- **No other session here is `running`** (everything else is `sleep` or the list is empty): run the full-repo formatting pass (`cargo fmt` per crate, `apps/desktop` from inside its folder; `bunx prettier --write` over the app-owned trees only) and the file-size upkeep pass, then commit (with your changes or as a separate `chore: Formatting` commit) and push. Never format `.dependencies/**`, `node_modules/**`, the `apps/mobile/app/**` submodule, generated files (`*.generated.*`, `dist/`, `build/`, `target/`, `apps/desktop/runtime/`), or `bun.lock`. Afterwards run the typecheck/test gates, review `git status`, and commit only formatting deltas plus your own work; leave out any file the pass touched that has foreign uncommitted hunks.
 
-The full-repo formatting pass is:
+**File-size upkeep (same quiet-worktree window only).** Since the 2026-08-24 split wave every app-owned source file is under ~2,000 lines (a few deliberate keeps aside) and the big Rust god-files are per-concern module directories. Do not regress:
 
-```bash
-# Rust — each crate separately; the desktop crate MUST run from inside its folder
-(cd apps/desktop && cargo fmt)
-(cd server && cargo fmt)
-(cd apps/history-cli && cargo fmt)
-(cd packages/find && cargo fmt)
-(cd packages/paths && cargo fmt)
-
-# TS/JS/JSON/MD/YAML — app-owned trees only, never .dependencies/ or generated output
-bunx prettier --write "apps/desktop/{sidebar,views,test,scripts}/**/*.{ts,tsx,mjs,md}" \
-  "apps/mobile/views/**/*.{ts,tsx}" \
-  "packages/{shared,core-ui,components}/**/*.{ts,tsx,md}" \
-  "server/**/*.mjs" "tooling/**/*.{mjs,ts}" "*.{json,md,ts}" ".github/**/*.yml"
-```
-
-Never format `.dependencies/**`, `node_modules/**`, `apps/web/**` or `apps/mobile/app/**` (the submodules), generated files (`*.generated.*`, `dist/`, `build/`, `target/`, `apps/desktop/runtime/`), or `bun.lock` as part of a parent-repo pass. Format files intentionally changed inside a submodule within its own commit. After a repo-wide pass, run the typecheck/test gates before pushing, and review `git status` so you only commit formatting deltas plus your own work; if the pass touched a file with foreign uncommitted hunks, leave that file out of your commit.
-
-**File-size upkeep pass (same quiet-worktree window only).** A repo-wide split wave finished on 2026-08-24: every app-owned source file is under ~2,000 lines except a handful of deliberate keeps, and the big Rust god-files (`render.rs`, `terminal_sync.rs`, `presentation.rs`, `os_cli.rs`, `remote_conn.rs`, the `helpers/*` monoliths, `gxserver-runtime/git.ts`, …) are per-concern module directories. Do not regress:
-
-- **Add new code to the module that owns the concern, not to whichever file is open.** When a split directory exists (e.g. `apps/desktop/src/app/render/`, `helpers/os_cli/`, `server/src/presentation/`, `gxserver-runtime/git/`), new functions go into the matching per-concern file, or a new sibling file — never into `mod.rs`/`index.ts`, which stay as thin re-export barrels. This applies always, agents running or not.
-- **Don't let files grow back.** If an app-owned source file you touched has grown past ~1,500 lines, split it during this quiet window — never while other agents are running in the same worktree — using the established recipe: a directory with a `mod.rs` of flat `pub(crate) mod x;` + `pub(crate) use x::*;` re-exports (Rust) or a barrel `index.ts` (TS), moving code **verbatim** so no caller changes. For files that are one big `impl GhostexGpuiApp`, split into sibling files each with their own `impl` block. See `docs/2026-08-22/repo-restructure/SPLITS.md` for the proven pattern. If the window never opens during your session, tell the user the file needs a split instead of skipping it silently.
-- **Splits must be motion, not rewrites.** A split carries a zero-logic-change burden: bodies move byte-identically, item counts match, and any raw-source test or comment citation pointing at the old path gets retargeted in the same commit.
-- Deliberate exception: `apps/desktop/src/terminal_element.rs` (~4.6k lines) stays whole for perf-critical locality. Don't split it, and don't cite it as precedent for letting other files grow.
+- **Add new code to the module that owns the concern, not to whichever file is open.** Where a split directory exists, new functions go into the matching per-concern file or a new sibling, never into `mod.rs`/`index.ts`, which stay thin re-export barrels. This applies always, agents running or not.
+- **Don't let files grow back.** If an app-owned file you touched has grown past ~1,500 lines, split it during the quiet window (never while other agents run here) using the established recipe (directory + `mod.rs` re-export barrel or `index.ts`; one big `impl GhostexGpuiApp` becomes sibling files with their own `impl` blocks; see `docs/2026-08-22/repo-restructure/SPLITS.md`). Splits are motion, not rewrites: bodies move byte-identically, item counts match, and raw-source tests or comment citations of the old path are retargeted in the same commit. If the window never opens during your session, tell the user the file needs a split instead of skipping it silently.
+- Deliberate exception: `apps/desktop/src/terminal_element.rs` (~4.6k lines) stays whole for perf-critical locality. Don't split it, and don't cite it as precedent.
 
 ### Diagnostic logging workflow
 
-- Routine disk logs must have an explicit **Diagnostic disk logging scenario** and may write only while both **Show debug UI controls** and that unexpired scenario are enabled. Do not add unscoped routine disk logging. Errors, crashes, and important warnings remain unconditional.
-- Before testing or requesting a reproduction that needs diagnostic logs, record the current logging settings, enable only the smallest set of scenarios needed, and prefer the shortest useful expiry.
-- Reproduce the issue yourself when authorized and practical. Otherwise, ask the user to reproduce it after confirming the required scenarios are enabled.
-- As soon as the needed evidence is collected—or the logging attempt is abandoned—restore the previous settings and turn off every scenario and debug switch that you enabled. Never leave extra diagnostics running because they can consume disk, CPU, and make the user's computer lag while they continue working.
-- Do not turn off scenarios or debug settings that were already enabled by the user; restore exactly the state observed before the diagnostic session.
-
-### Don't switch the repo to another branch ever
-
-- We run multiple agents at a time on 1 worktree so agents should never switch the branch this folder is on away from main unless explicitly requested to do so by the user.
-- If you need to do work that requires switching to a new branch then please create a temp "copy on write" folder copy and do the needed work there.
+- Routine disk logs must belong to one of the **Diagnostic logs** areas on the Debugging page (`DIAGNOSTIC_LOGGING_SCENARIOS` in `packages/settings-catalog/src/data/diagnostic_logging.rs`) and may write only while both **Show debug UI controls** and that unexpired area are enabled. Reuse the closest existing area; add a new one only when none fits, and delete an area when its last writer goes. Do not add unscoped routine disk logging; errors, crashes, and important warnings remain unconditional.
+- Before testing or requesting a reproduction that needs diagnostic logs, record the current logging settings, then enable only the smallest set of scenarios needed with the shortest useful expiry. Reproduce the issue yourself when authorized and practical; otherwise ask the user to reproduce it after confirming the required scenarios are enabled.
+- As soon as the evidence is collected or the attempt is abandoned, restore exactly the state you observed: turn off every scenario and debug switch you enabled (extra diagnostics consume disk and CPU and make the user's computer lag), but do not turn off anything the user had already enabled.
 
 ### Ghostex app debugging: build the code being diagnosed
 
-- Ordinary authorization to inspect or operate Ghostex applies only to the instance the user already has running. Do not launch, restart, replace, or open another copy unless the user explicitly requests it.
-- Outside that explicit skill workflow, never use `cua-driver launch_app`, Computer Use launch/open actions, macOS `open`, `bun run start`, or another app-start operation merely to discover or attach to Ghostex. If no instance is running, ask before launching anything.
-- If more than one Ghostex process or app copy is present, do not guess. Identify the newly rebuilt or user-selected instance from process and window state; ask the user when it remains ambiguous.
+Ordinary authorization to inspect or operate Ghostex applies only to the instance the user already has running. Do not launch, restart, replace, or open another copy unless the user explicitly requests it; outside an explicit skill workflow, never use `cua-driver launch_app`, Computer Use launch/open actions, macOS `open`, `cargo xtask start`, or another app-start operation merely to discover or attach to Ghostex. If no instance is running, ask before launching anything. If more than one Ghostex process or app copy is present, do not guess: identify the newly rebuilt or user-selected instance from process and window state, and ask the user when it remains ambiguous.

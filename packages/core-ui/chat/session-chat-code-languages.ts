@@ -3,7 +3,7 @@
 // Data only — deliberately no `import()` calls, because both grammar loaders
 // depend on this table:
 //
-//   * session-chat-code-grammars.ts   (dynamic import, one chunk per grammar)
+//   * session-chat-code-grammars.ts (deleted 2026-10-01)   (dynamic import, one chunk per grammar)
 //   * gpui's CEF build shim           (classic <script>, see apps/desktop/vite.config.ts)
 //
 // Every key is the real `@shikijs/langs/<name>` subpath so the gpui build can

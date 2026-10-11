@@ -1,42 +1,74 @@
 //! CDXC:SessionChat 2026-09-14 WHY:
 //! A quoted ordinary chat send reaches the model but bypasses Codex's local accept_answer(), leaving its terminal questions pending.
-//! Answer and Skip must drive the actual question editor inside one serialized terminal job. Codex owns answer framing and preserves the main composer draft.
+//! Active questions use Codex's editor inside one serialized terminal job. Retained cards use Codex's identified reply envelope after that editor expires.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use serde_json::Value;
 
 use crate::session_chat::*;
-use crate::session_chat_send::{capture_session_terminal_text, write_session_chat_payload};
+use crate::session_chat_send::{
+    capture_session_terminal_text, capture_session_terminal_text_vt, write_session_chat_payload,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AsyncAnswer {
+    pub question_id: String,
+    pub transcript_path: PathBuf,
+    pub repeated_title: bool,
     pub title: String,
     pub options: usize,
     pub text: Option<String>,
+    /// Where the asking message starts in the transcript; an answer is recorded after it.
+    pub question_offset: Option<u64>,
 }
 
 pub(crate) fn resolve(
     session: &Value,
     id: &str,
     text: Option<String>,
-) -> Result<AsyncAnswer, String> {
+) -> Result<Option<AsyncAnswer>, String> {
+    if crate::session_chat_async_questions::retired_question_ids(session)
+        .iter()
+        .any(|key| key == id)
+    {
+        return if text.is_none() {
+            Ok(None)
+        } else {
+            Err("This Codex question has already been answered or skipped.".into())
+        };
+    }
     let path = resolve_session_chat_transcript_path(
         SessionChatTranscriptAgent::Codex,
         crate::server::read_runtime_text(session, "agentSessionId").as_deref(),
         crate::server::read_runtime_text(session, "agentSessionPath").as_deref(),
     )
     .ok_or("Codex's question transcript is unavailable.")?;
+    let started_at = crate::session_chat_async_questions::async_questions_since(session);
     let mut questions = Vec::new();
     let mut collect = |messages: Vec<SessionChatMessage>| {
         for message in messages {
+            if message
+                .timestamp
+                .zip(started_at)
+                .is_some_and(|(at, start)| at < start)
+            {
+                continue;
+            }
             for (index, question) in message
                 .async_questions
                 .unwrap_or_default()
                 .into_iter()
                 .enumerate()
             {
-                questions.push((format!("{}:{index}", message.id), question));
+                questions.push((
+                    format!("{}:{index}", message.id),
+                    question,
+                    message.byte_offset,
+                ));
             }
         }
     };
@@ -53,17 +85,33 @@ pub(crate) fn resolve(
     collect(messages);
     let question = questions
         .iter()
-        .find(|(key, _)| key == id)
-        .map(|(_, question)| question)
-        .ok_or("This Codex question is no longer available.")?;
-    // The terminal exposes titles, not item IDs. Never guess between identical questions.
-    if questions
-        .iter()
-        .any(|(key, other)| key != id && normalized(&other.title) == normalized(&question.title))
-    {
-        return Err("Codex has repeated this question. Answer it in the terminal so the correct question is selected.".into());
-    }
-    Ok(AsyncAnswer {
+        .find(|(key, ..)| key == id)
+        .map(|(_, question, offset)| (question, *offset));
+    // CDXC:SessionChat 2026-09-22 WHY:
+    // A cached card can outlive the question in Codex's current transcript after compaction or resume. Skip must persist its retirement even when there is no terminal question left to dismiss.
+    let Some((question, question_offset)) = question else {
+        return if text.is_none() {
+            Ok(None)
+        } else {
+            Err(
+                "This Codex question is no longer available. Skip it to dismiss the old card."
+                    .into(),
+            )
+        };
+    };
+    let repeated_title = questions.iter().any(|(key, other, _)| {
+        key != id && normalized(&other.title) == normalized(&question.title)
+    });
+    let (message_id, index) = id
+        .rsplit_once(':')
+        .ok_or("Codex's question ID is invalid.")?;
+    let index = index
+        .parse::<usize>()
+        .map_err(|_| "Codex's question index is invalid.")?;
+    Ok(Some(AsyncAnswer {
+        question_id: serde_json::json!(["request_user_input_async", message_id, index]).to_string(),
+        transcript_path: path,
+        repeated_title,
         title: question.title.clone(),
         options: question
             .options
@@ -71,7 +119,8 @@ pub(crate) fn resolve(
             .map(|options| options.iter().take(32).filter(|s| s.len() <= 512).count())
             .unwrap_or(0),
         text,
-    })
+        question_offset,
+    }))
 }
 
 fn normalized(text: &str) -> String {
@@ -273,13 +322,15 @@ impl Driver<'_> {
         }
     }
 
-    async fn open(&self, title: &str) -> Result<Editor, String> {
+    /// `None` means Codex's terminal holds no pending question with this title.
+    async fn open(&self, title: &str) -> Result<Option<Editor>, String> {
         let screen = capture_session_terminal_text(self.zmx_name)
             .await
             .ok_or("Could not read Codex's terminal.")?;
         if editor(&screen).is_none() {
-            let key = collapsed_binding(&screen)
-                .ok_or("Codex is not showing its pending questions. Nothing was submitted.")?;
+            let Some(key) = collapsed_binding(&screen) else {
+                return Ok(None);
+            };
             self.write(&key).await?;
         }
         let mut current = self.wait("the question editor opening", editor).await?;
@@ -300,7 +351,7 @@ impl Driver<'_> {
         }
         for _ in 0..100 {
             if matches_question(&current, title) {
-                return Ok(current);
+                return Ok(Some(current));
             }
             if current.position >= current.count {
                 break;
@@ -315,11 +366,24 @@ impl Driver<'_> {
                 })
                 .await?;
         }
-        Err("This question is no longer pending in Codex's terminal. Nothing was submitted.".into())
+        Ok(None)
     }
 
     async fn run(&self, answer: &AsyncAnswer) -> Result<(), String> {
-        let current = self.open(&answer.title).await?;
+        let Some(current) = self.open(&answer.title).await? else {
+            return match answer.text {
+                None => Ok(()),
+                // open() may have expanded Codex's editor for other live questions; the reply goes through the main composer.
+                Some(_) => {
+                    self.return_to_main_prompt().await?;
+                    self.send_retained_answer(answer).await
+                }
+            };
+        };
+        // The live editor exposes titles rather than IDs; the retained-reply envelope does not have this ambiguity.
+        if answer.repeated_title {
+            return Err("Codex has repeated this question. Answer it in the terminal so the correct question is selected.".into());
+        }
         if let Some(text) = &answer.text {
             // Bracketed paste switches named choices to Other without a digit shortcut accidentally submitting a different answer.
             if answer.options > 0 {
@@ -389,7 +453,24 @@ impl Driver<'_> {
                 .ok_or("Codex's question-skip shortcut is unavailable.")?;
             self.write(&key).await?;
         }
+        let framed_answer = answer.text.as_ref().map(|text| {
+            format!(
+                "{}{text}",
+                crate::session_chat_async_questions::answer_prefix(&answer.title)
+            )
+        });
         self.wait("Codex accepting the question action", |screen| {
+            if editor(screen).is_none()
+                && framed_answer.as_ref().is_some_and(|text| {
+                    crate::session_chat_notice::session_chat_screen_shows_queued_input(
+                        Some("codex"),
+                        screen,
+                        text,
+                    )
+                })
+            {
+                return Some(());
+            }
             if let Some(e) = editor(screen) {
                 (e.count < current.count && !matches_question(&e, &answer.title)).then_some(())
             } else {
@@ -406,6 +487,121 @@ impl Driver<'_> {
             }
         })
         .await
+    }
+
+    /// CDXC:SessionChat 2026-10-04 WHY:
+    /// Codex 0.159/0.160 clears its async question editor when a turn finishes or a collapsed question expires. The transcript-backed Ghostex card still has a valid identity; deliver Codex's canonical reply through its verified main composer and retire the card only after the transcript records it.
+    async fn send_retained_answer(&self, answer: &AsyncAnswer) -> Result<(), String> {
+        if answer.question_id.len() > 512 {
+            return Err("Codex's question ID is too long to send safely.".into());
+        }
+        let prefix = crate::session_chat_async_questions::answer_prefix(&answer.title);
+        let text = answer
+            .text
+            .as_deref()
+            .ok_or("A question answer is required.")?;
+        let payload = format!(
+            "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
+            serde_json::json!([{
+                "questionItemId": answer.question_id,
+                "question": &prefix[2..prefix.len() - 2],
+                "answer": text,
+            }])
+        );
+        let expected = format!("{prefix}{text}");
+        if answer_already_recorded(answer, &expected).await {
+            return Ok(());
+        }
+        let screen = capture_session_terminal_text_vt(self.zmx_name)
+            .await
+            .ok_or("Could not read Codex's input box. Nothing was submitted.")?;
+        let input = crate::session_chat_composer::session_chat_composer_input("codex", &screen)
+            .ok_or("Codex's main input box is not ready. Nothing was submitted.")?;
+        if !input.is_empty() || input.shell_mode {
+            return Err("Codex's input box contains a draft. Save or clear it before answering this question.".into());
+        }
+        let path = answer.transcript_path.clone();
+        let baseline = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
+        self.write(&crate::session_chat_send::wrap_terminal_bracketed_paste_text(&payload))
+            .await?;
+        let generation = std::sync::atomic::AtomicU64::new(0);
+        let pasted = crate::session_chat_send::verify_session_chat_paste_landed(
+            self.zmx_name,
+            Some("codex"),
+            &payload,
+            100,
+            crate::session_chat_send::session_chat_verify_timeout_ms(payload.len()),
+            &generation,
+            0,
+        )
+        .await;
+        if !matches!(
+            pasted,
+            crate::session_chat_send::SessionChatPasteVerification::Landed
+        ) {
+            return Err("Could not verify the question answer in Codex's input box. Check the terminal before retrying.".into());
+        }
+        self.write(crate::session_chat_send::SESSION_CHAT_SUBMIT)
+            .await?;
+        crate::session_chat_send_submit::confirm_submitted(
+            "codex",
+            self.project_id,
+            self.session_id,
+            self.zmx_name,
+            self.source,
+            &payload,
+            crate::session_chat_send::SESSION_CHAT_SUBMIT,
+            self.cancelled,
+            None,
+        )
+        .await
+        .map_err(|error| error.message)?;
+        let mut cursor = SessionChatIncrementalState::default();
+        cursor.rebase(baseline);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if (self.cancelled)() {
+                return Err(
+                    "The question action was cancelled. Check the terminal before retrying.".into(),
+                );
+            }
+            let path = path.clone();
+            let expected = expected.clone();
+            let (next_cursor, recorded) = tokio::task::spawn_blocking(move || {
+                let messages = read_incremental_transcript_messages(
+                    &path,
+                    &mut cursor,
+                    decode_codex_transcript_line,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_or_default();
+                let recorded = messages.iter().any(|message| {
+                    message.role == SessionChatRole::User
+                        && message.byte_offset.is_some_and(|offset| offset >= baseline)
+                        && message.blocks.iter().any(|block| {
+                            matches!(block, SessionChatBlock::Text { text } if text == &expected)
+                        })
+                });
+                (cursor, recorded)
+            })
+            .await
+            .map_err(|_| {
+                "Could not verify Codex's recorded answer. Check the terminal before retrying."
+            })?;
+            cursor = next_cursor;
+            if recorded {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("Codex has not recorded the question answer yet. Check the terminal before retrying.".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     // Codex advances after accepting a question, and a failed lookup may also leave one focused. Restore the main prompt on either outcome so an ordinary chat send cannot answer another question accidentally.
@@ -438,6 +634,39 @@ impl Driver<'_> {
         }
         Err("Codex could not return to its main prompt. Check the terminal before sending another message.".into())
     }
+}
+
+/// CDXC:SessionChat 2026-10-05 WHY:
+/// A retained answer whose transcript check timed out ("Codex has not recorded the question answer yet") left its card up, and answering again typed the reply a second time once Codex had in fact taken the first. Before typing, the retained reply looks for a user turn after the question that already carries this exact answer and, when there is one, settles as answered without writing anything.
+async fn answer_already_recorded(answer: &AsyncAnswer, expected: &str) -> bool {
+    let path = answer.transcript_path.clone();
+    let after = answer.question_offset;
+    let expected = expected.to_string();
+    tokio::task::spawn_blocking(move || {
+        read_incremental_transcript_messages(
+            &path,
+            &mut SessionChatIncrementalState::default(),
+            decode_codex_transcript_line,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default()
+        .iter()
+        .any(|message| {
+            message.role == SessionChatRole::User
+                && message
+                    .byte_offset
+                    .zip(after)
+                    .is_none_or(|(offset, after)| offset > after)
+                && message.blocks.iter().any(
+                    |block| matches!(block, SessionChatBlock::Text { text } if text == &expected),
+                )
+        })
+    })
+    .await
+    .unwrap_or(false)
 }
 
 pub(crate) async fn run(

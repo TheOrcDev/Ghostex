@@ -30,6 +30,7 @@ depends=(
   'cairo'
   'dbus'
   'expat'
+  'ffmpeg'
   'fontconfig'
   'glib2'
   'glibc'

@@ -4,7 +4,7 @@
 //! gxserver owns it because it is the one place that sees prompts from every surface: chat sends from the desktop, web and mobile clients all go through the chat queue runtime, and terminal-typed prompts arrive as agent hook events.
 //! Only explicit prompt-submit hook events count as a message. The first user message rides on every later hook event as cached sidecar state, so its presence says nothing about this event, and tool or turn events fire long after the user last typed.
 //! Option commands Ghostex types on the user's behalf and raw keys are not messages either.
-//! SEE-ALSO: server/src/server/agent_http.rs, server/src/session_chat_queue_runtime.rs, packages/shared/ghostex-settings/defaults.ts.
+//! SEE-ALSO: server/src/server/agent_http.rs, server/src/session_chat_queue_runtime/post_send.rs, packages/settings-catalog/src/data/defaults.rs.
 
 use std::path::Path;
 

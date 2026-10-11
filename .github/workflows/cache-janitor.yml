@@ -1,0 +1,62 @@
+name: Cache janitor
+
+# CDXC:Release 2026-09-16 WHY: the repository's Actions cache sits at the 10 GB
+# cap (4,200 sccache object entries plus the release caches), so GitHub's own
+# eviction decides which entry dies whenever a run writes a new one. On
+# 2026-09-15 that eviction took the 1.77 GB Gradle cache the 9.6.0 Android
+# build had just saved, and the next release built Android cold again. This
+# workflow runs tooling/release-gpui/cache-janitor.mjs after every run that
+# writes cache entries (the warm Rust runs, the releases, and the same-version
+# amends) and once a day,
+# so stale sccache objects and superseded entries are removed first and the
+# release caches (Gradle, ccache, tailcat bridge, CEF, Zig, cargo registry,
+# GhosttyKit, Go) stay under the cap. A manual dispatch is a dry run unless
+# `apply` is checked.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_run:
+    workflows: ['Warm the Rust build cache', 'Release Ghostex', 'Amend existing Ghostex release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Delete the selected entries (unchecked prints the plan only)
+        type: boolean
+        default: false
+      budget_gb:
+        description: Keep the cache at or under this many GB
+        type: string
+        default: '9'
+
+concurrency:
+  group: cache-janitor
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  janitor:
+    runs-on: ubuntu-24.04
+    # Thousands of paced deletions can span hourly GITHUB_TOKEN quota resets.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tooling/release-gpui/cache-janitor.mjs
+          sparse-checkout-cone-mode: false
+          submodules: false
+      - name: Run the cache janitor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Scheduled and post-run invocations delete; a dispatch deletes only when asked.
+          APPLY: ${{ github.event_name != 'workflow_dispatch' || inputs.apply == true }}
+          BUDGET_GB: ${{ inputs.budget_gb || '9' }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY" --budget-gb "$BUDGET_GB")
+          if [ "$APPLY" = 'true' ]; then args+=(--apply); fi
+          node tooling/release-gpui/cache-janitor.mjs "${args[@]}"

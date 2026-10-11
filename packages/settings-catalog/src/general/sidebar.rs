@@ -1,0 +1,100 @@
+use crate::data::*;
+use crate::json::opt;
+use crate::json::J;
+use crate::rows::{option, row, section, Section, SettingOption};
+
+pub(crate) fn session_cards() -> Section {
+    section(
+        "sessionCards",
+        "Session Cards",
+        vec![
+            // CDXC:Sessions 2026-05-15-19:46:
+            // Settings must not expose the card-hotkey visibility row; session-card shortcut visibility is no longer configurable from the modal.
+            row("sessionCardHoverButtons", "Session hover buttons (click to toggle, drag to reorder)", "Buttons a session card shows when you hover it. Click an icon to turn it on or off; drag icons to reorder them. Buttons to the right of the chevron always show, buttons to its left hide until the chevron is clicked. By default the strip is Tag, Park, Sleep, chevron, Close."),
+            row("showSessionCardHoverButtonsInContextMenu", "Hover buttons also in context menu", "Also list the enabled hover buttons in the session right-click menu, in their usual place in the menu. Close is never listed while it is on the card. Turn off to leave every button out of the menu once it is on the card."),
+        ],
+    )
+}
+
+pub(crate) fn status_indicators() -> Section {
+    section("statusIndicators", "Status Indicators", vec![])
+}
+
+pub(crate) fn sidebar() -> Section {
+    section(
+        "sidebar",
+        "Sidebar",
+        vec![
+            row("sidebarSettingsPreset", "Preset", "Apply a sidebar UI preset or show Custom when controlled settings diverge.").options_of(SIDEBAR_SETTINGS_PRESETS, "label", "id").options(&[opt("Custom", "custom")]),
+            row("sidebarSpaceSwitchBehavior", "When switching to a Space", "Reopen the session you last had open in a Space when you switch to it, in the view its project was in. Shown while the Spaces extension is on.").options(SIDEBAR_SPACE_SWITCH_BEHAVIOR_OPTIONS),
+            row("sidebarSpaceFollowActiveSession", "Follow the active session's Space", "Switch the selected Space to the one that owns a session you open from outside it, such as through Back/Forward or Search by Prompt. Shown while the Spaces extension is on."),
+            row("projectSwitchKeepAliveMinutes", "Keep the previous project live for", "After you switch to another project or Space, keep the terminals, chats, and view that were open in the previous project running for this many minutes so switching back is instant. 0 releases them right away."),
+            row("sidebarVisibilityMemory", "Sidebar visibility memory", "Keep one sidebar state everywhere, or remember it separately for Agents and for the wide views (Browser, Code, Files, Kanban, Automate).").options(SIDEBAR_VISIBILITY_MEMORY_OPTIONS),
+            row("showProjectIcons", "Show project icons", "Show project artwork or a square with the project’s first letter beside project names."),
+            // CDXC:Settings 2026-06-30-22:22:
+            // Search metadata follows the visible row order: preset-controlled rows
+            // sit immediately after Preset, before independent sidebar sizing and
+            // placement controls.
+            row("hideSessionAgentIconUntilHover", "Hide agent icon until hover", "Hide session agent icons until a session row is hovered."),
+            row("hideBrowserFaviconUntilHover", "Hide browser favicon until hover", "Hide browser page favicons until a session row is hovered."),
+            row("hideLastActiveTimeOnSessionCards", "Hide last active time", "Hide Last Active timestamps from session-card title rows."),
+            row("highlightPendingQuestions", "Highlight unanswered questions", "Give sessions with a detected unanswered question a soft pink background, including while the agent keeps working. Currently supports Codex asynchronous questions."),
+            row("hideProjectHeaderDiffStats", "Hide project git stats", "Hide +added/-removed line counts in sidebar project rows."),
+            row("showProjectEditorDiffFileCount", "Show changed-file count", "Show changed-file counts in sidebar project row git stats."),
+            row("hideMenuBarSessionStatusIndicators", "Show Menu Bar Session Indicators", "Show the menu bar session status badges."),
+            row("sidebarCollapseAnimationDurationMs", "Collapse animation speed", "Set how quickly sidebar sections, groups, and projects expand or collapse, and how quickly the floating sidebar and Agents Panel slide in from the window edge. Set to 0 for no animation."),
+            row("panelAnimationSpeed", "Panel animations", "Set how fast the sidebar, the side panel, the Agents Panel and the bottom or right panel slide open and closed: Off, Slow, Normal or Fast. Reduce Motion in your computer settings always turns it off.").options(PANEL_ANIMATION_SPEED_OPTIONS),
+            row("closeSidePanelWithLastTab", "Close side panel with its last tab", "Close the side panel when you close its last tab, instead of showing the Open a view picker."),
+            row("sidebarTooltipDelayMs", "Tooltip Delay", "Set how long sidebar hover labels wait before appearing. Set to 0 to show them immediately."),
+            row("sidebarDefaultWidthPx", "Default Width", "Width restored when double-clicking the sidebar resize handle."),
+            row("commandsPanelDefaultHeightPx", "Command Pane Default Height", "Height used when opening the command pane and when double-clicking its top resize rail."),
+            row("commandsPanelSide", "Command Pane Side", "Dock the command pane below the workspace or to its right.").options(COMMANDS_PANEL_SIDE_OPTIONS),
+            row("commandsPanelAutoMinimize", "Auto-minimize Commands pane", "Minimize the Commands pane after you stop using it and move focus elsewhere. Commands keep running."),
+            row("commandsPanelAutoMinimizeDelaySeconds", "Minimize after", "How long the Commands pane stays open after focus and the pointer leave it.").num_options(COMMANDS_PANEL_AUTO_MINIMIZE_DELAY_OPTIONS),
+            row("hideTabStripNewTerminalButton", "Hide New Terminal button", "Hide the New Terminal button from the tab strip."),
+            row("hideTabStripNewBrowserButton", "Hide New Browser Tab button", "Hide the New Browser Tab button from the tab strip."),
+            row("projectSessionListCollapsedCount", "Compact Session Rows", "Rows a project shows in Compact mode before its \"Show all\" row. Rows in collapsed sections do not count."),
+            row("groupWorkingSessions", "Group working sessions", "Move sessions into a collapsed Working section under their project while their agent works; they return to Sessions when it stops or needs you. Also in the sidebar's Sort & Filter menu."),
+            row("agentManagerZoomPercent", "Sidebar Interface Size", "Scale the sidebar interface."),
+            row("createSessionOnSidebarDoubleClick", "Double-click empty sidebar space to create a session", "Create a session from empty sidebar space."),
+            row("enableSessionParking", "Enable session parking", "Move deferred sessions into a collapsible Parked section at the bottom of the sidebar."),
+            row("sleepSessionWhenParking", "Sleep session when parking", "Sleep a session automatically when it is moved into the Parked section."),
+            row("showTagMenuWhenParking", "Park & Snooze with tags", "Open the Tag as menu when a session is parked or snoozed so it can be tagged right away."),
+            row("unparkAfterSendingMessage", "Unpark after sending a message", "Move a parked session out of the Parked section when you send it a message."),
+            row("renameSessionOnDoubleClick", "Double-click session cards to rename", "Makes clicking on a session respond a bit slower so we can detect the double click"),
+        ],
+    )
+}
+
+pub(crate) fn sidebar_tags() -> Section {
+    section(
+        "sidebarTags",
+        "Sidebar Tags",
+        vec![
+            row("sidebarSessionTagListItems", "Tag Filter List", "Add your own tags, then reorder, hide, disable, or delete tags and their separators for the sidebar and the Tag as menu.").option_list(tag_list_item_options()).options(&[opt("Hide tag", "hide"), opt("Disable tag", "disable"), opt("Reorder tags", "reorder")]),
+        ],
+    )
+}
+
+/// `getSidebarSessionTagListItemLabel` over the default tag list: a tag's label, "No tag", or "Separator".
+fn tag_list_item_options() -> Vec<SettingOption> {
+    DEFAULT_SIDEBAR_SESSION_TAG_LIST_ITEMS
+        .as_array()
+        .iter()
+        .map(|item| {
+            let id = item.get("id").and_then(J::as_str).unwrap_or_default();
+            let label = match item.get("type").and_then(J::as_str) {
+                Some("tag") => {
+                    let tag = item.get("tag").and_then(J::as_str).unwrap_or_default();
+                    SIDEBAR_SESSION_TAG_OPTIONS
+                        .iter()
+                        .find(|option| option.value == tag)
+                        .map_or(tag, |option| option.label)
+                }
+                Some("untagged") => "No tag",
+                _ => "Separator",
+            };
+            option(label, id)
+        })
+        .collect()
+}

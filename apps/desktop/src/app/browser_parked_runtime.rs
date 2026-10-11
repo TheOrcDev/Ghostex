@@ -117,7 +117,8 @@ impl GhostexGpuiApp {
         cx: &mut gpui::Context<Self>,
     ) {
         match event {
-            cef::BrowserPageMetadataEvent::HistoryRequested => {}
+            cef::BrowserPageMetadataEvent::HistoryRequested
+            | cef::BrowserPageMetadataEvent::FindRequested => {}
             cef::BrowserPageMetadataEvent::AddressChanged(url) => {
                 let Some(parked_tabs) = self.parked_browser_tabs_by_project.get_mut(project_id)
                 else {
@@ -131,6 +132,9 @@ impl GhostexGpuiApp {
             }
             cef::BrowserPageMetadataEvent::CloseRequested => {
                 self.close_parked_browser_tab(project_id, tab_id, cx);
+            }
+            cef::BrowserPageMetadataEvent::CopyToClipboard(item) => {
+                gpui_copy_to_clipboard(item, cx);
             }
             cef::BrowserPageMetadataEvent::TitleChanged(title) => {
                 let Some(parked_tabs) = self.parked_browser_tabs_by_project.get_mut(project_id)
@@ -219,7 +223,7 @@ impl GhostexGpuiApp {
             return;
         };
         let Some(popup_tab_id) =
-            parked_tabs.add_loaded_popup_tab(requested_url, active_profile_id, placement)
+            parked_tabs.open_loaded_popup_tab(requested_url, active_profile_id, placement)
         else {
             return;
         };
@@ -230,10 +234,11 @@ impl GhostexGpuiApp {
         {
             tab.remote_machine_id = remote_machine_id;
         }
-        self.pending_sidebar_browser_tab_reveal = Some(PendingSidebarBrowserTabReveal {
-            project_id: project_id.to_string(),
-            tab_id: popup_tab_id,
-        });
+        if let Some(state) = self.project_view_states_by_project.get_mut(project_id)
+            && !state.open_views.contains(&TitlebarMode::Browser)
+        {
+            state.open_views.push(TitlebarMode::Browser);
+        }
         self.persist_shell_layout_state();
         cx.notify();
     }
@@ -260,6 +265,27 @@ impl GhostexGpuiApp {
             return;
         }
         cx.notify();
+    }
+
+    /// Sleep every parked page of a project that is not mounted, one tab at a time through the
+    /// per-tab path, so each tab stays in the project's model as a restored placeholder and the
+    /// panes' address text survives. Returns whether any page was dropped.
+    pub(crate) fn sleep_parked_browser_project(
+        &mut self,
+        project_id: &str,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(runtime) = self.parked_browser_runtimes_by_project.get(project_id) else {
+            return false;
+        };
+        let mut dropped = false;
+        for tab_id in runtime.surface_tab_ids() {
+            dropped |= self.forget_parked_browser_tab_runtime(project_id, tab_id);
+        }
+        if dropped {
+            cx.notify();
+        }
+        dropped
     }
 
     /// Close a tab of a parked project, including its parked page.

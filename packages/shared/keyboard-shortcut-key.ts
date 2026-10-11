@@ -7,7 +7,7 @@
  * For letter keys, `KeyboardEvent.keyCode` is the Latin letter the operating system assigns to the key: the printed letter on Latin layouts (AZERTY, Dvorak, QWERTZ) and the QWERTY letter on non-Latin layouts, identically in Chromium on macOS, Windows and Linux. It is what native menu shortcuts match and how VS Code dispatches keybindings.
  * `KeyboardEvent.code` is the physical position and is only a last resort: it is wrong for every layout that moves letters, so a code-only rule would break AZERTY and Dvorak users.
  * Plain typing never goes through this helper; callers use it only after checking a modifier, so it never changes what a key types.
- * SEE-ALSO: apps/desktop/native/macos/GpuiKeyboardShortcuts.m applies the same definition to AppKit events for the desktop app's native routing; packages/shared/ghostex-hotkeys.ts builds configured hotkey text from it.
+ * SEE-ALSO: apps/desktop/native/macos/GpuiKeyboardShortcuts.m applies the same definition to AppKit events for the desktop app's native routing; packages/shared/ghostex-hotkeys.ts (deleted 2026-10-01) builds configured hotkey text from it.
  */
 
 export type ShortcutKeyboardEvent = Pick<KeyboardEvent, 'key'> & Partial<Pick<KeyboardEvent, 'code' | 'keyCode'>>;

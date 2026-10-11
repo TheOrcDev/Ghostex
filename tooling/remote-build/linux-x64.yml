@@ -1,0 +1,165 @@
+# CDXC:Build 2026-10-02 DECISION:
+# User chose Blacksmith's per-minute machines to build the Linux x64 desktop app because their Linux laptop is too weak to build it.
+# `cargo xtask remote-start` (tooling/xtask/src/remote_build.rs) pushes a snapshot of the working tree to the private build repository's remote-build/linux-x64 branch and starts this workflow there with workflow_dispatch; this file rides along as that snapshot's only workflow (and alone on that repository's main), so it never runs in the public repository.
+#
+# CDXC:Build 2026-10-02 WHY:
+# Two Blacksmith sticky disks keep the build warm between runs: the whole checkout (target folders, node_modules, CEF cache, submodules) and the toolchains and download caches.
+# The checkout is updated with `git checkout` instead of a fresh clone so unchanged files keep their timestamps; a fresh clone makes cargo rebuild every path crate (Zed's GPUI included) on each run.
+# The checkout is bind-mounted at the laptop's own repository path, so the paths cargo and the app bake in (CARGO_MANIFEST_DIR) match a local build exactly.
+
+name: Remote build - Linux x64
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: remote-build-linux-x64
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 150
+    steps:
+      - name: Mount the persistent checkout
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ghostex-remote-build-linux-x64-checkout-v1
+          path: ~/gx-work
+      - name: Mount the persistent toolchains
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ghostex-remote-build-linux-x64-tools-v1
+          path: ~/gx-tools
+
+      - name: Update the checkout to the snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo chown "$(id -u):$(id -g)" "$HOME/gx-work" "$HOME/gx-tools"
+          repo="$HOME/gx-work/ghostex"
+          mkdir -p "$repo"
+          cd "$repo"
+          if [[ ! -d .git ]]; then
+            git init -q
+            git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          fi
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=$auth" fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --force --detach FETCH_HEAD
+          git gc --auto --quiet || true
+
+      - name: Mount the checkout at the laptop's repository path
+        run: |
+          set -euo pipefail
+          checkout="$HOME/gx-work/ghostex"
+          root="$(sed -n 's/^GX_REMOTE_ROOT=//p' "$checkout/.remote-build/request.env")"
+          case "$root" in
+            /?*/?*) ;;
+            *) echo "::error::Unusable repository path in the snapshot: '$root'"; exit 1 ;;
+          esac
+          case "$root" in
+            /bin/* | /boot/* | /dev/* | /etc/* | /lib*/* | /proc/* | /run/* | /sbin/* | /sys/* | /usr/* | /var/* | "$HOME"/gx-*)
+              echo "::error::Refusing to mount over $root"; exit 1 ;;
+          esac
+          if ! mountpoint -q "$root"; then
+            sudo mkdir -p "$root"
+            sudo mount --bind "$checkout" "$root"
+          fi
+          echo "GX_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Install system packages
+        run: |
+          set -euo pipefail
+          cd "$GX_ROOT"
+          tooling/release-gpui/retry.sh 3 5 -- sudo apt-get update
+          tooling/release-gpui/retry.sh 3 5 -- sudo apt-get install -y cmake ninja-build pkg-config zstd libasound2-dev libfontconfig1-dev libfreetype-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev
+
+      - name: Install Rust and Zig onto the toolchain disk
+        run: |
+          set -euo pipefail
+          cd "$GX_ROOT"
+          tools="$HOME/gx-tools"
+          export CARGO_HOME="$tools/cargo" RUSTUP_HOME="$tools/rustup" MISE_DATA_DIR="$tools/mise"
+          if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
+            tooling/release-gpui/retry.sh 3 5 -- bash -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable"
+          fi
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' apps/desktop/rust-toolchain.toml)"
+          "$CARGO_HOME/bin/rustup" toolchain install "$channel" --profile minimal
+          zig_bin="$MISE_DATA_DIR/installs/zig/0.16.0/bin/zig"
+          if [[ ! -x "$zig_bin" ]]; then
+            mkdir -p "$tools/bin"
+            tooling/release-gpui/retry.sh 3 5 -- bash -c "curl -fsSL https://mise.run | MISE_INSTALL_PATH='$tools/bin/mise' sh"
+            tooling/release-gpui/retry.sh 3 5 -- "$tools/bin/mise" install zig@0.16.0
+          fi
+          [[ "$("$zig_bin" version)" == "0.16.0" ]]
+          {
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "RUSTUP_HOME=$RUSTUP_HOME"
+            echo "ZIG=$zig_bin"
+            echo "GHOSTEX_ZIG=$zig_bin"
+            echo "ZIG_GLOBAL_CACHE_DIR=$tools/zig-global-cache"
+            echo "BUN_INSTALL_CACHE_DIR=$tools/bun-cache"
+            echo "SCCACHE_DIR=$tools/sccache"
+            echo "SCCACHE_CACHE_SIZE=20G"
+          } >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      # The desktop and gxserver crates set rustc-wrapper = sccache in their .cargo/config.toml, so cargo fails without it on PATH.
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Install JavaScript dependencies
+        run: |
+          cd "$GX_ROOT"
+          tooling/release-gpui/retry.sh 3 5 -- bun install --frozen-lockfile
+
+      - name: Check out the submodules the Linux build needs
+        run: |
+          cd "$GX_ROOT"
+          tooling/release-gpui/retry.sh 3 5 -- git submodule update --init --depth=1 -- \
+            .dependencies/zmx .dependencies/zed .dependencies/cef-rs .dependencies/gpui-component .dependencies/code-server
+
+      - name: Pre-fetch Zig package dependencies
+        run: |
+          cd "$GX_ROOT"
+          tooling/release-gpui/fetch-zig-deps.sh ghostty
+
+      - name: Build the desktop app
+        run: |
+          cd "$GX_ROOT"
+          cargo xtask start --build-only --verbose
+
+      - name: Pack the files that differ from the laptop's staged app
+        run: |
+          cd "$GX_ROOT"
+          cargo xtask remote-build-pack \
+            --stage apps/desktop/build/linux/Ghostex \
+            --base .remote-build/base-manifest.tsv \
+            --out "$RUNNER_TEMP/remote-build"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-build-linux-x64
+          path: ${{ runner.temp }}/remote-build/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      # The sticky disks are snapshotted in their post steps; nothing may hold files on them or sit mounted inside them by then.
+      - name: Release the persistent disks
+        if: ${{ always() }}
+        run: |
+          sccache --stop-server >/dev/null 2>&1 || true
+          df -h "$HOME/gx-work" "$HOME/gx-tools" || true
+          if [[ -n "${GX_ROOT:-}" ]] && mountpoint -q "$GX_ROOT"; then
+            sudo umount "$GX_ROOT" || sudo umount -l "$GX_ROOT"
+          fi
+          sync

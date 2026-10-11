@@ -8,7 +8,6 @@
 // split (that `pub(crate) mod terminal_sync;` line is unchanged).
 pub(crate) mod agents_terminal_surface_sync;
 pub(crate) mod cef_and_command_terminal_focus;
-pub(crate) mod companion_terminal_surface_sync;
 pub(crate) mod gpui_engine_terminal_attachment;
 pub(crate) mod gpui_engine_terminal_sync;
 pub(crate) mod gpui_engine_terminal_viewers;

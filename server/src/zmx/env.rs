@@ -68,7 +68,7 @@ fn environment_keys_to_strip() -> Vec<&'static str> {
 }
 
 pub(crate) fn session_identity_environment_keys() -> Vec<&'static str> {
-    vec![
+    let mut keys = vec![
         "GHOSTEX_AGENT",
         "GHOSTEX_GLOBAL_SESSION_REF",
         "GHOSTEX_GXSERVER_AUTH_TOKEN_FILE",
@@ -91,5 +91,68 @@ pub(crate) fn session_identity_environment_keys() -> Vec<&'static str> {
         "ghostex_SESSION_STATE_FILE",
         "ghostex_WORKSPACE_ID",
         "ghostex_WORKSPACE_ROOT",
+    ];
+    keys.extend(agent_cli_session_identity_environment_keys());
+    keys
+}
+
+/*
+CDXC:SessionIdentity 2026-09-20 WHY:
+gxserver is usually started from inside an agent CLI session (`ghostex start` run by Claude Code, for example), so its environment carries that CLI's per-session markers. Every zmx/wmx provider we spawned inherited them, and the agent launched in the new session then believed it was a nested child of the session that had started the daemon: Claude Code reads CLAUDE_CODE_CHILD_SESSION and turns transcript persistence off for the whole session. Strip the agent side of the session identity exactly like we strip our own, so a Ghostex session always starts as a top-level agent run. Only per-session markers belong here; durable configuration such as CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_CODE_USE_BEDROCK must keep flowing through.
+Empryo's EMPRYO_PROJECT_DIR is one of those markers (2026-10-07): the notify hook drops every Claude and Codex event that sees it, so a gxserver started with it set would have silenced the hooks of every Claude and Codex session. EMPRYO_HOME is configuration and stays.
+*/
+pub(crate) fn agent_cli_session_identity_environment_keys() -> Vec<&'static str> {
+    vec![
+        "AI_AGENT",
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "EMPRYO_PROJECT_DIR",
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stripped_environment_drops_inherited_agent_cli_session_markers() {
+        let stripped = environment_keys_to_strip();
+        for key in agent_cli_session_identity_environment_keys() {
+            assert!(
+                stripped.contains(&key),
+                "{key} must be stripped from zmx child environments"
+            );
+        }
+    }
+
+    #[test]
+    fn stripped_environment_keeps_durable_agent_configuration() {
+        let stripped = environment_keys_to_strip();
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+        ] {
+            assert!(
+                !stripped.contains(&key),
+                "{key} is durable configuration and must reach the session"
+            );
+        }
+    }
+
+    #[test]
+    fn session_identity_reset_covers_agent_cli_markers() {
+        let keys = session_identity_environment_keys();
+        assert!(keys.contains(&"GHOSTEX_SESSION_ID"));
+        assert!(keys.contains(&"CLAUDE_CODE_CHILD_SESSION"));
+    }
 }

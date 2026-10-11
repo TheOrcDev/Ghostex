@@ -150,7 +150,7 @@ pub(crate) fn gpui_app_modal_command_return_focus_target(
         return gpui_app_modal_command_return_focus_target_for_session(command_pane, session_id);
     }
 
-    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.is_expanded() {
+    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.focused_group_dock_visible() {
         return None;
     }
 
@@ -278,7 +278,7 @@ pub(crate) fn focused_command_pane_close_after_done_target(
     CDXC:Sessions 2026-06-25-16:52:
     Native routes Close After Done for command terminals by focused session id, not by mounted terminal surface. GPUI should resolve the expanded shell-focused command tab even when it is sleeping so users can arm or cancel the safe persisted intent without waking or mounting the terminal.
     */
-    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.is_expanded() {
+    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.focused_group_dock_visible() {
         return None;
     }
 

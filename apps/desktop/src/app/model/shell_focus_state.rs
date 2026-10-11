@@ -19,10 +19,6 @@ pub(crate) fn shell_focus_to_shell_state_json(focus: ShellFocusTarget) -> serde_
             "type": "project-editor-surface",
             "mode": mode.element_slug(),
         }),
-        ShellFocusTarget::ProjectEditorCompanion(mode) => serde_json::json!({
-            "type": "project-editor-companion",
-            "mode": mode.element_slug(),
-        }),
     }
 }
 
@@ -40,9 +36,6 @@ pub(crate) fn shell_focus_from_shell_state(value: &serde_json::Value) -> Option<
         "project-editor-surface" => json_string_field(object, "mode")
             .and_then(TitlebarMode::from_slug)
             .map(ShellFocusTarget::ProjectEditorSurface),
-        "project-editor-companion" => json_string_field(object, "mode")
-            .and_then(TitlebarMode::from_slug)
-            .map(ShellFocusTarget::ProjectEditorCompanion),
         _ => None,
     }
 }
@@ -75,13 +68,15 @@ pub(crate) fn valid_non_command_shell_focus_with_browser_tabs(
     focus: ShellFocusTarget,
     active_mode: TitlebarMode,
     agents_workspace: &WorkspaceModel,
-    project_editor_shell: &ProjectEditorShellModel,
+    _project_editor_shell: &ProjectEditorShellModel,
     browser_tabs: &BrowserTabModel,
 ) -> Option<ShellFocusTarget> {
     match focus {
+        // CDXC:FocusRouting 2026-09-20 WHY:
+        // The Agents column is on screen in every view now, so a stored Agents-pane focus is valid
+        // whatever the view panel shows; only a pane that is no longer rendered invalidates it.
         ShellFocusTarget::AgentsPane(pane_id)
-            if active_mode == TitlebarMode::Agents
-                && agents_workspace.rendered_leaf_order().contains(&pane_id) =>
+            if agents_workspace.rendered_leaf_order().contains(&pane_id) =>
         {
             Some(focus)
         }
@@ -100,20 +95,8 @@ pub(crate) fn valid_non_command_shell_focus_with_browser_tabs(
                         | TitlebarMode::Kanban
                         | TitlebarMode::Automate
                         | TitlebarMode::Manage
-                ) =>
-        {
-            Some(focus)
-        }
-        ShellFocusTarget::ProjectEditorCompanion(mode)
-            if active_mode == mode
-                && project_editor_shell.left_companion_visible
-                && matches!(
-                    mode,
-                    TitlebarMode::Source
-                        | TitlebarMode::Browser
-                        | TitlebarMode::Kanban
-                        | TitlebarMode::Automate
-                        | TitlebarMode::Manage
+                        | TitlebarMode::BotFeed
+                        | TitlebarMode::Work
                 ) =>
         {
             Some(focus)
@@ -122,8 +105,7 @@ pub(crate) fn valid_non_command_shell_focus_with_browser_tabs(
         | ShellFocusTarget::AgentsPane(_)
         | ShellFocusTarget::BrowserSurface
         | ShellFocusTarget::BrowserPane(_)
-        | ShellFocusTarget::ProjectEditorSurface(_)
-        | ShellFocusTarget::ProjectEditorCompanion(_) => None,
+        | ShellFocusTarget::ProjectEditorSurface(_) => None,
     }
 }
 
@@ -135,10 +117,15 @@ pub(crate) fn default_shell_focus_for_mode(
     match active_mode {
         TitlebarMode::Agents => ShellFocusTarget::AgentsPane(agents_workspace.focused_pane),
         TitlebarMode::Browser => ShellFocusTarget::BrowserSurface,
+        // The Terminal view's default surface is its focused command group; the caller points
+        // `focused_group` at that tree before asking.
+        TitlebarMode::Terminal => ShellFocusTarget::CommandPane,
         TitlebarMode::Source
         | TitlebarMode::Kanban
         | TitlebarMode::Automate
         | TitlebarMode::Manage
+        | TitlebarMode::BotFeed
+        | TitlebarMode::Work
         | TitlebarMode::Extension(_) => ShellFocusTarget::ProjectEditorSurface(active_mode),
     }
 }

@@ -1,0 +1,19 @@
+{
+  "topPadding": 32,
+  "rowGap": 32,
+  "barHeight": 10,
+  "barGap": 12,
+  "bubbleHeight": 60,
+  "bubbleRadius": 16,
+  "tint": 0.12,
+  "pulseMs": 1400,
+  "pulseMinOpacity": 0.5,
+  "rows": [
+    { "role": "user", "widths": [0.42] },
+    { "role": "agent", "widths": [0.94, 0.88, 0.97, 0.62, 0.91, 0.84, 0.96, 0.9, 0.78, 0.93, 0.5] },
+    { "role": "user", "widths": [0.3] },
+    { "role": "agent", "widths": [0.9, 0.96, 0.8, 0.92, 0.45, 0.95, 0.87, 0.98, 0.83, 0.91, 0.76, 0.94, 0.89, 0.58] },
+    { "role": "user", "widths": [0.52] },
+    { "role": "agent", "widths": [0.86, 0.7, 0.93, 0.97, 0.82, 0.9, 0.88, 0.64] }
+  ]
+}

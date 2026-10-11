@@ -1,0 +1,11 @@
+{
+  "thumbnailSize": 48,
+  "thumbnailRadius": 8,
+  "borderWidth": 1,
+  "userRowGap": 6,
+  "assistantRowGap": 8,
+  "rowPaddingY": 4,
+  "inlineMarginX": 4,
+  "inlineMarginY": 2,
+  "loadingIconSize": 16
+}

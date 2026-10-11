@@ -38,6 +38,126 @@ fn antigravity_row_id(record: &Map<String, Value>, part: &str, fallback_id: &str
     }
 }
 
+/*
+CDXC:SessionChat 2026-10-01 WHY: agy's tools name their arguments in PascalCase (`CommandLine`,
+`AbsolutePath`, `TargetFile`, `TargetContent`/`ReplacementContent`), which none of the chat's
+tool rules read, so a command row showed raw JSON and an edit drew no diff. The calls are
+decoded here into the names agy's own terminal prints for them (`Bash(…)`, `Read(…)`,
+`Edit(…)`, `WebSearch(…)`) with the argument names the chat already renders, once for every
+client. A tool with no counterpart keeps its name, and agy's one-line `toolSummary` becomes its
+`description` so the row previews it instead of the argument JSON.
+*/
+fn antigravity_canonical_tool_call(name: &str, args: &Value) -> (String, Value) {
+    let Some(record) = args.as_object() else {
+        return (name.to_string(), args.clone());
+    };
+    let text = |key: &str| record.get(key).filter(|value| !value.is_null()).cloned();
+    let object = |entries: Vec<(&str, Option<Value>)>| {
+        Value::Object(
+            entries
+                .into_iter()
+                .filter_map(|(key, value)| value.map(|value| (key.to_string(), value)))
+                .collect(),
+        )
+    };
+    let edit = |chunk: &Map<String, Value>| {
+        object(vec![
+            ("old_string", chunk.get("TargetContent").cloned()),
+            ("new_string", chunk.get("ReplacementContent").cloned()),
+        ])
+    };
+    let canonical = match name {
+        "run_command" => Some((
+            "Bash",
+            object(vec![
+                ("command", text("CommandLine")),
+                ("cwd", text("Cwd")),
+                ("description", text("toolSummary")),
+            ]),
+        )),
+        "view_file" => {
+            let start = record.get("StartLine").and_then(Value::as_u64);
+            let end = record.get("EndLine").and_then(Value::as_u64);
+            Some((
+                "Read",
+                object(vec![
+                    ("file_path", text("AbsolutePath")),
+                    ("offset", start.map(Value::from)),
+                    (
+                        "limit",
+                        start
+                            .zip(end)
+                            .filter(|(start, end)| end >= start)
+                            .map(|(start, end)| Value::from(end - start + 1)),
+                    ),
+                ]),
+            ))
+        }
+        "write_to_file" => Some((
+            "Write",
+            object(vec![
+                ("file_path", text("TargetFile")),
+                ("content", text("CodeContent")),
+            ]),
+        )),
+        "replace_file_content" => {
+            let mut input = edit(record);
+            if let (Value::Object(input), Some(path)) = (&mut input, text("TargetFile")) {
+                input.insert("file_path".into(), path);
+            }
+            Some(("Edit", input))
+        }
+        "multi_replace_file_content" => Some((
+            "MultiEdit",
+            object(vec![
+                ("file_path", text("TargetFile")),
+                (
+                    "edits",
+                    record
+                        .get("ReplacementChunks")
+                        .and_then(Value::as_array)
+                        .map(|chunks| {
+                            Value::Array(
+                                chunks
+                                    .iter()
+                                    .filter_map(Value::as_object)
+                                    .map(edit)
+                                    .collect(),
+                            )
+                        }),
+                ),
+            ]),
+        )),
+        "list_dir" => Some(("LS", object(vec![("path", text("DirectoryPath"))]))),
+        "find_by_name" => Some((
+            "Glob",
+            object(vec![
+                ("pattern", text("Pattern")),
+                ("path", text("SearchDirectory")),
+            ]),
+        )),
+        "grep_search" => Some((
+            "Grep",
+            object(vec![
+                ("pattern", text("Query")),
+                ("path", text("SearchPath")),
+            ]),
+        )),
+        "search_web" => Some(("WebSearch", object(vec![("query", text("query"))]))),
+        "read_url_content" => Some(("WebFetch", object(vec![("url", text("Url"))]))),
+        _ => None,
+    };
+    if let Some((canonical_name, input)) = canonical {
+        return (canonical_name.to_string(), input);
+    }
+    let mut input = record.clone();
+    input.remove("toolAction");
+    if let Some(summary) = input.remove("toolSummary") {
+        input.entry("description").or_insert(summary);
+    }
+    (name.to_string(), Value::Object(input))
+}
+
 fn antigravity_tool_call_blocks(record: &Map<String, Value>) -> Vec<SessionChatBlock> {
     let Some(Value::Array(tool_calls)) = record.get("toolCalls") else {
         return Vec::new();
@@ -46,9 +166,13 @@ fn antigravity_tool_call_blocks(record: &Map<String, Value>) -> Vec<SessionChatB
         .iter()
         .filter_map(|tool_call| {
             let tool_call = tool_call.as_object()?;
+            let name = extract_string(tool_call.get("name")).unwrap_or_else(|| "tool".to_string());
+            let args = tool_call.get("args").cloned().unwrap_or(Value::Null);
+            let (name, input) = antigravity_canonical_tool_call(&name, &args);
             Some(SessionChatBlock::ToolCall {
-                name: extract_string(tool_call.get("name")).unwrap_or_else(|| "tool".to_string()),
-                input: tool_call.get("args").cloned().unwrap_or(Value::Null),
+                name,
+                input,
+                call_id: None,
             })
         })
         .collect()
@@ -96,6 +220,7 @@ pub fn decode_antigravity_transcript_line(
                 vec![SessionChatBlock::ToolResult {
                     output: text.unwrap_or_default(),
                     is_error,
+                    call_id: None,
                 }],
             ))
         }

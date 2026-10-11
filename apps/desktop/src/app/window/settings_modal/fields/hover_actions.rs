@@ -1,0 +1,249 @@
+//! `SessionCardHoverActionsField`: the session hover buttons as 32px icon toggles (dashed and
+//! faded when off, a raised fill with a 30% edge when on); a click toggles one, dragging reorders
+//! the strip, the chevron included (CDXC:Sessions 2026-09-12 DECISION in
+//! packages/core-ui/settings-modal/session-card-hover-actions-field.tsx (deleted 2026-10-01)).
+use super::super::super::native_modal_kit::*;
+use super::super::catalog::{module, settings_catalog};
+use super::super::palette::SettingsPalette;
+use super::SettingsPage;
+use super::row::{PageAction, RowSpec, setting_row, settings_icon, tooltip_text};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyElement, ClickEvent, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
+};
+use gpui_component::h_flex;
+use serde_json::{Value, json};
+
+/// One `{ id, enabled }` entry of `sessionCardHoverButtons`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HoverButtonItem {
+    pub(crate) id: String,
+    pub(crate) enabled: bool,
+}
+
+/// Kept for `FieldStates`; the drag state lives in the reorder list (fields/reorder.rs).
+#[derive(Default)]
+pub(crate) struct HoverActionsState;
+
+fn default_items() -> Vec<HoverButtonItem> {
+    settings_catalog()
+        .module_value(
+            module::SESSION_CARD_HOVER_ACTIONS,
+            "DEFAULT_SESSION_CARD_HOVER_BUTTONS",
+        )
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(HoverButtonItem {
+                        id: item.get("id")?.as_str()?.to_string(),
+                        enabled: item.get("enabled")?.as_bool()?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `normalizeSessionCardHoverButtons`.
+pub(crate) fn normalize_hover_buttons(candidate: &Value) -> Vec<HoverButtonItem> {
+    let defaults = default_items();
+    let Some(entries) = candidate.as_array() else {
+        return defaults;
+    };
+    let known: Vec<String> = defaults.iter().map(|item| item.id.clone()).collect();
+    if entries.iter().all(Value::is_string) {
+        let enabled: Vec<&str> = entries.iter().filter_map(Value::as_str).collect();
+        return defaults
+            .into_iter()
+            .map(|item| {
+                if item.id == "chevron" {
+                    item
+                } else {
+                    let on = enabled.contains(&item.id.as_str());
+                    HoverButtonItem {
+                        id: item.id,
+                        enabled: on,
+                    }
+                }
+            })
+            .collect();
+    }
+    let mut items: Vec<HoverButtonItem> = Vec::new();
+    for entry in entries {
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !known.iter().any(|known| known == id) || items.iter().any(|item| item.id == id) {
+            continue;
+        }
+        items.push(HoverButtonItem {
+            id: id.to_string(),
+            enabled: entry.get("enabled").and_then(Value::as_bool) == Some(true),
+        });
+    }
+    for item in defaults {
+        if !items.iter().any(|existing| existing.id == item.id) {
+            items.push(HoverButtonItem {
+                id: item.id,
+                enabled: false,
+            });
+        }
+    }
+    items
+}
+
+/// `areSessionCardHoverButtonsEqual(value, DEFAULT)`.
+pub(crate) fn hover_buttons_are_default(items: &[HoverButtonItem]) -> bool {
+    items == default_items().as_slice()
+}
+
+fn items_json(items: &[HoverButtonItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|item| json!({ "enabled": item.enabled, "id": item.id }))
+            .collect(),
+    )
+}
+
+fn label_of(id: &str) -> String {
+    settings_catalog()
+        .module_value(
+            module::SESSION_CARD_HOVER_ACTIONS,
+            "SESSION_CARD_HOVER_BUTTON_LABELS",
+        )
+        .and_then(|labels| labels.get(id))
+        .and_then(Value::as_str)
+        .unwrap_or(id)
+        .to_string()
+}
+
+fn icon_of(id: &str) -> &'static str {
+    match id {
+        "chevron" => "modals/settings/chevron-left.svg",
+        "close" => "modals/settings/x.svg",
+        "closeAfterDone" => "modals/settings/clock-x.svg",
+        "note" => "modals/settings/note.svg",
+        "park" => "modals/settings/archive.svg",
+        "pin" => "modals/settings/pin.svg",
+        "rename" => "modals/settings/pencil.svg",
+        "sleep" => "modals/settings/moon.svg",
+        "snooze" => "modals/settings/alarm.svg",
+        _ => "modals/settings/tag.svg",
+    }
+}
+
+fn save_items<V: SettingsPage>(page: &mut V, items: &[HoverButtonItem], cx: &mut Context<V>) {
+    let store = page.settings_store().clone();
+    let value = items_json(items);
+    store.update(cx, |store, cx| {
+        store.update_setting("sessionCardHoverButtons", value, cx)
+    });
+}
+
+/// The drag-to-reorder list of the hover buttons (fields/reorder.rs).
+const LIST: &str = "session-card-hover-buttons";
+
+/// `SessionCardHoverActionsField` (a wide row). Each button is its own drag handle: a click
+/// toggles it; a hold (250ms) or an 8px move (`getSidebarReorderActivationConstraints`) lifts it,
+/// at the `[data-dragging='true']` opacity of 0.55.
+pub(crate) fn hover_actions_field<V: SettingsPage>(
+    page: &mut V,
+    p: &SettingsPalette,
+    spec: RowSpec,
+    on_reset: Option<PageAction<V>>,
+    value: &Value,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let items = normalize_hover_buttons(value);
+    let palette = *p;
+    super::reorder::reorder_options(
+        page,
+        LIST,
+        super::reorder::ReorderOptions {
+            lifted_opacity: 0.55,
+            activation_distance: 8.0,
+            scroll: None,
+            fill: false,
+        },
+    );
+    let order = super::reorder::reorder_order(page, LIST, items.len(), cx);
+    let mut buttons: Vec<AnyElement> = Vec::new();
+    for (slot, index) in order.iter().copied().enumerate() {
+        let item = &items[index];
+        let enabled = item.enabled;
+        let icon = icon_of(&item.id);
+        let label = label_of(&item.id);
+        let toggle_items = items.clone();
+        let hover_on = css_mix(p.foreground, 0.12, p.raised_hover);
+        let button = div()
+            .id(SharedString::from(format!("hover-button-{}", item.id)))
+            .flex_shrink_0()
+            .size(px(32.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(MODAL_RADIUS_CONTROL))
+            .border_1()
+            .when(enabled, |this| {
+                this.border_color(hsla(css_fade(p.foreground, 0.3)))
+                    .bg(hsla(p.raised_hover))
+                    .hover(move |this| this.bg(hsla(hover_on)))
+            })
+            .when(!enabled, |this| {
+                this.border_dashed()
+                    .border_color(hsla(css_fade(p.hairline, 0.8)))
+                    .opacity(0.5)
+                    .hover(move |this| this.bg(hsla(palette.raised_hover)).opacity(0.85))
+            })
+            .cursor_grab()
+            .tooltip(tooltip_text(label.clone()))
+            .on_click(
+                cx.listener(move |page: &mut V, _: &ClickEvent, _window, cx| {
+                    // A finished drag also clicks the button it moved (`didDragRef`).
+                    if super::reorder::reorder_take_just_dragged(page, LIST) {
+                        return;
+                    }
+                    let mut next = toggle_items.clone();
+                    next[index].enabled = !enabled;
+                    save_items(page, &next, cx);
+                }),
+            )
+            .child(settings_icon(
+                icon,
+                16.0,
+                if enabled { p.foreground } else { p.muted },
+            ))
+            .into_any_element();
+        let handle = super::reorder::reorder_handle(p, LIST, index, label, button);
+        let move_items = items.clone();
+        buttons.push(super::reorder::reorder_row(
+            page,
+            LIST,
+            index,
+            slot,
+            handle,
+            move |page: &mut V, from, to, _window, cx| {
+                save_items(page, &super::reorder::move_index(&move_items, from, to), cx);
+            },
+            cx,
+        ));
+    }
+    let control = h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.0))
+        .children(buttons)
+        .into_any_element();
+    setting_row(
+        p,
+        "sessionCardHoverButtons",
+        spec.wide(),
+        on_reset,
+        control,
+        cx,
+    )
+}

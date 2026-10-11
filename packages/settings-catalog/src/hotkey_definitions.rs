@@ -1,0 +1,1268 @@
+//! The hotkey catalog: every action Settings > Hotkeys lists, with its default chords.
+
+use crate::hotkeys::HotkeyDefinition;
+use crate::json::J;
+
+/// CDXC:Hotkeys 2026-04-28-05:20
+/// The native app must start with the same primary shortcuts as the reference
+/// agent-tiler repo, while storing them as app settings so users can redefine
+/// the bindings without changing code or relying on hard-coded VS Code keys.
+pub const HOTKEY_DEFINITIONS: &[HotkeyDefinition] = &[
+    // CDXC:SessionChat 2026-09-11 DECISION:
+    // User: Ctrl+Shift+Down scrolls chat to the bottom, including while typing, replacing the editor's selection or multi-cursor command in chat. Make it configurable; this supersedes Option+Down.
+    HotkeyDefinition {
+        id: "scrollChatToBottom",
+        title: "Scroll Chat to Bottom",
+        description: "Scroll chat to the bottom, including while typing in the composer.",
+        default_key: "ctrl+shift+down",
+        windows_linux_default_key: Some("cmd+shift+down"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("scrollChatToBottom")), ("kind", J::Str("chatAction"))]),
+    },
+    HotkeyDefinition {
+        id: "focusChatComposer",
+        title: "Focus Chat Box",
+        description: "Move the keyboard to the chat box of the chat session you are in.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["shift+escape"],
+        action: J::Obj(&[("id", J::Str("focusChatComposer")), ("kind", J::Str("focusedChatAction"))]),
+    },
+    HotkeyDefinition {
+        id: "copyLastChatCodeBlock",
+        title: "Copy Last Code Block",
+        description: "Copy the last code block the agent wrote in the chat session you are in.",
+        default_key: "cmd+shift+;",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("copyLastChatCodeBlock")), ("kind", J::Str("focusedChatAction"))]),
+    },
+    // Ctrl+Shift+C is terminal copy on Windows and Linux.
+    HotkeyDefinition {
+        id: "copyLastChatReply",
+        title: "Copy Last Reply",
+        description: "Copy the agent's last reply in the chat session you are in.",
+        default_key: "cmd+shift+c",
+        windows_linux_default_key: Some(""),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("copyLastChatReply")), ("kind", J::Str("focusedChatAction"))]),
+    },
+    // CDXC:SessionChat 2026-09-26 DECISION:
+    // User: Summary mode gets a hotkey, shown in its toolbar tooltip. On 2026-09-27 the user moved the Mac default to Option+Ctrl+S (it was Cmd+Ctrl+S, now retired). They asked for Ctrl+Alt+S on Windows and Linux, but that is Delayed Actions there, so it is Ctrl+Alt+Shift+S, the React chat's old Summary key.
+    // SEE-ALSO: apps/desktop/src/app/hotkeys.rs (`gpui_platform_hotkey_for_action`, `gpui_migrated_hotkey_for_action`), apps/desktop/src/app/native_chat/composer.rs (`host_button` tooltip).
+    HotkeyDefinition {
+        id: "toggleChatSummaryMode",
+        title: "Toggle Summary Mode",
+        description: "Turn Summary mode on or off in the chat session you are in.",
+        default_key: "ctrl+alt+s",
+        windows_linux_default_key: Some("cmd+alt+shift+s"),
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+ctrl+s"],
+        action: J::Obj(&[("id", J::Str("toggleChatSummaryMode")), ("kind", J::Str("focusedChatAction"))]),
+    },
+    // CDXC:Hotkeys 2026-09-25 DECISION:
+    // User: Cmd+Shift+O starts a new session and Cmd+N shows the agent picker, Cmd+T always opens a new browser tab, and Fork Session is Cmd+Ctrl+Shift+F (Ctrl+Alt+Shift+F on Windows and Linux), matching the ChatGPT and Codex apps. New Terminal stays on Cmd+Shift+T. This supersedes the 2026-09-24 layout (Cmd+T new chat, swapped by the default interface, picker on Cmd+Option+T).
+    // The same day the user took more ChatGPT/Codex keys: Cmd+/ opens Hotkeys (was Cmd+.), Cmd+Shift+Backspace closes the focused session (Cmd+W stays), Cmd+J opens the Commands panel on Mac only (F12 keeps working everywhere; no Ctrl+J on Windows and Linux), Rename is Cmd+R on Mac and Ctrl+Shift+R on Windows and Linux because Ctrl+R belongs to the terminal, Reload Session has no default, Cmd+Shift+A also sleeps the focused session (Option+Shift+S stays), Cmd+Option+Shift+O opens Quick Access on recent projects, and in chat Cmd+Shift+; copies the last code block and Cmd+Shift+C (Mac only) copies the last reply.
+    // SEE-ALSO: apps/desktop/src/app/hotkeys.rs (`GPUI_DEFAULT_GHOSTEX_HOTKEYS`, `gpui_migrated_hotkey_for_action`), apps/desktop/src/terminal_element.rs (`terminal_overlay_hotkey_label`).
+    HotkeyDefinition {
+        id: "createAgentSession",
+        title: "New Agent Session",
+        description: "Start your last-used agent in the active project, in your default interface.",
+        default_key: "cmd+shift+o",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+t"],
+        action: J::Obj(&[("id", J::Str("createAgentSession")), ("kind", J::Str("createAgentSession"))]),
+    },
+    // CDXC:Hotkeys 2026-05-11-09:26
+    // Default hotkeys should prefer plain Cmd chords so the app feels like a
+    // Mac-first terminal workspace instead of requiring Cmd+Option layers for
+    // everyday navigation.
+    //
+    // CDXC:Hotkeys 2026-06-06-04:36:
+    // New Terminal creates a terminal tab in the focused workspace split pane, immediately after the currently focused tab. Its default chord follows CDXC:Hotkeys 2026-09-25 on createAgentSession.
+    HotkeyDefinition {
+        id: "createSession",
+        title: "New Terminal",
+        description: "Create a terminal session.",
+        default_key: "cmd+shift+t",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+n", "cmd+t"],
+        action: J::Obj(&[("id", J::Str("createSession")), ("kind", J::Str("createSession"))]),
+    },
+    // CDXC:CommandPalette 2026-06-13-10:26:
+    // Cmd+Shift+P is the default command-palette shortcut for the macOS app. It
+    // must live in the shared hotkey model so terminal-focused AppKit dispatch
+    // and sidebar DOM dispatch both open the same shadcn command surface.
+    //
+    // CDXC:CommandPalette 2026-06-13-22:18:
+    // Cmd+Shift+P opens Ghostex Quick Access directly on its Commands tab.
+    HotkeyDefinition {
+        id: "openCommandPalette",
+        title: "Open Quick Access: Commands",
+        description: "Open Ghostex Quick Access on Commands.",
+        default_key: "cmd+shift+p",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+k"],
+        action: J::Obj(&[("id", J::Str("openCommandPalette")), ("kind", J::Str("openCommandPalette"))]),
+    },
+    // CDXC:CommandPalette 2026-06-13-22:18:
+    // Cmd+P opens Ghostex Quick Access directly on Recent Sessions. Users can
+    // rebind it separately because session recovery and command finding are
+    // distinct habits.
+    HotkeyDefinition {
+        id: "openSessionSearchPalette",
+        title: "Open Quick Access: Recent Sessions",
+        description: "Open Ghostex Quick Access on Recent Sessions.",
+        default_key: "cmd+p",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openSessionSearchPalette")), ("kind", J::Str("openSessionSearchPalette"))]),
+    },
+    HotkeyDefinition {
+        id: "openProjectSearchPalette",
+        title: "Open Quick Access: Recent Projects",
+        description: "Open Ghostex Quick Access on Recent Projects.",
+        default_key: "cmd+alt+shift+o",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openProjectSearchPalette")), ("kind", J::Str("openProjectSearchPalette"))]),
+    },
+    // CDXC:AgentLauncher 2026-09-09 DECISION:
+    // User: a hotkey opens a borderless picker that starts a new thread in the active project. It lists the agents with the last-used one preselected at the top, filters as you type, and ends with Browser and Terminal rows. Tab on Claude or Codex drills into that provider's accounts, mirroring the project-header agent dropdown.
+    // SEE-ALSO: packages/core-ui/new-thread-palette.tsx, apps/desktop/src/app/model/app_modal_kind.rs.
+    HotkeyDefinition {
+        id: "openNewThreadPalette",
+        title: "New Thread in Active Project",
+        description: "Pick an agent, Browser, or Terminal to start in the active project.",
+        default_key: "cmd+n",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+shift+t", "cmd+alt+t"],
+        action: J::Obj(&[("id", J::Str("openNewThreadPalette")), ("kind", J::Str("openNewThreadPalette"))]),
+    },
+    // CDXC:Hotkeys 2026-09-27 DECISION:
+    // User: Cmd+J, Shift+Esc and F12 all open the Commands panel, with one or two of them settable in Settings > Hotkeys. Cmd+J (F12 on Windows and Linux) is this row, Shift+Esc is the Second Key row, and F12 stays a fixed shortcut. This takes Shift+Esc from Focus Chat Box, which now has no default.
+    HotkeyDefinition {
+        id: "openCommandsPanel",
+        title: "Open Commands Panel",
+        description: "Open the project command terminal panel (F12 always works too). When the pane is already focused, hide it; press again to show it.",
+        default_key: "cmd+j",
+        windows_linux_default_key: Some("f12"),
+        alternate_default_keys: &[],
+        retired_default_keys: &["f12"],
+        action: J::Obj(&[("id", J::Str("openCommandsPanel")), ("kind", J::Str("openCommandsPanel"))]),
+    },
+    HotkeyDefinition {
+        id: "openCommandsPanelSecondKey",
+        title: "Open Commands Panel (Second Key)",
+        description: "A second key that opens or hides the Commands panel, like Open Commands Panel.",
+        default_key: "shift+escape",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openCommandsPanelSecondKey")), ("kind", J::Str("openCommandsPanel"))]),
+    },
+    HotkeyDefinition {
+        id: "openSettings",
+        title: "Open Settings",
+        description: "Open app settings.",
+        default_key: "cmd+,",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openSettings")), ("kind", J::Str("openSettings"))]),
+    },
+    HotkeyDefinition {
+        id: "openExtensions",
+        title: "Open Extensions",
+        description: "Open the Extensions page in Settings to manage built-in features and installed extensions.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openExtensions")), ("kind", J::Str("openExtensions"))]),
+    },
+    // CDXC:Onboarding 2026-09-09 DECISION:
+    // User: expose the Ghostex Help entry point in Quick Access as well as the titlebar button.
+    HotkeyDefinition {
+        id: "openGhostexHelp",
+        title: "Ask Ghostex Help",
+        description: "Open the Ghostex Help menu: sample questions an agent can answer and settings it can change for you.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openGhostexHelp")), ("kind", J::Str("openGhostexHelp"))]),
+    },
+    // CDXC:Docs 2026-09-27 DECISION:
+    // User: an "Open file" hotkey and button let you type or paste the path of any file to view it in the Files view. The key is unassigned until the user picks one: the Cmd+Shift+O / Ctrl+Shift+O they asked for is New Agent Session's (CDXC:Hotkeys 2026-09-25 DECISION).
+    HotkeyDefinition {
+        id: "openFileInFiles",
+        title: "Open File",
+        description: "Open the Files view with its search box ready: type a file name, or paste the path of any file on this computer, and press Enter.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openFileInFiles")), ("kind", J::Str("openFileInFiles"))]),
+    },
+    // CDXC:Hotkeys 2026-06-19-00:35:
+    // The far-right titlebar Settings menu advertises the Hotkeys chord. Make Hotkeys a real configurable app shortcut so the menu label, Settings editor, sidebar dispatch, and terminal-focused AppKit dispatch all describe the same behavior.
+    HotkeyDefinition {
+        id: "openHotkeys",
+        title: "Hotkeys",
+        description: "Open app hotkeys.",
+        default_key: "cmd+/",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+."],
+        action: J::Obj(&[("id", J::Str("openHotkeys")), ("kind", J::Str("openHotkeys"))]),
+    },
+    // CDXC:Sidebar 2026-06-12-02:23:
+    // Cmd+B should completely collapse or expand the native sidebar chrome. Keep this separate from sidebar placement so the same shortcut never moves the sidebar between left and right sides.
+    HotkeyDefinition {
+        id: "toggleSidebarCollapsed",
+        title: "Toggle Sidebar",
+        description: "Collapse or expand the sidebar.",
+        default_key: "cmd+b",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("toggleSidebarCollapsed")), ("kind", J::Str("toggleSidebarCollapsed"))]),
+    },
+    // CDXC:Workarea 2026-09-20 WHY:
+    // Cmd+Option+B opens and closes the view panel beside the sessions, independently of the main app
+    // sidebar. Closing it leaves the sessions the whole work area; opening it comes back to the view
+    // this project last showed. This supersedes the 2026-07-29 companion-pane wording, whose pane the
+    // view panel replaced.
+    HotkeyDefinition {
+        id: "toggleViewPanel",
+        title: "Toggle View Panel",
+        description: "Open or close the view panel beside your sessions.",
+        default_key: "cmd+alt+b",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("toggleViewPanel")), ("kind", J::Str("toggleViewPanel"))]),
+    },
+    // CDXC:Workarea 2026-09-21 DECISION:
+    // User: Expand side panel and Expand side panel fully each get a hotkey, Cmd+Ctrl based with E for expand, and the full one is the same chord with Shift held.
+    HotkeyDefinition {
+        id: "expandViewPanel",
+        title: "Expand Side Panel",
+        description: "Expand the side panel over the Agents Panel, or bring the Agents Panel back.",
+        default_key: "cmd+ctrl+e",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("expandViewPanel")), ("kind", J::Str("expandViewPanel"))]),
+    },
+    HotkeyDefinition {
+        id: "expandViewPanelFully",
+        title: "Expand Side Panel Fully",
+        description: "Expand the side panel over the Agents Panel and hide the sidebar, or bring both back.",
+        default_key: "cmd+ctrl+shift+e",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("expandViewPanelFully")), ("kind", J::Str("expandViewPanelFully"))]),
+    },
+    // Ctrl+R is reverse history search in the terminal.
+    HotkeyDefinition {
+        id: "renameActiveSession",
+        title: "Rename Active Session",
+        description: "Rename the focused session.",
+        default_key: "cmd+r",
+        windows_linux_default_key: Some("cmd+shift+r"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("renameActiveSession")), ("kind", J::Str("renameActiveSession"))]),
+    },
+    // CDXC:CommandPalette 2026-05-17-01:32:
+    // Pane context-menu actions should also be command-palette commands with
+    // configurable shortcuts. These hotkeys target the focused pane/session so
+    // keyboard use follows the same scope as the visible pane menu.
+    //
+    // CDXC:Hotkeys 2026-06-06-04:36:
+    // New Browser Tab opens the browser as the next tab in the focused workspace split pane instead of creating a separate split or app window. Its default chord follows CDXC:Hotkeys 2026-09-25 on createAgentSession.
+    HotkeyDefinition {
+        id: "openBrowserPane",
+        title: "Open Browser Pane",
+        description: "Open a browser tab beside the focused tab.",
+        default_key: "cmd+t",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["ctrl+shift+b", "cmd+n"],
+        action: J::Obj(&[("focusedPaneAction", J::Str("openBrowserPane")), ("id", J::Str("openBrowserPane")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // CDXC:Hotkeys 2026-09-09 DECISION:
+    // User: Option+1, 2, 3, etc. must match the actual titlebar order; direct built-in view shortcuts are unassigned by default.
+    // This replaces the fixed Option+1..5 defaults while preserving user-assigned direct shortcuts.
+    //
+    // CDXC:Docs 2026-06-20-04:36:
+    // Manage is a first-party project workarea beside Kanban, so it needs a named configurable hotkey action instead of sharing another mode's shortcut or command id.
+    //
+    // CDXC:Docs 2026-06-28-06:24:
+    // The switchManageView id and "manage" view enum remain compatibility
+    // handles, but Settings and command labels call the feature Files (Docs until CDXC:Docs 2026-09-27).
+    HotkeyDefinition {
+        id: "switchAgentsView",
+        title: "Switch to Agents",
+        description: "Switch to Agents view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+1"],
+        action: J::Obj(&[("id", J::Str("switchAgentsView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("agents"))]),
+    },
+    HotkeyDefinition {
+        id: "switchSourceView",
+        title: "Switch to Code",
+        description: "Switch to Code view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+2"],
+        action: J::Obj(&[("id", J::Str("switchSourceView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("source"))]),
+    },
+    HotkeyDefinition {
+        id: "switchGitHubView",
+        title: "Switch to Browser",
+        description: "Switch to Browser view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+3"],
+        action: J::Obj(&[("id", J::Str("switchGitHubView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("github"))]),
+    },
+    HotkeyDefinition {
+        id: "switchKanbanView",
+        title: "Switch to Kanban",
+        description: "Switch to Kanban view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+4"],
+        action: J::Obj(&[("id", J::Str("switchKanbanView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("kanban"))]),
+    },
+    HotkeyDefinition {
+        id: "switchManageView",
+        title: "Switch to Files",
+        description: "Switch to Files view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+5"],
+        action: J::Obj(&[("id", J::Str("switchManageView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("manage"))]),
+    },
+    HotkeyDefinition {
+        id: "switchAutomateView",
+        title: "Switch to Automate",
+        description: "Switch to Automate view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchAutomateView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("automate"))]),
+    },
+    HotkeyDefinition {
+        id: "switchTerminalView",
+        title: "Switch to Terminal",
+        description: "Switch to Terminal view.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTerminalView")), ("kind", J::Str("switchWorkareaView")), ("view", J::Str("terminal"))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView1",
+        title: "Switch to View Tab 1",
+        description: "Open tab 1 in the view panel's tab strip.",
+        default_key: "alt+1",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView1")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(0.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView2",
+        title: "Switch to View Tab 2",
+        description: "Open tab 2 in the view panel's tab strip.",
+        default_key: "alt+2",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView2")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(1.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView3",
+        title: "Switch to View Tab 3",
+        description: "Open tab 3 in the view panel's tab strip.",
+        default_key: "alt+3",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView3")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(2.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView4",
+        title: "Switch to View Tab 4",
+        description: "Open tab 4 in the view panel's tab strip.",
+        default_key: "alt+4",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView4")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(3.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView5",
+        title: "Switch to View Tab 5",
+        description: "Open tab 5 in the view panel's tab strip.",
+        default_key: "alt+5",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView5")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(4.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView6",
+        title: "Switch to View Tab 6",
+        description: "Open tab 6 in the view panel's tab strip.",
+        default_key: "alt+6",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView6")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(5.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView7",
+        title: "Switch to View Tab 7",
+        description: "Open tab 7 in the view panel's tab strip.",
+        default_key: "alt+7",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView7")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(6.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView8",
+        title: "Switch to View Tab 8",
+        description: "Open tab 8 in the view panel's tab strip.",
+        default_key: "alt+8",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView8")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(7.0))]),
+    },
+    HotkeyDefinition {
+        id: "switchTitlebarView9",
+        title: "Switch to View Tab 9",
+        description: "Open tab 9 in the view panel's tab strip.",
+        default_key: "alt+9",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("switchTitlebarView9")), ("kind", J::Str("switchTitlebarView")), ("viewIndex", J::Num(8.0))]),
+    },
+    // CDXC:CommandPalette 2026-05-17-01:34:
+    // Rotate and Reload defaults are intentionally swapped so Ctrl+Shift+L
+    // rotates the layout while Ctrl+Shift+R keeps the common reload mnemonic.
+    HotkeyDefinition {
+        id: "rotatePanesClockwise",
+        title: "Rotate Panes Clockwise",
+        description: "Rotate panes clockwise in the focused group.",
+        default_key: "ctrl+shift+l",
+        windows_linux_default_key: Some("cmd+alt+l"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("rotatePanesClockwise")), ("id", J::Str("rotatePanesClockwise")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "mergeAllTabs",
+        title: "Merge All Tabs",
+        description: "Merge the focused group's panes into one tabbed pane.",
+        default_key: "ctrl+shift+m",
+        windows_linux_default_key: Some("cmd+alt+m"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("mergeAllTabs")), ("id", J::Str("mergeAllTabs")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "delayedSend",
+        title: "Delayed Actions",
+        description: "Open delayed actions for the focused terminal session.",
+        default_key: "ctrl+shift+s",
+        windows_linux_default_key: Some("cmd+alt+s"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("delayedSend")), ("id", J::Str("delayedSend")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // CDXC:FocusMode 2026-06-19-15:43:
+    // Focused-session commands that already exist in native pane menus should also be configurable hotkey actions and command-palette rows. Close After Done starts unassigned so adding discoverability does not introduce a new default shortcut.
+    HotkeyDefinition {
+        id: "closeAfterDone",
+        title: "Close After Done",
+        description: "Toggle Close After Done for the focused terminal session.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("closeAfterDone")), ("id", J::Str("closeAfterDone")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "openModelPicker",
+        title: "Model & Effort Picker",
+        description: "Open the model picker: arrows choose a model and its reasoning, Enter saves it as the default, Option+Enter uses it in this session only.",
+        default_key: "alt+p",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("openModelPicker")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("openModelPicker"))]),
+    },
+    HotkeyDefinition {
+        id: "promptEditor",
+        title: "Prompt Editor",
+        description: "Open the prompt editor for the focused terminal.",
+        default_key: "ctrl+g",
+        windows_linux_default_key: Some("cmd+shift+g"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("promptEditor")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("promptEditor"))]),
+    },
+    HotkeyDefinition {
+        id: "attachFileOrFolder",
+        title: "Attach File or Folder",
+        description: "Attach a file or folder to the focused terminal.",
+        default_key: "cmd+alt+p",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("attachFileOrFolder")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("attachFileOrFolder"))]),
+    },
+    HotkeyDefinition {
+        id: "sessionNote",
+        title: "Session Note",
+        description: "Open the note attached to the focused agent conversation.",
+        default_key: "cmd+alt+n",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("sessionNote")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("sessionNote"))]),
+    },
+    HotkeyDefinition {
+        id: "stashPrompt",
+        title: "Stash Prompt",
+        description: "Stash the current prompt in the focused agent terminal.",
+        default_key: "alt+s",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("stashPrompt")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("stashPrompt"))]),
+    },
+    HotkeyDefinition {
+        id: "stashedPrompts",
+        title: "Saved Prompts",
+        description: "Open saved prompts for the focused agent session.",
+        default_key: "cmd+alt+s",
+        windows_linux_default_key: Some("cmd+shift+s"),
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+shift+s"],
+        action: J::Obj(&[("id", J::Str("stashedPrompts")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("stashedPrompts"))]),
+    },
+    // CDXC:TranscriptExport 2026-08-20:
+    // Handoff / Export writes the focused agent session's conversation to a
+    // markdown file on the machine that owns the transcript, then offers to
+    // seed a new conversation from it.
+    HotkeyDefinition {
+        id: "exportTranscript",
+        title: "Handoff / Export",
+        description: "Export the focused agent session's transcript and hand it off to another agent.",
+        default_key: "cmd+alt+e",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("exportTranscript")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("exportTranscript"))]),
+    },
+    HotkeyDefinition {
+        id: "toggleAgentActions",
+        title: "Toggle Agent Actions",
+        description: "Show or hide the focused terminal's Agent Actions buttons.",
+        default_key: "cmd+alt+a",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("toggleAgentActions")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("toggleAgentActions"))]),
+    },
+    // CDXC:SessionChat 2026-07-31:
+    // Session Chat swaps the focused agent terminal's pane body with the shared
+    // chat surface for supported transcript agents (claude/openclaude/codex/grok).
+    // Alt+G keeps the chat toggle compact, and the same action id must always
+    // be able to toggle a chat-mode session back to its terminal.
+    HotkeyDefinition {
+        id: "toggleChatView",
+        title: "Toggle Chat View",
+        description: "Toggle between the terminal and chat view for the focused agent session.",
+        default_key: "alt+g",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["ctrl+shift+j", "cmd+alt+j", "ctrl+shift+g", "cmd+alt+g"],
+        action: J::Obj(&[("id", J::Str("toggleChatView")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("toggleChatView"))]),
+    },
+    // CDXC:PromptSearch 2026-08-20:
+    // Find is the GUI for `gx f`: it swaps the focused pane for a searchable
+    // list of every prompt this machine has ever sent to an agent. It is
+    // dispatched natively like Chat View, so the same id always toggles back
+    // out of Find even while the terminal is hidden behind it.
+    //
+    // CDXC:PromptSearch 2026-08-24:
+    // Cmd+Shift+F replaces Alt+F as the default because prompt search is a
+    // search-everywhere habit. The chord deliberately stays off the Code pane:
+    // openFindPrompts is not in the Source-workarea hotkey allowlist, so a
+    // focused code-server editor keeps Cmd+Shift+F for search-in-files.
+    HotkeyDefinition {
+        id: "openFindPrompts",
+        title: "Find Prompts",
+        description: "Search every prompt you have sent to an agent, then resume or fork it.",
+        default_key: "cmd+shift+f",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+f"],
+        action: J::Obj(&[("id", J::Str("openFindPrompts")), ("kind", J::Str("openFindPrompts"))]),
+    },
+    HotkeyDefinition {
+        id: "scrollTerminalToTop",
+        title: "Scroll Terminal to Top",
+        description: "Scroll the focused terminal to the top.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("scrollTerminalToTop")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("scrollTerminalToTop"))]),
+    },
+    HotkeyDefinition {
+        id: "scrollTerminalToBottom",
+        title: "Scroll Terminal to Bottom",
+        description: "Scroll the focused terminal to the bottom.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("scrollTerminalToBottom")), ("kind", J::Str("terminalToolbarAction")), ("terminalToolbarAction", J::Str("scrollTerminalToBottom"))]),
+    },
+    // CDXC:Hotkeys 2026-09-05 DECISION:
+    // User: Option+Shift+D moves the current thread into a right-hand split, (the sidebar session menu's Split Right item was removed on 2026-09-27; this shortcut stays).
+    HotkeyDefinition {
+        id: "splitSessionRight",
+        title: "Split Right",
+        description: "Move the focused session into a pane to the right.",
+        default_key: "alt+shift+d",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("splitSessionRight")), ("id", J::Str("splitSessionRight")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "forkSession",
+        title: "Fork Session",
+        description: "Fork the focused session.",
+        default_key: "cmd+ctrl+shift+f",
+        windows_linux_default_key: Some("cmd+alt+shift+f"),
+        alternate_default_keys: &[],
+        retired_default_keys: &["ctrl+shift+f", "cmd+alt+f"],
+        action: J::Obj(&[("focusedPaneAction", J::Str("forkSession")), ("id", J::Str("forkSession")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "reloadSession",
+        title: "Reload Session",
+        description: "Reload the focused session.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["ctrl+shift+r", "cmd+alt+r"],
+        action: J::Obj(&[("focusedPaneAction", J::Str("reloadSession")), ("id", J::Str("reloadSession")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // Option+Shift+S stays bound as a fixed shortcut beside this one.
+    HotkeyDefinition {
+        id: "sleepFocusedSession",
+        title: "Sleep Focused Session",
+        description: "Sleep the focused terminal session.",
+        default_key: "cmd+shift+a",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["alt+shift+s"],
+        action: J::Obj(&[("focusedPaneAction", J::Str("sleepFocusedSession")), ("id", J::Str("sleepFocusedSession")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // CDXC:FocusMode 2026-06-19-15:43:
+    // Wake is the inverse focused-session lifecycle command. Keep it unassigned by default but available in Hotkeys and command palette so sleeping focused tabs can be restored without a row-specific sidebar click.
+    HotkeyDefinition {
+        id: "wakeFocusedSession",
+        title: "Wake Focused Session",
+        description: "Wake the focused sleeping terminal session.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("wakeFocusedSession")), ("id", J::Str("wakeFocusedSession")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // CDXC:FocusMode 2026-06-19-15:43:
+    // Close is already available from pane/tab chrome and Cmd+W, and it is bindable and runnable from the command palette. Its Cmd+Shift+Backspace default follows CDXC:Hotkeys 2026-09-25 on createAgentSession.
+    HotkeyDefinition {
+        id: "closeFocusedSession",
+        title: "Close Focused Session",
+        description: "Close the focused pane or session.",
+        default_key: "cmd+shift+backspace",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("closeFocusedSession")), ("id", J::Str("closeFocusedSession")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    HotkeyDefinition {
+        id: "popOutPane",
+        title: "Pop Out Pane",
+        description: "Pop out or restore the focused pane.",
+        default_key: "ctrl+shift+o",
+        windows_linux_default_key: Some("cmd+alt+o"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("focusedPaneAction", J::Str("popOutPane")), ("id", J::Str("popOutPane")), ("kind", J::Str("focusedPaneAction"))]),
+    },
+    // CDXC:Navigation 2026-09-19 DECISION:
+    // User: Back/Forward take Cmd+[ and Cmd+] so they match Chrome, and Previous/Next Group give
+    // the brackets up and ship with no default key at all (still bindable in Settings and runnable
+    // from the command palette). Cmd+Left/Cmd+Right stay out of it: the user needs them for
+    // start/end of line. Windows and Linux use Cmd+Alt+Shift+[ / ] (Ctrl+Alt+Shift), because Ctrl+[ is ESC in a terminal,
+    // Chrome's Alt+Left/Right is word movement in every shell, and the user gave Ctrl+Alt+[ / ] to
+    // Previous/Next Tab in Pane so it matches the Mac's Cmd+Alt+[ / ].
+    // This supersedes the 2026-08-19 rule that kept Back/Forward off the bracket chords.
+    HotkeyDefinition {
+        id: "focusPreviousGroup",
+        title: "Previous Group",
+        description: "Focus the previous group.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+shift+[", "cmd+["],
+        action: J::Obj(&[("direction", J::Num(-1.0)), ("id", J::Str("focusPreviousGroup")), ("kind", J::Str("focusAdjacentGroup"))]),
+    },
+    HotkeyDefinition {
+        id: "focusNextGroup",
+        title: "Next Group",
+        description: "Focus the next group.",
+        default_key: "",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+shift+]", "cmd+]"],
+        action: J::Obj(&[("direction", J::Num(1.0)), ("id", J::Str("focusNextGroup")), ("kind", J::Str("focusAdjacentGroup"))]),
+    },
+    // CDXC:Navigation 2026-08-19:
+    // Back/Forward walk the chronological trail of previously active sessions and
+    // projects: where you have BEEN, not where a session sits in an ordered list.
+    // Cmd+Shift+[ / ] stay on Previous/Next Session, so the plain brackets are the
+    // only bracket pair this trail claims.
+    HotkeyDefinition {
+        id: "navigateHistoryBack",
+        title: "Back",
+        description: "Go back to the previously active session or project.",
+        default_key: "cmd+[",
+        windows_linux_default_key: Some("cmd+alt+shift+["),
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+alt+["],
+        action: J::Obj(&[("direction", J::Str("back")), ("id", J::Str("navigateHistoryBack")), ("kind", J::Str("navigateHistory"))]),
+    },
+    HotkeyDefinition {
+        id: "navigateHistoryForward",
+        title: "Forward",
+        description: "Go forward again after going back.",
+        default_key: "cmd+]",
+        windows_linux_default_key: Some("cmd+alt+shift+]"),
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+alt+]"],
+        action: J::Obj(&[("direction", J::Str("forward")), ("id", J::Str("navigateHistoryForward")), ("kind", J::Str("navigateHistory"))]),
+    },
+    // CDXC:Notifications 2026-09-11 DECISION:
+    // User: the notification feed gets an open key, a jump-to-latest-unread key,
+    // and a defer-and-jump-next key so unread agent turns can be walked from the
+    // keyboard. The native titlebar bell owns these on the desktop app.
+    HotkeyDefinition {
+        id: "openNotifications",
+        title: "Open Notifications",
+        description: "Open the Notifications panel under the bell in the sidebar's top row.",
+        default_key: "cmd+i",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("command", J::Str("open")), ("id", J::Str("openNotifications")), ("kind", J::Str("notificationFeed"))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToLatestUnreadNotification",
+        title: "Jump to Latest Unread Notification",
+        description: "Jump to the session of the latest unread notification and mark it read.",
+        default_key: "cmd+shift+u",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("command", J::Str("jumpToLatestUnread")), ("id", J::Str("jumpToLatestUnreadNotification")), ("kind", J::Str("notificationFeed"))]),
+    },
+    HotkeyDefinition {
+        id: "deferNotificationAndJumpNext",
+        title: "Mark as Oldest Unread and Jump to Next",
+        description: "Push the current session to the back of the unread queue and jump to the next unread notification.",
+        default_key: "cmd+ctrl+u",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("command", J::Str("deferAndJumpNext")), ("id", J::Str("deferNotificationAndJumpNext")), ("kind", J::Str("notificationFeed"))]),
+    },
+    // CDXC:Hotkeys 2026-09-19 DECISION:
+    // User: Previous/Next Session walks only the sessions currently visible in the sidebar, using Chrome's tab keys: Ctrl+Tab / Ctrl+Shift+Tab on every OS plus Cmd+Shift+] / [ on Mac. Cmd+Tab was dropped because macOS owns it for the app switcher. Sleeping sessions are included unless "Skip sleeping sessions" is turned on. Cycling tabs inside a split pane moved to Previous/Next Tab in Pane.
+    // This supersedes the 2026-06-13 rule that made these ids split-pane tab switchers.
+    HotkeyDefinition {
+        id: "focusPreviousSession",
+        title: "Previous Session",
+        description: "Select the previous session shown in the sidebar.",
+        default_key: "ctrl+shift+tab",
+        windows_linux_default_key: Some("cmd+shift+tab"),
+        alternate_default_keys: &["cmd+shift+["],
+        retired_default_keys: &["cmd+[", "cmd+shift+tab"],
+        action: J::Obj(&[("id", J::Str("focusPreviousSession")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(-1.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusNextSession",
+        title: "Next Session",
+        description: "Select the next session shown in the sidebar.",
+        default_key: "ctrl+tab",
+        windows_linux_default_key: Some("cmd+tab"),
+        alternate_default_keys: &["cmd+shift+]"],
+        retired_default_keys: &["cmd+]", "cmd+tab"],
+        action: J::Obj(&[("id", J::Str("focusNextSession")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(0.0))]),
+    },
+    // CDXC:Hotkeys 2026-09-19 DECISION:
+    // User: pane-tab cycling takes Cmd+Alt+[ / ] on Mac and the same chord (Ctrl+Alt+[ / ]) on Windows and Linux, so both platforms match. Previous/Next Tab traversal stays inside the active pane's tab group and includes sleeping placeholder tabs, then native dispatch applies the same select/wake/attach logic as clicking that tab.
+    HotkeyDefinition {
+        id: "focusPreviousPaneTab",
+        title: "Previous Tab in Pane",
+        description: "Select the previous tab in the focused split pane.",
+        default_key: "cmd+alt+[",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("direction", J::Num(-1.0)), ("id", J::Str("focusPreviousPaneTab")), ("kind", J::Str("cyclePaneTab"))]),
+    },
+    HotkeyDefinition {
+        id: "focusNextPaneTab",
+        title: "Next Tab in Pane",
+        description: "Select the next tab in the focused split pane.",
+        default_key: "cmd+alt+]",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("direction", J::Num(1.0)), ("id", J::Str("focusNextPaneTab")), ("kind", J::Str("cyclePaneTab"))]),
+    },
+    // CDXC:Hotkeys 2026-05-15-13:31:
+    // Plain Cmd+Arrow belongs to terminal and prompt text editing, including jump-to-line-boundary behavior.
+    // Directional pane focus uses Cmd+Alt+Arrow so app navigation no longer steals common editing shortcuts.
+    HotkeyDefinition {
+        id: "focusUp",
+        title: "Focus Up",
+        description: "Move focus up between the session panes and the Commands pane.",
+        default_key: "cmd+alt+up",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+up"],
+        action: J::Obj(&[("direction", J::Str("up")), ("id", J::Str("focusUp")), ("kind", J::Str("focusDirection"))]),
+    },
+    HotkeyDefinition {
+        id: "focusRight",
+        title: "Focus Right",
+        description: "Move focus right between the session panes and the Commands pane.",
+        default_key: "cmd+alt+right",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+right"],
+        action: J::Obj(&[("direction", J::Str("right")), ("id", J::Str("focusRight")), ("kind", J::Str("focusDirection"))]),
+    },
+    HotkeyDefinition {
+        id: "focusDown",
+        title: "Focus Down",
+        description: "Move focus down between the session panes and the Commands pane.",
+        default_key: "cmd+alt+down",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+down"],
+        action: J::Obj(&[("direction", J::Str("down")), ("id", J::Str("focusDown")), ("kind", J::Str("focusDirection"))]),
+    },
+    HotkeyDefinition {
+        id: "focusLeft",
+        title: "Focus Left",
+        description: "Move focus left between the session panes and the Commands pane.",
+        default_key: "cmd+alt+left",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &["cmd+left"],
+        action: J::Obj(&[("direction", J::Str("left")), ("id", J::Str("focusLeft")), ("kind", J::Str("focusDirection"))]),
+    },
+    // CDXC:Hotkeys 2026-06-15-11:12:
+    // Cmd+Ctrl+1..9 are project jump shortcuts, not workspace-group shortcuts.
+    // Resolve these against the Projects rows as shown in the sidebar so numbered project navigation follows the same ordering model users can see.
+    HotkeyDefinition {
+        id: "jumpToProject1",
+        title: "Jump to Project 1",
+        description: "Jump to project 1 as shown in the sidebar.",
+        default_key: "cmd+ctrl+1",
+        windows_linux_default_key: Some("cmd+alt+1"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject1")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(1.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject2",
+        title: "Jump to Project 2",
+        description: "Jump to project 2 as shown in the sidebar.",
+        default_key: "cmd+ctrl+2",
+        windows_linux_default_key: Some("cmd+alt+2"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject2")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(2.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject3",
+        title: "Jump to Project 3",
+        description: "Jump to project 3 as shown in the sidebar.",
+        default_key: "cmd+ctrl+3",
+        windows_linux_default_key: Some("cmd+alt+3"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject3")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(3.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject4",
+        title: "Jump to Project 4",
+        description: "Jump to project 4 as shown in the sidebar.",
+        default_key: "cmd+ctrl+4",
+        windows_linux_default_key: Some("cmd+alt+4"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject4")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(4.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject5",
+        title: "Jump to Project 5",
+        description: "Jump to project 5 as shown in the sidebar.",
+        default_key: "cmd+ctrl+5",
+        windows_linux_default_key: Some("cmd+alt+5"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject5")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(5.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject6",
+        title: "Jump to Project 6",
+        description: "Jump to project 6 as shown in the sidebar.",
+        default_key: "cmd+ctrl+6",
+        windows_linux_default_key: Some("cmd+alt+6"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject6")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(6.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject7",
+        title: "Jump to Project 7",
+        description: "Jump to project 7 as shown in the sidebar.",
+        default_key: "cmd+ctrl+7",
+        windows_linux_default_key: Some("cmd+alt+7"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject7")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(7.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject8",
+        title: "Jump to Project 8",
+        description: "Jump to project 8 as shown in the sidebar.",
+        default_key: "cmd+ctrl+8",
+        windows_linux_default_key: Some("cmd+alt+8"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject8")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(8.0))]),
+    },
+    HotkeyDefinition {
+        id: "jumpToProject9",
+        title: "Jump to Project 9",
+        description: "Jump to project 9 as shown in the sidebar.",
+        default_key: "cmd+ctrl+9",
+        windows_linux_default_key: Some("cmd+alt+9"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("jumpToProject9")), ("kind", J::Str("jumpToProject")), ("projectIndex", J::Num(9.0))]),
+    },
+    // CDXC:Spaces 2026-10-06 DECISION:
+    // User: "Can we have a hotkey like cmd/ctrl + ctrl/option + shift + 1 / 2 / 3 / 4 etc to switch space? Should be dynamic based on the order of the spaces." Go to Space N picks the Nth Space in the sidebar's current order (a number with no Space does nothing) and plays the swipe's slide-and-fade. The default is Cmd+Option+Shift+N on macOS, because Cmd+Ctrl+Shift+3/4 are the system's screenshot-to-clipboard keys, and Ctrl+Alt+Shift+N on Windows and Linux (`cmd` is Ctrl there); an AltGr character on those keys still types, because GPUI skips bindings for keys that produce text in a focused input. Spaces owns them, so they are off while Spaces is off.
+    // SEE-ALSO: apps/desktop/src/app/native_sidebar/space_gesture.rs (`go_to_native_space`), packages/settings-catalog/src/data/official_extensions.rs (the Spaces entry's `hotkeys`).
+    HotkeyDefinition {
+        id: "goToSpace1",
+        title: "Go to Space 1",
+        description: "Switch to Space 1 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+1",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace1")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(1.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace2",
+        title: "Go to Space 2",
+        description: "Switch to Space 2 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+2",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace2")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(2.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace3",
+        title: "Go to Space 3",
+        description: "Switch to Space 3 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+3",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace3")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(3.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace4",
+        title: "Go to Space 4",
+        description: "Switch to Space 4 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+4",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace4")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(4.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace5",
+        title: "Go to Space 5",
+        description: "Switch to Space 5 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+5",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace5")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(5.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace6",
+        title: "Go to Space 6",
+        description: "Switch to Space 6 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+6",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace6")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(6.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace7",
+        title: "Go to Space 7",
+        description: "Switch to Space 7 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+7",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace7")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(7.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace8",
+        title: "Go to Space 8",
+        description: "Switch to Space 8 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+8",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace8")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(8.0))]),
+    },
+    HotkeyDefinition {
+        id: "goToSpace9",
+        title: "Go to Space 9",
+        description: "Switch to Space 9 as shown in the sidebar.",
+        default_key: "cmd+alt+shift+9",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("goToSpace9")), ("kind", J::Str("goToSpace")), ("spaceIndex", J::Num(9.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot1",
+        title: "Focus Session 1",
+        description: "Focus session slot 1.",
+        default_key: "cmd+1",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot1")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(1.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot2",
+        title: "Focus Session 2",
+        description: "Focus session slot 2.",
+        default_key: "cmd+2",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot2")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(2.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot3",
+        title: "Focus Session 3",
+        description: "Focus session slot 3.",
+        default_key: "cmd+3",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot3")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(3.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot4",
+        title: "Focus Session 4",
+        description: "Focus session slot 4.",
+        default_key: "cmd+4",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot4")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(4.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot5",
+        title: "Focus Session 5",
+        description: "Focus session slot 5.",
+        default_key: "cmd+5",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot5")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(5.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot6",
+        title: "Focus Session 6",
+        description: "Focus session slot 6.",
+        default_key: "cmd+6",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot6")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(6.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot7",
+        title: "Focus Session 7",
+        description: "Focus session slot 7.",
+        default_key: "cmd+7",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot7")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(7.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot8",
+        title: "Focus Session 8",
+        description: "Focus session slot 8.",
+        default_key: "cmd+8",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot8")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(8.0))]),
+    },
+    HotkeyDefinition {
+        id: "focusSessionSlot9",
+        title: "Focus Session 9",
+        description: "Focus session slot 9.",
+        default_key: "cmd+9",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("focusSessionSlot9")), ("kind", J::Str("focusSessionSlot")), ("slotNumber", J::Num(9.0))]),
+    },
+    // CDXC:Hotkeys 2026-05-17-01:18:
+    // Action hotkeys are positional by the Actions settings list, not tied to
+    // command ids, so users can reorder actions without rebinding the first
+    // five launcher shortcuts.
+    HotkeyDefinition {
+        id: "runActionSlot1",
+        title: "Start Action 1",
+        description: "Start action 1 from the Actions list.",
+        default_key: "ctrl+shift+1",
+        windows_linux_default_key: Some("cmd+shift+1"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("runActionSlot1")), ("kind", J::Str("runActionSlot")), ("slotNumber", J::Num(1.0))]),
+    },
+    HotkeyDefinition {
+        id: "runActionSlot2",
+        title: "Start Action 2",
+        description: "Start action 2 from the Actions list.",
+        default_key: "ctrl+shift+2",
+        windows_linux_default_key: Some("cmd+shift+2"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("runActionSlot2")), ("kind", J::Str("runActionSlot")), ("slotNumber", J::Num(2.0))]),
+    },
+    HotkeyDefinition {
+        id: "runActionSlot3",
+        title: "Start Action 3",
+        description: "Start action 3 from the Actions list.",
+        default_key: "ctrl+shift+3",
+        windows_linux_default_key: Some("cmd+shift+3"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("runActionSlot3")), ("kind", J::Str("runActionSlot")), ("slotNumber", J::Num(3.0))]),
+    },
+    HotkeyDefinition {
+        id: "runActionSlot4",
+        title: "Start Action 4",
+        description: "Start action 4 from the Actions list.",
+        default_key: "ctrl+shift+4",
+        windows_linux_default_key: Some("cmd+shift+4"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("runActionSlot4")), ("kind", J::Str("runActionSlot")), ("slotNumber", J::Num(4.0))]),
+    },
+    HotkeyDefinition {
+        id: "runActionSlot5",
+        title: "Start Action 5",
+        description: "Start action 5 from the Actions list.",
+        default_key: "ctrl+shift+5",
+        windows_linux_default_key: Some("cmd+shift+5"),
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("id", J::Str("runActionSlot5")), ("kind", J::Str("runActionSlot")), ("slotNumber", J::Num(5.0))]),
+    },
+    // CDXC:Workarea 2026-05-10-18:30
+    // Cmd+D creates a real terminal session beside the focused pane instead of
+    // only increasing the visible split count. This matches terminal split
+    // muscle memory and lets users immediately send work into the new pane.
+    HotkeyDefinition {
+        id: "splitMore",
+        title: "Split Sideways",
+        description: "Create a terminal beside the focused pane.",
+        default_key: "cmd+d",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("direction", J::Str("horizontal")), ("id", J::Str("splitMore")), ("kind", J::Str("splitFocusedPane"))]),
+    },
+    HotkeyDefinition {
+        id: "splitMoreDown",
+        title: "Split Downwards",
+        description: "Create a terminal below the focused pane.",
+        default_key: "cmd+shift+d",
+        windows_linux_default_key: None,
+        alternate_default_keys: &[],
+        retired_default_keys: &[],
+        action: J::Obj(&[("direction", J::Str("vertical")), ("id", J::Str("splitMoreDown")), ("kind", J::Str("splitFocusedPane"))]),
+    },
+];

@@ -32,8 +32,14 @@ pub(crate) fn dispatch(
     if operation.starts_with("setup") {
         return super::setup::dispatch(state, params);
     }
-    if operation == "prepareReset" {
-        return super::reset_credits::prepare(state, required(params, "id")?);
+    if operation.starts_with("helper") {
+        return super::helper_tools::dispatch(state, params);
+    }
+    if operation == "redeemReset" {
+        return super::reset_claim::redeem(state, params);
+    }
+    if operation == "resetWatch" {
+        return super::reset_watch::endpoint(state, params);
     }
     let titlebar_has_accounts = if operation == "titlebar" {
         let db = crate::storage::open_gxserver_database(&state.paths).map_err(store::error)?;
@@ -52,9 +58,15 @@ pub(crate) fn dispatch(
     // The first titlebar response renders saved identities without waiting for helper discovery or usage network requests. The desktop follows it with a normal usage refresh.
     let cached_titlebar =
         operation == "titlebar" && params.get("cachedOnly").and_then(Value::as_bool) == Some(true);
-    let mut snapshot = if matches!(operation, "select" | "setTitlebar")
+    // CDXC:AgentProviders 2026-10-01 WHY:
+    // Settings > Accounts draws the last reading at once and follows it with the forced refresh it must run on open, instead of showing no accounts until every helper and usage request answers. Before the first reading exists it refreshes as usual, so saved accounts never flash as unavailable.
+    let cached_list = operation == "list"
+        && params.get("cachedOnly").and_then(Value::as_bool) == Some(true)
+        && state.accounts.snapshot().fetched_at.is_some();
+    let mut snapshot = if matches!(operation, "select" | "setTitlebar" | "dismissSwitch")
         || !titlebar_has_accounts
         || cached_titlebar
+        || cached_list
     {
         state.accounts.snapshot()
     } else {
@@ -114,7 +126,7 @@ pub(crate) fn dispatch(
                 .ok_or_else(|| {
                     DomainStateError::bad_request("Install the account helper first.")
                 })?;
-            let output = std::process::Command::new(binary)
+            let output = crate::platform::process::background_command(binary)
                 .args(["swap", &first.selector, &second.selector])
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -204,8 +216,14 @@ pub(crate) fn dispatch(
             let reconnecting = registry.accounts.iter().any(|a| a.id == id);
             if let Some(saved) = registry.accounts.iter_mut().find(|a| a.id == id) {
                 saved.selector = found.selector.clone();
+                // Signing in again is the user saying the login works now.
+                if saved.disabled.take().is_some() {
+                    saved.eligible = true;
+                }
             }
             if !reconnecting {
+                // CDXC:AgentProviders 2026-10-07 DECISION:
+                // User: "please also make 'available for automatic switching' enabled by default for accounts when added in settings in ghostex". A newly registered account starts with `eligible: true`; this is the only place an account is created (Settings, `setup.rs` and the phone all call `register`), and accounts already saved keep their own value.
                 if registry.accounts.len() >= 50 {
                     return Err(DomainStateError::bad_request(
                         "At most 50 accounts can be registered.",
@@ -222,6 +240,7 @@ pub(crate) fn dispatch(
                     show_in_titlebar: false,
                     eligible: true,
                     shared_history: true,
+                    disabled: None,
                 });
             }
             store::write(&db, &registry)?;
@@ -296,11 +315,21 @@ pub(crate) fn dispatch(
                 }
                 account.indicator = indicator.into();
             }
+            let renamed = account.name != name || account.color != color;
             account.name = name.into();
             account.color = color.into();
             account.eligible = eligible;
+            if eligible {
+                account.disabled = None;
+            }
             store::write(&db, &registry)?;
-            for session in repository.list_sessions(None)? {
+            // Sessions carry only the name and color; an indicator or switching edit leaves them alone.
+            let sessions = if renamed {
+                repository.list_sessions(None)?
+            } else {
+                Vec::new()
+            };
+            for session in sessions {
                 if session
                     .pointer("/runtimeSettings/accountId")
                     .and_then(Value::as_str)
@@ -359,6 +388,24 @@ pub(crate) fn dispatch(
             registry.defaults.insert(provider, policy);
             store::write(&db, &registry)?;
         }
+        // CDXC:AgentProviders 2026-10-04 DECISION:
+        // User: the "Couldn't complete the switch" card stuck on screen needs "a close button top right of the modal". Closing a failed switch marks it `cancelled` in the session itself, so it stays closed on reload, on every client and after a restart; Retry and later switches are untouched.
+        "dismissSwitch" => {
+            let session = get_session(&repository, params)?;
+            if session
+                .pointer("/runtimeSettings/accountSwitch/phase")
+                .and_then(Value::as_str)
+                == Some("failed")
+            {
+                let mut runtime = session["runtimeSettings"]
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                super::switch_progress::set_phase(&mut runtime, "cancelled", None);
+                update_session(&repository, &session, runtime)?;
+                changed_sessions.push(session);
+            }
+        }
         "sessionPolicy" | "select" | "stopRecovery" => {
             let session = get_session(&repository, params)?;
             let project = repository
@@ -413,6 +460,17 @@ pub(crate) fn dispatch(
                     Some(required(params, "accountId")?),
                     SwitchSource::Manual,
                 )?;
+                // Choosing a disabled account by hand is the user saying it works again (disabled.rs); otherwise the next send would move the session straight off it.
+                let chosen = required(params, "accountId")?;
+                if let Some(account) = registry
+                    .accounts
+                    .iter_mut()
+                    .find(|a| a.id == chosen && a.disabled.is_some())
+                {
+                    account.disabled = None;
+                    account.eligible = true;
+                    store::write(&db, &registry)?;
+                }
                 let selected = get_session(&repository, params)?;
                 if selected
                     .pointer("/runtimeSettings/accountSwitchAttempt")
@@ -479,6 +537,9 @@ pub(crate) fn publish(
         session["sessionId"].as_str().unwrap_or(""),
     )
 }
+/// Why a session on its own login cannot be switched (see `launch::session_uses_own_login`).
+pub(crate) const OWN_LOGIN_SWITCH_REFUSED: &str =
+    "This agent uses its own login, set in its command, so Ghostex doesn't switch its account.";
 pub(crate) fn select(
     state: &AppState,
     repository: &DomainRepository<'_>,
@@ -489,8 +550,12 @@ pub(crate) fn select(
     id: Option<&str>,
     source: SwitchSource,
 ) -> Result<(), DomainStateError> {
+    crate::agentbox::refuse_for_agentbox_session(session, "Switching the account")?;
     let provider = launch::provider(project, session)
         .ok_or_else(|| DomainStateError::bad_request("Unsupported account provider."))?;
+    if launch::session_uses_own_login(provider, session) {
+        return Err(DomainStateError::bad_request(OWN_LOGIN_SWITCH_REFUSED));
+    }
     let current = session
         .pointer("/runtimeSettings/accountId")
         .and_then(Value::as_str);
@@ -731,7 +796,7 @@ fn state_value(
     for found in &snapshot.accounts {
         let id = account_id(found);
         let saved = registry.accounts.iter().find(|a| a.id == id);
-        rows.push(json!({"id":id,"provider":found.provider,"selector":found.selector,"name":saved.map(|a|a.name.as_str()).unwrap_or(&found.name),"email":found.email,"indicator":saved.map(|a|a.indicator.as_str()).unwrap_or(""),"color":saved.map(|a|a.color.as_str()).unwrap_or("neutral"),"eligible":saved.is_some_and(|a|a.eligible),"registered":saved.is_some(),"showInTitlebar":saved.is_some_and(|a|a.show_in_titlebar),"sharedHistory":saved.is_some_and(|a|a.shared_history)||found.shared_history,"status":found.status,"usage":found.usage,"resetCredits":found.reset_credits,"resetCreditDetails":found.reset_credit_details,"resetCreditsError":found.reset_credits_error,"usageUpdatedAt":found.usage_updated_at,"usageError":found.usage_error,"sessionCount":session_counts.get(&id).copied().unwrap_or(0)}));
+        rows.push(json!({"id":id,"provider":found.provider,"selector":found.selector,"name":saved.map(|a|a.name.as_str()).unwrap_or(&found.name),"email":found.email,"indicator":saved.map(|a|a.indicator.as_str()).unwrap_or(""),"color":saved.map(|a|a.color.as_str()).unwrap_or("neutral"),"eligible":saved.is_some_and(|a|a.eligible),"registered":saved.is_some(),"showInTitlebar":saved.is_some_and(|a|a.show_in_titlebar),"sharedHistory":saved.is_some_and(|a|a.shared_history)||found.shared_history,"disabledReason":saved.and_then(|a|a.disabled.as_ref()).map(|d|d.reason.as_str()),"status":found.status,"usage":found.usage,"resetCredits":found.reset_credits,"resetCreditDetails":found.reset_credit_details,"resetCreditsError":found.reset_credits_error,"usageUpdatedAt":found.usage_updated_at,"usageError":found.usage_error,"sessionCount":session_counts.get(&id).copied().unwrap_or(0)}));
     }
     let loading = titlebar && snapshot.fetched_at.is_none();
     for saved in &registry.accounts {
@@ -742,10 +807,38 @@ fn state_value(
     if titlebar {
         rows.retain(|row| row["registered"] == true && row["showInTitlebar"] == true);
     }
-    // CDXC:AgentProviders 2026-09-06 DECISION:
-    // User: Codex Swap should install through Homebrew on macOS and Linux without requiring Cargo.
-    let helper_rows:Vec<_>=[Provider::Claude,Provider::Codex].into_iter().map(|p|json!({"provider":p,"installed":helpers::executable(home,p.helper()).is_some(),"cliInstalled":helpers::executable(home,p.id()).is_some(),"error":snapshot.errors.get(&p),"installCommand":if p==Provider::Claude{"uv tool install claude-swap"}else{"brew install maddada/tap/codex-swap"},"loginCommand":if p==Provider::Claude{"ghostex account-login claude"}else{"xswap add --login --share-history"}})).collect();
+    // CDXC:AgentProviders 2026-09-18 DECISION:
+    // User: Claude Swap and Codex Swap must work on Windows, under PowerShell and WSL.
+    // Supersedes the 2026-09-06 note that Codex Swap installs through Homebrew on macOS and Linux without requiring Cargo: Homebrew stays the macOS and Linux route, but a computer without brew (the usual case inside WSL) was being handed a command it cannot run, so it now gets the source build. Windows uses codex-swap's own installer and needs neither. See Provider::install_command.
+    let helper_rows:Vec<_>=[Provider::Claude,Provider::Codex].into_iter().map(|p|json!({"provider":p,"installed":helpers::executable(home,p.helper()).is_some(),"cliInstalled":helpers::executable(home,p.id()).is_some(),"error":snapshot.errors.get(&p),"installCommand":p.install_command(home),"loginCommand":p.login_command()})).collect();
     let mut value = json!({"accounts":rows,"helpers":helper_rows,"defaults":{"claude":registry.defaults.get(&Provider::Claude).cloned().unwrap_or_default(),"codex":registry.defaults.get(&Provider::Codex).cloned().unwrap_or_default()},"defaultAccounts":super::default_account::quick_launch_accounts(registry,snapshot),"newSessionAccounts":registry.new_session_accounts});
+    // CDXC:Workspaces 2026-10-09 DECISION:
+    // User: the sidebar launcher's highlighted default account shows the workspace's Claude
+    // account when the workspace sets one, so what it shows is what launches. A launcher list for a
+    // project (`projectId`, no `sessionId`) reports the account `launch::apply_new_session` would
+    // pick for a new session there: the workspace's account while it is still registered, else
+    // the provider's rule.
+    if !params.contains_key("sessionId") {
+        if let Some(project) = params
+            .get("projectId")
+            .and_then(Value::as_str)
+            .map(|project_id| repository.get_project(project_id))
+            .transpose()?
+            .flatten()
+        {
+            if let Some(account_id) =
+                crate::workspaces::project_claude_account_id(repository.db, &project)?.filter(
+                    |id| {
+                        registry.accounts.iter().any(|account| {
+                            account.id == *id && account.provider == Provider::Claude
+                        })
+                    },
+                )
+            {
+                value["defaultAccounts"]["claude"] = json!(account_id);
+            }
+        }
+    }
     if params.contains_key("sessionId") {
         let session = get_session(repository, params)?;
         let project = repository
@@ -755,6 +848,9 @@ fn state_value(
             let account_id =
                 super::session_identity::display_account_id(registry, p, &session, home);
             value["session"] = json!({"provider":p,"accountId":account_id,"override":session.pointer("/runtimeSettings/accountPolicyOverride"),"policy":launch::effective_policy(registry,p,&session),"recovery":session.pointer("/runtimeSettings/accountRecovery"),"accountSwitch":session.pointer("/runtimeSettings/accountSwitch")});
+            if launch::session_uses_own_login(p, &session) {
+                value["session"]["usesOwnLogin"] = json!(true);
+            }
         }
     }
     Ok(value)

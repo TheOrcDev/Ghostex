@@ -44,7 +44,7 @@ impl GhostexGpuiApp {
     /// native-sidebar.tsx): current shipped macOS consumes the legacy tips and
     /// Highlighted Features markers WITHOUT opening those surfaces (the
     /// Discover→firstLaunchSetup auto chain was superseded 2026-06-18), opens
-    /// the tutorial video modal once per first-launch-setup revision, and shows
+    /// the onboarding modal once per first-launch-setup revision, and shows
     /// a once-forever OS Integration toast.
     /// CDXC:Onboarding 2026-08-18: writes one first-run marker
     /// off the foreground thread, re-reading the file first so a concurrent
@@ -67,11 +67,23 @@ impl GhostexGpuiApp {
                         state.first_launch_setup_seen_revision =
                             Some(GPUI_FIRST_LAUNCH_SETUP_SEEN_REVISION.to_string());
                     }
+                    GpuiFirstRunOnboardingMarker::FirstLaunchSetupNotShown => {
+                        if state.first_launch_setup_seen_revision.is_none() {
+                            return;
+                        }
+                        state.first_launch_setup_seen_revision = None;
+                    }
                     GpuiFirstRunOnboardingMarker::OsIntegrationOnboardingSeen => {
                         if state.os_integration_onboarding_seen {
                             return;
                         }
                         state.os_integration_onboarding_seen = true;
+                    }
+                    GpuiFirstRunOnboardingMarker::IntroVideoSeen => {
+                        if state.intro_video_seen {
+                            return;
+                        }
+                        state.intro_video_seen = true;
                     }
                 }
                 persist_gpui_first_run_onboarding_state(&state);
@@ -80,9 +92,6 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn start_gpui_first_run_onboarding(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.sidebar.is_none() {
-            return;
-        }
         #[cfg(target_os = "windows")]
         if self.windows_first_run_setup_state != GpuiWindowsFirstRunSetupState::Ready {
             return;
@@ -150,9 +159,14 @@ impl GhostexGpuiApp {
                     let needs_first_launch_setup = state.first_launch_setup_seen_revision.as_deref()
                         != Some(GPUI_FIRST_LAUNCH_SETUP_SEEN_REVISION)
                         || !state.first_launch_setup_complete;
+                    // The intro video page (window/onboarding/intro_video.rs) leads into this setup, once per install.
+                    let show_intro_video = !state.intro_video_seen;
                     let first_launch_setup_sidebar_state = needs_first_launch_setup.then(|| {
-                        gpui_app_modal_sidebar_state_message_for_active_project_id(
-                            active_project_id.as_deref(),
+                        (
+                            gpui_app_modal_sidebar_state_message_for_active_project_id(
+                                active_project_id.as_deref(),
+                            ),
+                            show_intro_video,
                         )
                     });
                     (show_os_integration_toast, first_launch_setup_sidebar_state)
@@ -162,6 +176,7 @@ impl GhostexGpuiApp {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
+                // CDXC:Onboarding 2026-09-28 WHY: the onboarding is a native window now (window/onboarding/), so first run no longer starts or downloads the CEF runtime to show it; this supersedes the CDXC:CefRuntime 2026-09-19 wait for CEF here.
                 if show_os_integration_toast {
                     this.upsert_gpui_app_toast(
                         GpuiAppToast {
@@ -185,11 +200,19 @@ impl GhostexGpuiApp {
                         cx,
                     );
                 }
-                if let Some(base_sidebar_state) = first_launch_setup_sidebar_state {
-                    this.open_gpui_first_launch_setup_with_sidebar_state(base_sidebar_state, cx);
+                if let Some((base_sidebar_state, show_intro_video)) =
+                    first_launch_setup_sidebar_state
+                {
+                    this.open_gpui_first_launch_setup_with_sidebar_state(
+                        base_sidebar_state,
+                        show_intro_video,
+                        cx,
+                    );
                     // Only a window that actually exists counts as "this
                     // revision's setup was presented".
-                    if this.app_modal_window.is_some() {
+                    if this.native_app_modal_kind() == Some(GpuiAppModalKind::Onboarding)
+                        || this.app_modal_window.is_some()
+                    {
                         this.persist_gpui_first_run_onboarding_marker(
                             GpuiFirstRunOnboardingMarker::FirstLaunchSetupSeen,
                             cx,

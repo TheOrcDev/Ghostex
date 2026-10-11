@@ -23,9 +23,14 @@ built-in showcase.
 // this demo crate root so the real app binary keeps full dead-code coverage.
 #![allow(dead_code)]
 
-#[path = "../ghostty_vt.rs"]
+#[cfg(target_os = "macos")]
+#[path = "../ghostty_kit.rs"]
+mod ghostty_kit;
+#[path = "../ghostty_vt/mod.rs"]
 mod ghostty_vt;
-#[path = "../shared_settings.rs"]
+#[path = "../hotkey_label.rs"]
+mod hotkey_label;
+#[path = "../shared_settings/mod.rs"]
 mod shared_settings;
 #[path = "../support_logs.rs"]
 mod support_logs;
@@ -35,6 +40,13 @@ mod terminal_element;
 mod terminal_environment;
 #[path = "../terminal_model.rs"]
 mod terminal_model;
+#[path = "../terminal_scrollbar_reveal.rs"]
+mod terminal_scrollbar_reveal;
+#[cfg(target_os = "macos")]
+#[path = "../terminal_shaders.rs"]
+mod terminal_shaders;
+#[path = "../terminal_wheel.rs"]
+mod terminal_wheel;
 
 use gpui::{
     App, AppContext as _, Bounds, Focusable as _, TitlebarOptions, WindowBounds, WindowOptions, px,

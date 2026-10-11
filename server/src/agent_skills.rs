@@ -16,9 +16,10 @@ pub const GHOSTEX_AGENT_SKILL_NAMES: &[&str] = &[
     "ghostex-browser-use",
     "ghostex-embedded-browser-use",
     "ghostex-computer-use",
+    "ghostex-spaceo",
     "ghostex-cli",
     "ghostex-manage-beads",
-    "ghostex-fable-56-orchestration",
+    "ghostex-agents",
     "ghostex-auto-rename-session",
     "ghostex-move-codex-session",
     "ghostex-help",
@@ -29,6 +30,11 @@ pub const GHOSTEX_AGENT_SKILL_NAMES: &[&str] = &[
     through the same allow-list as the other bundled skills.
     */
     "ghostex-manage-beads",
+    /*
+    CDXC:AgentSkills 2026-10-06 DECISION:
+    User: the visuals skill is used "only when I mention the skill". `$ghostex-visuals` teaches the chat's ```visual blocks and `ghostex show` pages, and ships with `disable-model-invocation: true` and `allow_implicit_invocation: false` so an agent never picks it up on its own.
+    */
+    "ghostex-visuals",
 ];
 
 pub const GHOSTEX_SKILLS_CLI_AGENT_IDS: &[&str] = &[
@@ -182,9 +188,15 @@ fn install_agent_skills_blocking(
                 )?,
             };
         let mut installed_count = 0_usize;
-        for target_root in &target_roots {
+        let canonical_dir = target_roots[0].join(skill_name);
+        for (index, target_root) in target_roots.iter().enumerate() {
             let destination = target_root.join(skill_name);
-            if copy_skill_directory_into_place(&source_dir, &destination)? {
+            let written = if index == 0 {
+                copy_skill_directory_into_place(&source_dir, &destination)?
+            } else {
+                link_skill_into_agent_root(&canonical_dir, &destination)?
+            };
+            if written {
                 installed_paths.push(path_string(&destination));
                 installed_count += 1;
             }
@@ -332,6 +344,51 @@ fn resolve_bundled_skill_source_dir(
     Err(DomainStateError::bad_request(format!(
         "Bundled skill {skill_name} was not found under {package_source}. Reinstall Ghostex so its skills folder is present."
     )))
+}
+
+/// Point an agent's skill folder entry at the canonical copy under
+/// `~/.agents/skills` with one relative symlink, the same shape Agent Sync and
+/// the `skills` CLI create. Returns false when nothing had to change: the agent
+/// root is itself a link to the canonical folder, or the link already exists.
+///
+/// CDXC:AgentSync 2026-09-16 DECISION:
+/// User: gxserver bundled skill installs link into agents instead of copying (5A), so a
+/// refresh of the canonical copy reaches every agent at once and Agent Sync never has to
+/// replace Ghostex-made copies after the fact. Only the canonical folder receives a copy.
+pub(crate) fn link_skill_into_agent_root(
+    canonical_dir: &Path,
+    destination: &Path,
+) -> Result<bool, DomainStateError> {
+    use ghostex_agent_sync::fsx;
+    let Some(parent) = destination.parent() else {
+        return Err(DomainStateError {
+            code: "internalError",
+            message: format!(
+                "Skill destination {} has no parent folder.",
+                destination.display()
+            ),
+        });
+    };
+    if let (Ok(parent_real), Some(canonical_parent)) =
+        (fs::canonicalize(parent), canonical_dir.parent())
+    {
+        if fs::canonicalize(canonical_parent)
+            .map(|real| real == parent_real)
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+    }
+    if fsx::is_symlink(destination) && fsx::same_entry(destination, canonical_dir) {
+        return Ok(false);
+    }
+    fs::create_dir_all(parent).map_err(|error| skill_install_io_error("create", parent, error))?;
+    remove_path_of_any_kind(destination)
+        .map_err(|error| skill_install_io_error("replace", destination, error))?;
+    let target = fsx::link_target_for(destination, canonical_dir);
+    fsx::create_dir_link(&target, destination)
+        .map_err(|error| skill_install_io_error("link", destination, error))?;
+    Ok(true)
 }
 
 /// Replace `destination` with a fresh copy of `source_dir`. The copy is staged
@@ -900,6 +957,9 @@ fn is_existing_file(path: &Path) -> bool {
 }
 
 fn is_uri_like(value: &str) -> bool {
+    if Path::new(value).is_absolute() {
+        return false;
+    }
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -939,11 +999,24 @@ builds installed on user machines. The startup migration removes a retired
 skill directory only when every file in it byte-matches a version Ghostex
 actually shipped; a directory with extra files or edited content is user work
 and is left alone.
+
+CDXC:AgentSkills 2026-09-19 WHY:
+The Fable 5.6 orchestration skill (shipped first as
+`ghostex-fable-5.6-orchestration`, then as `ghostex-fable-56-orchestration`)
+was replaced by the model-independent `$ghostex-agents-orchestration`, so its
+installed copies are retired the same way.
+
+CDXC:AgentSkills 2026-09-24 WHY:
+`ghostex-agents-orchestration` was renamed to `ghostex-agents`, so copies
+installed under the old name are retired the same way.
 */
 pub const RETIRED_GHOSTEX_AGENT_SKILL_NAMES: &[&str] = &[
     "ghostex-manage-automations",
     "ghostex-agent-orchestration",
     "ghostex-find-prev-session",
+    "ghostex-fable-5.6-orchestration",
+    "ghostex-fable-56-orchestration",
+    "ghostex-agents-orchestration",
 ];
 
 /// sha256 of every SKILL.md / agents/openai.yaml revision the retired skills
@@ -969,6 +1042,20 @@ const RETIRED_GHOSTEX_AGENT_SKILL_SHIPPED_SHA256: &[&str] = &[
     // ghostex-find-prev-session agents/openai.yaml
     "20901c1230ebec7200694cdcdb2c2cdad7a0b500adc10be7123f318b23f3b73a",
     "fe50e56c5216d964637c993c27e7c539ee0bfdfb7f22b4cf5bcff0ad783eea61",
+    // ghostex-fable-5.6-orchestration / ghostex-fable-56-orchestration SKILL.md
+    "6403a460e44371569c3d3a838cae1f0448e16180a047d5f16fba97531fdf59cb",
+    "8f7d1a32d0ae2093998abe5aa2c7712edf154a3c22ada20389d8d03a1df1a51e",
+    "bd337aa532c3817bebe784c54a558171209cfd9aa3fa5c310841a9452b9b8db8",
+    "d4e17d0a5e80ad363ae3aa4d7bb82ecbae370d6276f2fd35200d76f094a70607",
+    // ghostex-fable-5.6-orchestration / ghostex-fable-56-orchestration agents/openai.yaml
+    "7d1771b33c72b36692b4c97c82d5f78aca68acc55d3d30851380aa5c9e815ee7",
+    "d0c65b88ef3379d9dc93421d4e68f362fdeeac1fe8945eafd5c92ab70a8e0e11",
+    "1f220c6dd690323fcc8a82f7e612b2b2f25863954dbded973c108feb2f24cb8c",
+    // ghostex-agents-orchestration SKILL.md
+    "39ff8f58b8cf9031028f955e316a77564ae29f096b5975eba6b5ad549034b450",
+    "6fe9da4676cf8d237af8ffee361790e7e4577ae12689870ce45c80919e58f11c",
+    // ghostex-agents-orchestration agents/openai.yaml
+    "bbfd7e4f8794a1940c4434bdf42cab5b9beb06e972d007c570403f4155647179",
 ];
 
 fn file_matches_shipped_retired_skill_content(path: &Path) -> bool {

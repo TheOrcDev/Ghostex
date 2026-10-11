@@ -157,6 +157,20 @@ impl GhostexGpuiApp {
                 GpuiLocalGxserverHealthState::Healthy {
                     tools_available: true,
                 } => {
+                    // A gxserver Windows started outside the desktop is replaced before anything loads from it.
+                    #[cfg(target_os = "windows")]
+                    if let Some(limited) = cx
+                        .background_executor()
+                        .spawn(async {
+                            crate::app::os_integration::gxserver_launch_context::gpui_local_gxserver_limited_launch()
+                        })
+                        .await
+                        && this
+                            .update(cx, |this, cx| this.replace_gpui_limited_gxserver(limited, cx))
+                            .unwrap_or(false)
+                    {
+                        return;
+                    }
                     let _ = this.update(cx, |this, cx| {
                         #[cfg(target_os = "windows")]
                         if windows_first_run_setup_active {
@@ -281,13 +295,16 @@ impl GhostexGpuiApp {
                     this.show_gpui_gxserver_bootstrap_toast(
                         "error",
                         "gxserver unavailable",
-                        "Bundled gxserver binary is missing. Run `bun run build` for development, or reinstall Ghostex so Web/gxserver is present.",
+                        "Bundled gxserver binary is missing. Run `cargo xtask build` for development, or reinstall Ghostex so Web/gxserver is present.",
                         true,
                         cx,
                     );
                 });
                 return;
             };
+            // The first-run setup screen already shows progress; a toast behind it is noise.
+            #[cfg(target_os = "windows")]
+            let show_loading_toast = show_loading_toast && !windows_first_run_setup_active;
             if show_loading_toast {
                 let _ = this.update(cx, |this, cx| {
                     this.show_gpui_gxserver_bootstrap_toast(
@@ -303,28 +320,63 @@ impl GhostexGpuiApp {
                 .background_executor()
                 .spawn(async move { gpui_spawn_local_gxserver_daemon(&binary) })
                 .await;
-            if let Err(message) = spawn_result {
-                let _ = this.update(cx, |this, cx| {
-                    this.show_gpui_gxserver_bootstrap_toast(
-                        "error",
-                        "gxserver failed",
-                        &message,
-                        true,
-                        cx,
-                    );
-                });
-                return;
-            }
+            let launch_steps = match spawn_result {
+                Ok(steps) => steps,
+                Err(message) => {
+                    // The launcher's own step log is the evidence for this
+                    // failure, so it goes into the same copyable report as a
+                    // health timeout.
+                    startup_diagnostics.push(format!("+{}ms launcher failed: {message}", startup_started.elapsed().as_millis()));
+                    let report = cx
+                        .background_executor()
+                        .spawn(async move { gpui_gxserver_startup_failure_report(&startup_diagnostics) })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.show_gpui_gxserver_bootstrap_toast(
+                            "error",
+                            "gxserver failed",
+                            message.lines().next().unwrap_or(&message),
+                            true,
+                            cx,
+                        );
+                        if let Some(toast) = this.app_toasts.iter_mut().find(|toast| toast.id == GPUI_GXSERVER_DAEMON_TOAST_ID) {
+                            toast.copy_text = Some(report);
+                        }
+                        this.sync_gpui_app_toast_window(cx);
+                    });
+                    return;
+                }
+            };
+            startup_diagnostics.extend(launch_steps);
             startup_diagnostics.push(format!("+{}ms launcher accepted the start request.", startup_started.elapsed().as_millis()));
-            for attempt in 1..=40 {
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
+            #[cfg(target_os = "windows")]
+            if windows_first_run_setup_active {
+                let _ = this.update(cx, |this, cx| {
+                    this.windows_first_run_setup_state = GpuiWindowsFirstRunSetupState::SettingUp(
+                        windows_terminal_backend::WindowsWslSetupPhase::Starting,
+                    );
+                    cx.notify();
+                });
+            }
+            /*
+            CDXC:ServerDaemon 2026-09-28 WHY:
+            On a freshly installed Windows the first gxserver start waited almost a minute before its own code ran (Windows scanning the new executable), while this loop gave up after about 20 seconds: the app showed "gxserver failed to start" and left the first-run setup frozen on "Checking the bundled terminal engine…" even after gxserver came up. Probe quickly for the first seconds, then keep probing less often until the startup patience runs out.
+            */
+            let spawned_at = std::time::Instant::now();
+            let mut attempt = 0;
+            while spawned_at.elapsed() < GPUI_GXSERVER_START_PATIENCE {
+                attempt += 1;
+                let interval = if spawned_at.elapsed() < Duration::from_secs(20) {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_secs(2)
+                };
+                cx.background_executor().timer(interval).await;
                 let (health, detail) = cx
                     .background_executor()
                     .spawn(async { gpui_probe_local_gxserver_health_with_diagnostics() })
                     .await;
-                startup_diagnostics.push(format!("+{}ms probe {attempt}/40: {detail}", startup_started.elapsed().as_millis()));
+                startup_diagnostics.push(format!("+{}ms probe {attempt}: {detail}", startup_started.elapsed().as_millis()));
                 match health {
                     GpuiLocalGxserverHealthState::Healthy { tools_available } => {
                         let _ = this.update(cx, |this, cx| {
@@ -382,6 +434,18 @@ impl GhostexGpuiApp {
                 .background_executor()
                 .spawn(async move { gpui_gxserver_startup_failure_report(&startup_diagnostics) })
                 .await;
+            // During first-run setup the failure belongs on the setup screen, which offers Retry.
+            #[cfg(target_os = "windows")]
+            if windows_first_run_setup_active {
+                let _ = this.update(cx, |this, cx| {
+                    this.windows_first_run_setup_state = GpuiWindowsFirstRunSetupState::Failed(
+                        "The Ghostex background service did not start. Try again; if it keeps failing, restart Windows and open Ghostex again."
+                            .to_string(),
+                    );
+                    cx.notify();
+                });
+                return;
+            }
             let _ = this.update(cx, |this, cx| {
                 this.show_gpui_gxserver_bootstrap_toast(
                     "error",

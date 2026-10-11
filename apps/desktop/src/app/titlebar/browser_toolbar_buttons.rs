@@ -3,7 +3,7 @@
 // only edit from the original app/titlebar.rs body is wrapping each group
 // of `impl GhostexGpuiApp` methods in its own impl block; multiple impl
 // blocks for the same type across files is the established pattern used by
-// every sibling file in apps/desktop/src/app/). This file holds the browser toolbar new-tab/overflow/address-field/button renderers.
+// every sibling file in apps/desktop/src/app/). This file holds the browser toolbar overflow/address-field/button renderers.
 // See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
 // C1 wave-4 extraction: `impl GhostexGpuiApp` methods moved verbatim out of
@@ -21,12 +21,13 @@ use gpui::InteractiveElement as _;
 use gpui::IntoElement;
 use gpui::KeyDownEvent;
 use gpui::MouseButton;
-use gpui::MouseDownEvent;
+use gpui::MouseUpEvent;
 use gpui::ParentElement as _;
 use gpui::Styled as _;
 use gpui::div;
 use gpui::prelude::FluentBuilder as _;
 use gpui::px;
+use gpui_component::ElementExt as _;
 use gpui_component::Sizable as _;
 use gpui_component::Size as ComponentSize;
 use gpui_component::h_flex;
@@ -35,48 +36,12 @@ use gpui_component::tooltip::ManagedTooltipExt as _;
 use gpui_component::tooltip::ManagedTooltipPlacement;
 
 use crate::app::consts::*;
+use crate::app::context_menu::GpuiContextMenu;
 use crate::app::helpers::*;
 use crate::app::model::*;
 use crate::*;
 
 impl GhostexGpuiApp {
-    pub(crate) fn render_browser_toolbar_new_tab_button(
-        &self,
-        pane_id: BrowserPaneId,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        div()
-            .id(format!(
-                "ghostex-gpui-browser-toolbar-new-tab-{}",
-                pane_id.0
-            ))
-            .flex()
-            .flex_shrink_0()
-            .h(px(BROWSER_TOOLBAR_HEIGHT - 1.0))
-            .w(px(BROWSER_TOOLBAR_BUTTON_WIDTH))
-            .items_center()
-            .justify_center()
-            .border_l_1()
-            .border_color(titlebar_button_border_color())
-            .cursor_default()
-            .hover(|this| this.bg(chrome_color(0x212121, 0xe5e5e5)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    this.swap_browser_tabs_for_active_project(cx);
-                    this.browser_tabs.focus_pane(pane_id);
-                    this.add_browser_tab(window, cx);
-                }),
-            )
-            .managed_tooltip_with_placement(ManagedTooltipPlacement::Left, |window, cx| {
-                titlebar_tooltip("New browser tab", window, cx)
-            })
-            .child(self.render_browser_tab_new_icon(12.0))
-            .into_any_element()
-    }
-
     pub(crate) fn render_browser_toolbar_overflow_button(
         &self,
         pane_id: BrowserPaneId,
@@ -85,6 +50,8 @@ impl GhostexGpuiApp {
         self.render_browser_pane_actions_button(pane_id, true, cx)
     }
 
+    /// CDXC:ContextMenus 2026-09-17 DECISION:
+    /// User: the address bar right-click menu must use the GPUI context menu instead of the system menu.
     pub(crate) fn render_browser_address_field(
         &self,
         pane_id: BrowserPaneId,
@@ -120,6 +87,35 @@ impl GhostexGpuiApp {
                     this.cancel_browser_address_edit_for_pane(pane_id, window, cx);
                 }
             }))
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseUpEvent, window, cx| {
+                    cx.stop_propagation();
+                    if !this.focus_browser_address_input_for_pane(pane_id, window, cx) {
+                        return;
+                    }
+                    let input = this.browser_address_inputs[&pane_id].read(cx);
+                    let has_selection = !input.selected_range().is_empty();
+                    // Paste is offered without peeking at the clipboard, as GPUI Kit's own edit
+                    // menu does: a Windows read can block the UI thread (CDXC:Clipboard in
+                    // helpers/clipboard_read.rs), and the Paste action reads in the background.
+                    GpuiContextMenu::new()
+                        .menu_with_disabled(
+                            "Cut",
+                            !has_selection,
+                            Box::new(gpui_component::input::Cut),
+                        )
+                        .menu_with_disabled(
+                            "Copy",
+                            !has_selection,
+                            Box::new(gpui_component::input::Copy),
+                        )
+                        .menu("Paste", Box::new(gpui_component::input::Paste))
+                        .separator()
+                        .menu("Select All", Box::new(gpui_component::input::SelectAll))
+                        .show(event.position, window, cx);
+                }),
+            )
             .child(titlebar_svg_icon(
                 browser_security_icon_path(&address_value),
                 14.0,
@@ -134,6 +130,9 @@ impl GhostexGpuiApp {
                     .overflow_hidden()
                     .child(
                         Input::new(&address_input)
+                            // Keep Input's right-click caret/selection handling; an empty
+                            // native menu lets the parent show the shared GPUI popup on release.
+                            .context_menu(|menu, _, _| menu)
                             .with_size(ComponentSize::XSmall)
                             .appearance(false)
                             .bordered(false)
@@ -168,6 +167,7 @@ impl GhostexGpuiApp {
         } else {
             None
         };
+        let trigger_bounds = std::rc::Rc::new(std::cell::Cell::new(None));
         div()
             .id(format!(
                 "ghostex-gpui-browser-toolbar-button-{}-{id}",
@@ -175,31 +175,29 @@ impl GhostexGpuiApp {
             ))
             .flex()
             .flex_shrink_0()
-            .h(px(BROWSER_TOOLBAR_HEIGHT - 1.0))
-            .w(px(if id == "back" {
-                BROWSER_TOOLBAR_BUTTON_WIDTH - 1.0
-            } else {
-                BROWSER_TOOLBAR_BUTTON_WIDTH
-            }))
+            .h(px(TITLEBAR_CONTROL_HEIGHT))
+            .w(px(BROWSER_TOOLBAR_BUTTON_WIDTH))
             .items_center()
             .justify_center()
-            .when(id != "back", |this| this.border_l_1())
-            .when(id == "home", |this| this.border_r_1())
-            .border_color(titlebar_button_border_color())
+            .rounded(px(TITLEBAR_BUTTON_RADIUS))
             .cursor_default()
             .text_color(if enabled {
                 titlebar_icon_color()
             } else {
                 browser_toolbar_disabled_icon_color()
             })
+            .on_prepaint({
+                let trigger_bounds = trigger_bounds.clone();
+                move |bounds, _, _| trigger_bounds.set(Some(bounds))
+            })
             .when(enabled, |this| {
                 this.hover(|this| {
-                    this.bg(chrome_color(0x212121, 0xe5e5e5))
+                    this.bg(titlebar_button_hover_color())
                         .text_color(titlebar_icon_hover_color())
                 })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.listener(move |this, _: &gpui::MouseDownEvent, window, cx| {
                         match action {
                             BrowserToolbarAction::Back
                             | BrowserToolbarAction::Forward
@@ -223,7 +221,14 @@ impl GhostexGpuiApp {
                                 this.show_browser_history_popup(pane_id, window, cx);
                             }
                             BrowserToolbarAction::ProfileMenu => {
-                                this.show_browser_profile_menu(pane_id, event.position, window, cx);
+                                if let Some(trigger_bounds) = trigger_bounds.get() {
+                                    this.show_browser_profile_menu(
+                                        pane_id,
+                                        trigger_bounds,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             }
                             BrowserToolbarAction::DevTools => {
                                 this.toggle_browser_devtools_from_toolbar(pane_id, window, cx);

@@ -31,7 +31,21 @@ impl GhostexGpuiApp {
         restart_after_stop: bool,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.stop_gpui_local_gxserver(restart_after_stop.then_some(true), cx);
+    }
+
+    /// Stops the local gxserver; `restart` is `Some(show_loading_toast)` to start the bundled one afterwards.
+    pub(crate) fn stop_gpui_local_gxserver(
+        &mut self,
+        restart: Option<bool>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let restart_after_stop = restart.is_some();
         cx.spawn(async move |this, cx| {
+            let previous_pid = cx
+                .background_executor()
+                .spawn(async { gpui_local_gxserver_health_pid() })
+                .await;
             let stop_result = cx
                 .background_executor()
                 .spawn(async {
@@ -42,7 +56,7 @@ impl GhostexGpuiApp {
                     )
                 })
                 .await;
-            let stop_error = match &stop_result {
+            let mut stop_error = match &stop_result {
                 Ok((status_code, _)) if (200..300).contains(status_code) => None,
                 Ok((status_code, _)) => {
                     Some(format!("gxserver stop failed with HTTP {status_code}."))
@@ -64,6 +78,16 @@ impl GhostexGpuiApp {
                         break;
                     }
                 }
+                stop_error = cx
+                    .background_executor()
+                    .spawn(async move {
+                        gpui_wait_for_local_gxserver_process_exit(
+                            previous_pid,
+                            Duration::from_secs(15),
+                        )
+                    })
+                    .await
+                    .err();
             }
             let _ = this.update(cx, |this, cx| {
                 let should_restart = restart_after_stop && stop_error.is_none();
@@ -91,131 +115,64 @@ impl GhostexGpuiApp {
                 }
                 let _ = this.refresh_sidebar_gxserver_bootstrap_if_changed(cx);
                 if should_restart {
-                    this.start_gpui_local_gxserver_bootstrap(true, cx);
+                    this.start_gpui_local_gxserver_bootstrap(restart.unwrap_or(true), cx);
                 }
             });
         })
         .detach();
     }
 
-    /// The titlebar batch sleep reuses the sidebar runtime's inactive-session
-    /// revalidation (same filter as per-project bulk sleep) so working,
-    /// attention, and already-sleeping sessions stay untouched like macOS.
+    /// The titlebar batch sleep reuses the store's inactive-session filter (the one a project's
+    /// Sleep Inactive uses) across every connected machine, so working, attention, background-work
+    /// and already-sleeping sessions stay untouched like macOS.
     pub(crate) fn dispatch_gpui_workspace_sleep_inactive_sessions(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return false;
-        };
-        let message = serde_json::json!({
-            "action": "sleepInactiveSessions",
-            "type": GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_TYPE,
-            "version": GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_VERSION,
-        });
-        let script = gpui_workspace_terminal_runtime_action_script(&message);
-        sidebar.update(cx, |surface, _| surface.execute_app_owned_script(&script))
+        self.gx_store_sleep_inactive_sessions_everywhere(cx)
     }
 
-    /// macOS `killTerminalDaemon` parity: since the gxserver cutover the
-    /// Running Sessions daemon-stop control never stops the shared gxserver
-    /// process — macOS routes every awake gxserver-presented terminal through
-    /// the shared sleep path and refreshes the modal. GPUI forwards the same
-    /// bulk request to the sidebar runtime, which owns the paced sleep
-    /// transitions; the modal refresh converges as sessions go to sleep.
+    /// macOS `killTerminalDaemon` parity: since the gxserver cutover the Running Sessions
+    /// daemon-stop control never stops the shared gxserver process. Every awake local session goes
+    /// through the shared paced sleep path; the modal refresh converges as sessions go to sleep.
     pub(crate) fn dispatch_gpui_workspace_sleep_all_daemon_sessions(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return false;
-        };
-        let message = serde_json::json!({
-            "action": "sleepAllDaemonSessions",
-            "type": GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_TYPE,
-            "version": GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_VERSION,
-        });
-        let script = gpui_workspace_terminal_runtime_action_script(&message);
-        sidebar.update(cx, |surface, _| surface.execute_app_owned_script(&script))
+        self.gx_store_sleep_all_local_daemon_sessions(cx)
     }
 
-    /*
-    CDXC:Sidebar 2026-08-02:
-    Report an observed pointer crossing of the sidebar's native frame into the
-    page. The sidebar CEF surface is a native sibling of GPUI chrome, Ghostty
-    terminal hosts, and the other CEF panes, so Chromium never sees the pointer
-    leave and can hold the last hovered row's `:hover` state indefinitely. The
-    page turns this into the shared `data-native-pointer-inside` contract that
-    the sidebar stylesheet already declares suppressors against.
-    */
     #[cfg(target_os = "macos")]
     pub(crate) fn dispatch_gpui_sidebar_pointer_inside(
         &mut self,
         inside: bool,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return false;
-        };
-        let script = gpui_sidebar_native_pointer_inside_script(inside);
-        let wrote_flag = sidebar.update(cx, |surface, _| surface.execute_app_owned_script(&script));
-        /*
-        CDXC:Sidebar 2026-08-20:
-        The CSS flag can only neutralize hover-derived *styling*. A tooltip is
-        page state opened on pointer-enter and closed on pointer-leave, and the
-        leave never reaches the renderer when the pointer crosses into a native
-        sibling, so a session row's tooltip stayed on screen over a terminal
-        pane. Dismissing it needs page code, so it goes through the sidebar
-        bridge like context-menu dismissal does; if the bridge is not installed
-        the page cannot have an open tooltip either.
-        */
-        if !inside {
-            let dismissed = sidebar.update(cx, |surface, _| {
-                surface.execute_app_owned_script(GPUI_SIDEBAR_DISMISS_TOOLTIPS_SCRIPT)
-            });
-            return wrote_flag || dismissed;
+        if self.native_sidebar.pointer_inside != inside {
+            self.native_sidebar.pointer_inside = inside;
+            cx.notify();
         }
-        wrote_flag
+        if !inside {
+            self.native_sidebar.hovered_collection = None;
+            self.native_sidebar.hovered_group = None;
+            self.native_sidebar.hovered_session = None;
+            self.native_sidebar.hovered_section = None;
+            cx.notify();
+        }
+        true
     }
 
-    /*
-    CDXC:Spaces 2026-08-29:
-    The AppKit observer saw a finger scroll gesture begin (NSEventPhaseBegan)
-    inside the sidebar's frame. Forward it into the page so the Space-swipe
-    handler can reset its gesture lock: the renderer's wheel stream has no
-    momentum phase and cannot make this call on its own.
-    */
-    #[cfg(target_os = "macos")]
-    pub(crate) fn dispatch_gpui_sidebar_scroll_gesture_began(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return false;
-        };
-        sidebar.update(cx, |surface, _| {
-            surface.execute_app_owned_script(GPUI_SIDEBAR_SCROLL_GESTURE_BEGAN_SCRIPT)
-        })
-    }
-
-    /*
-    CDXC:Sidebar 2026-08-02:
-    A mouse-down landed outside the sidebar's native frame, so any open sidebar
-    context menu must close. The page's own backdrop only covers the sidebar
-    document, and its window-blur dismissal never fires here: the sidebar
-    surface is mouse-focus passive, so clicking a terminal pane or a titlebar
-    button does not blur a browsing context that never held focus.
-    */
+    /// CDXC:Sidebar 2026-09-17 WHY:
+    /// Embedded browser panes receive clicks outside GPUI, so the AppKit observer dismisses the native sidebar menu through this callback.
     #[cfg(target_os = "macos")]
     pub(crate) fn dispatch_gpui_sidebar_dismiss_context_menus(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(sidebar) = self.sidebar.clone() else {
-            return false;
-        };
-        sidebar.update(cx, |surface, _| {
-            surface.execute_app_owned_script(GPUI_SIDEBAR_DISMISS_CONTEXT_MENUS_SCRIPT)
-        })
+        let open = self.native_sidebar.menu.take().is_some();
+        if open {
+            cx.notify();
+        }
+        open
     }
 }

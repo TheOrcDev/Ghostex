@@ -459,6 +459,7 @@ pub(crate) fn default_agent_name(agent_id: &str) -> Option<&'static str> {
         "cursor" => Some("Cursor CLI"),
         "devin" => Some("Devin"),
         "droid" => Some("Factory Droid"),
+        "empryo" => Some("Empryo"),
         "gemini" => Some("Gemini"),
         "grok" => Some("Grok Build"),
         "hermes-agent" => Some("Hermes Agent"),
@@ -526,6 +527,7 @@ pub(crate) async fn run_commit_message_generation_agent(
     let shell_command = build_commit_message_generation_shell_command(agent, &delimiter, prompt)?;
     let shell = command_shell();
     let mut child = Command::new(&shell.executable);
+    crate::platform::process::NoConsoleWindow::no_console_window(&mut child);
     child
         .args(shell.interactive_script_args(&shell_command))
         .current_dir(cwd)
@@ -550,12 +552,94 @@ pub(crate) async fn run_commit_message_generation_agent(
         message: "Could not start commit message generation.".to_string(),
     })?;
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = commit_message_generation_failure_message(
+            &agent.name,
+            output.status.code(),
+            &stdout,
+            &stderr,
+        );
+        let _ = state.logger.log(GxserverLogInput {
+            level: LogLevel::Warn,
+            event: "commitMessageGenerationFailed".to_string(),
+            server_id: Some(state.metadata.server_id.clone()),
+            request_id: None,
+            client: None,
+            duration_ms: None,
+            error: Some(message.clone()),
+            details: None,
+        });
         return Err(DomainStateError {
             code: "dependencyUnavailable",
-            message: format!("{} commit message generation failed.", agent.name),
+            message,
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// CDXC:Git 2026-10-01 WHY:
+/// A failed agent run used to surface only "<agent> commit message generation failed." and threw the real reason away (Claude prints "Failed to authenticate: OAuth session expired..." on stdout, most CLIs use stderr). The toast and the gxserver log carry the exit code plus the last error lines of each stream.
+pub(crate) fn commit_message_generation_failure_message(
+    agent_name: &str,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    let mut message = match exit_code {
+        Some(code) => format!("{agent_name} commit message generation failed (exit {code})."),
+        None => format!("{agent_name} commit message generation was stopped by a signal."),
+    };
+    for stream in [stdout, stderr] {
+        let tail = commit_message_generation_output_tail(stream);
+        if !tail.is_empty() {
+            message.push('\n');
+            message.push_str(&tail);
+        }
+    }
+    message
+}
+
+fn commit_message_generation_output_tail(output: &str) -> String {
+    const MAX_LINES: usize = 2;
+    const MAX_LINE_CHARS: usize = 160;
+    let lines = output
+        .lines()
+        .map(|line| {
+            crate::session_chat_options::strip_ansi_sgr(line)
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    // CLIs often end with a usage or help footer after the error, and Codex echoes the whole prompt (diff included) to stderr first, so look for error lines only near the end.
+    let recent = &lines[lines.len().saturating_sub(8)..];
+    let error_lines = recent
+        .iter()
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("error") || lower.contains("failed")
+        })
+        .collect::<Vec<_>>();
+    let picked = if error_lines.is_empty() {
+        recent.iter().collect::<Vec<_>>()
+    } else {
+        error_lines
+    };
+    picked[picked.len().saturating_sub(MAX_LINES)..]
+        .iter()
+        .map(|line| {
+            if line.chars().count() > MAX_LINE_CHARS {
+                format!(
+                    "{}...",
+                    line.chars().take(MAX_LINE_CHARS).collect::<String>()
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn build_commit_message_generation_shell_command(
@@ -566,8 +650,12 @@ pub(crate) fn build_commit_message_generation_shell_command(
     Ok(match agent.agent_id.as_str() {
         "codex" => {
             let command = enforce_required_agent_permission_flag(&agent.command, "codex");
+            /*
+            CDXC:Git 2026-10-01 DECISION:
+            Commit message generation runs Codex on gpt-6-luna with high reasoning effort, and Claude on Sonnet 5.5 (claude-sonnet-5-5) at medium effort.
+            */
             let command = format!(
-                "{command} exec --ephemeral --skip-git-repo-check -m gpt-5.4-mini -c 'model_reasoning_effort=\"low\"'"
+                "{command} exec --ephemeral --skip-git-repo-check -m gpt-6-luna -c 'model_reasoning_effort=\"high\"'"
             );
             create_here_doc_command(&command, delimiter, prompt)
         }
@@ -578,7 +666,11 @@ pub(crate) fn build_commit_message_generation_shell_command(
         ),
         "claude" => {
             let command = enforce_required_agent_permission_flag(&agent.command, "claude");
-            create_here_doc_command(&format!("{command} -p"), delimiter, prompt)
+            create_here_doc_command(
+                &format!("{command} --model claude-sonnet-5-5 --effort medium -p"),
+                delimiter,
+                prompt,
+            )
         }
         "gemini" => create_here_doc_command(&format!("{} -p", agent.command), delimiter, prompt),
         _ if !agent.is_default => create_here_doc_command(&agent.command, delimiter, prompt),

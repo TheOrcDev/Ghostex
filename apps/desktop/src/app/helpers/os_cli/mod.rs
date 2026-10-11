@@ -13,8 +13,11 @@ pub(crate) mod cli_install;
 pub(crate) mod cli_settings_actions;
 pub(crate) mod cli_status;
 pub(crate) mod command_exec;
+pub(crate) mod cua_driver_job;
+pub(crate) mod cua_driver_skill;
 pub(crate) mod cua_driver_status;
 pub(crate) mod folder_stats_and_zmx;
+pub(crate) mod install_job;
 pub(crate) mod keyboard_router;
 pub(crate) mod macos_os_integration;
 pub(crate) mod main_menus;
@@ -23,6 +26,12 @@ pub(crate) mod notifications;
 pub(crate) mod open_target;
 pub(crate) mod process_and_constants;
 pub(crate) mod source_code_server_spawn;
+pub(crate) mod spaceo_job;
+pub(crate) mod spaceo_status;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_notifications;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_open_with;
 
 pub(crate) use agent_folder_trust::*;
 pub(crate) use app_state_persistence::*;
@@ -31,8 +40,11 @@ pub(crate) use cli_install::*;
 pub(crate) use cli_settings_actions::*;
 pub(crate) use cli_status::*;
 pub(crate) use command_exec::*;
+pub(crate) use cua_driver_job::*;
+pub(crate) use cua_driver_skill::*;
 pub(crate) use cua_driver_status::*;
 pub(crate) use folder_stats_and_zmx::*;
+pub(crate) use install_job::*;
 pub(crate) use keyboard_router::*;
 pub(crate) use macos_os_integration::*;
 pub(crate) use main_menus::*;
@@ -41,3 +53,9 @@ pub(crate) use notifications::*;
 pub(crate) use open_target::*;
 pub(crate) use process_and_constants::*;
 pub(crate) use source_code_server_spawn::*;
+pub(crate) use spaceo_job::*;
+pub(crate) use spaceo_status::*;
+#[cfg(target_os = "windows")]
+pub(crate) use windows_notifications::*;
+#[cfg(target_os = "windows")]
+pub(crate) use windows_open_with::*;

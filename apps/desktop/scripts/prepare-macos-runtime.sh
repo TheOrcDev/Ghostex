@@ -37,14 +37,14 @@ CODE_SERVER_APP_NODE_VERSION="${CODE_SERVER_APP_NODE_VERSION:-}"
 if [[ -z "$CODE_SERVER_APP_NODE_VERSION" && -f "$CODE_SERVER_ROOT/.node-version" ]]; then
 	CODE_SERVER_APP_NODE_VERSION="$(tr -d '[:space:]' <"$CODE_SERVER_ROOT/.node-version")"
 fi
-CODE_SERVER_APP_NODE_VERSION="${CODE_SERVER_APP_NODE_VERSION:-24.18.1}"
+CODE_SERVER_APP_NODE_VERSION="${CODE_SERVER_APP_NODE_VERSION:-24.20.0}"
 CODE_SERVER_APP_NODE_MAJOR="${CODE_SERVER_APP_NODE_VERSION%%.*}"
 CODE_SERVER_NODE_DOWNLOAD_BASE_URL="https://nodejs.org/dist/v$CODE_SERVER_APP_NODE_VERSION"
 GHOSTEX_APP_VARIANT="${GHOSTEX_APP_VARIANT:-prod}"
 case "$GHOSTEX_APP_VARIANT" in
 prod) ;;
 dev)
-	# CDXC:Build 2026-06-09-09:27: Ghostex-dev builds were removed because agents were invoking the dev app path by mistake. Fail before toolchain checks or Xcode generation so direct build commands cannot create Ghostex-dev outside `bun run start`.
+	# CDXC:Build 2026-06-09-09:27: Ghostex-dev builds were removed because agents were invoking the dev app path by mistake. Fail before toolchain checks or Xcode generation so direct build commands cannot create Ghostex-dev outside `cargo xtask start`.
 	echo "Ghostex-dev builds were removed. Use GHOSTEX_APP_VARIANT=prod or unset it." >&2
 	exit 1
 	;;
@@ -111,7 +111,7 @@ case "$(printf '%s' "$GHOSTEX_ON_DEMAND_ASSETS" | tr '[:upper:]' '[:lower:]')" i
 	GHOSTEX_ON_DEMAND_ASSETS=0
 	;;
 esac
-# CDXC:Build 2026-06-22-23:23: `bun run start` should stay stable for full maintainer checkouts while allowing contributor clones that omit optional submodules. Enable missing-optional-submodule skips only for local starts by default; release and direct strict builds must keep failing when Source resources are absent.
+# CDXC:Build 2026-06-22-23:23: `cargo xtask start` should stay stable for full maintainer checkouts while allowing contributor clones that omit optional submodules. Enable missing-optional-submodule skips only for local starts by default; release and direct strict builds must keep failing when Source resources are absent.
 GHOSTEX_ALLOW_MISSING_OPTIONAL_SUBMODULES="${GHOSTEX_ALLOW_MISSING_OPTIONAL_SUBMODULES:-${GHOSTEX_LOCAL_START:-0}}"
 case "$(printf '%s' "$GHOSTEX_ALLOW_MISSING_OPTIONAL_SUBMODULES" | tr '[:upper:]' '[:lower:]')" in
 1 | true | yes | on)
@@ -140,7 +140,7 @@ acquire_local_start_lock_if_needed() {
 	fi
 	local lock_file="$REPO_ROOT/build/ghostex-local-start.lock"
 	mkdir -p "$(dirname "$lock_file")"
-	# CDXC:Build 2026-06-11-18:59: Direct native builds mutate the same DerivedData app bundle that `bun run start` later mirrors into /Applications. Re-enter under the local-start lock unless the launcher already owns it, so a direct build cannot remove generated CEF payloads while another process installs the signed app.
+	# CDXC:Build 2026-06-11-18:59: Direct native builds mutate the same DerivedData app bundle that `cargo xtask start` later mirrors into /Applications. Re-enter under the local-start lock unless the launcher already owns it, so a direct build cannot remove generated CEF payloads while another process installs the signed app.
 	exec /usr/bin/lockf -k "$lock_file" /usr/bin/env GHOSTEX_BUILD_LOCK_HELD=1 /bin/bash "$0" "$@"
 }
 
@@ -485,7 +485,7 @@ EOF
 	# Cargo tracks the whole dependency graph and its warm freshness check takes about 0.2 seconds.
 
 	# CDXC:Build 2026-06-24-20:22: Local start must fail before packaging when server no longer compiles. This function is called outside command substitution so `set -e` can abort on Cargo errors instead of stamping the current source digest and copying a stale daemon binary.
-	# CDXC:Build 2026-09-02: cargo discovers `.cargo/config.toml` from its working directory, not from `--manifest-path`, and `bun run start` runs this script from the repo root. Build from inside the server crate so `server/.cargo/config.toml` (sccache rustc-wrapper) applies; the target dir is still `$GXSERVER_RS_ROOT/target`, so the output paths above are unchanged.
+	# CDXC:Build 2026-09-02: cargo discovers `.cargo/config.toml` from its working directory, not from `--manifest-path`, and `cargo xtask start` runs this script from the repo root. Build from inside the server crate so `server/.cargo/config.toml` (sccache rustc-wrapper) applies; the target dir is still `$GXSERVER_RS_ROOT/target`, so the output paths above are unchanged.
 	# CDXC:Build 2026-09-04 WHY:
 	# gxserver is one 168k-line leaf crate, so every local start that touched
 	# server/ paid a full non-incremental release compile (~27s). The per-package
@@ -496,6 +496,10 @@ EOF
 	local -a cargo_profile_args=()
 	if [[ "${GHOSTEX_LOCAL_START:-0}" == "1" ]]; then
 		cargo_profile_args+=(--config 'profile.release.package.gxserver.incremental=true')
+		# CDXC:Build 2026-09-23 DECISION: local starts build the gxserver crate at opt-level 0 unless `cargo xtask start --optimized`; dependencies keep release optimization. SEE-ALSO: build-macos-rust.sh.
+		if [[ "${GHOSTEX_START_OPTIMIZED:-0}" != "1" ]]; then
+			cargo_profile_args+=(--config 'profile.release.package.gxserver.opt-level=0')
+		fi
 	fi
 	(
 		cd "$GXSERVER_RS_ROOT"
@@ -730,7 +734,7 @@ package_gxserver_rust_package() {
 	local package_dir="$1"
 	local rust_bin="$2"
 	local package_version="$3"
-	# CDXC:Release 2026-06-22-16:17: Local and release macOS builds no longer keep the deleted gxserver/ TypeScript source tree. Assemble the Rust daemon package directly from server, packages/shared/gxserver-protocol.ts, and app-owned tool binaries so `bun run start` never cds into gxserver/ for the default packaged daemon.
+	# CDXC:Release 2026-06-22-16:17: Local and release macOS builds no longer keep the deleted gxserver/ TypeScript source tree. Assemble the Rust daemon package directly from server, packages/shared/gxserver-protocol.ts, and app-owned tool binaries so `cargo xtask start` never cds into gxserver/ for the default packaged daemon.
 	# CDXC:Build 2026-06-22-23:23: zmx remains required.
 	rm -rf "$package_dir"
 	mkdir -p "$package_dir/bin"
@@ -826,7 +830,7 @@ stage_remote_gxserver_linux_package_if_configured() {
 	# CDXC:RemoteMachines 2026-06-23-09:46: macOS app bundles may stage Linux remote gxserver packages only from explicit prebuilt directories. Validate required gxserver/zmx/Node/Portless/CLI resources and require Linux ELF payloads before copying to Web/gxserver-linux-* so the installer never uploads the host Darwin package to Ubuntu.
 	#
 	# CDXC:RemoteMachines 2026-06-23-10:07: The Ubuntu package builder writes build/remote-gxserver-linux/<arch>/package by default. Auto-stage that deterministic output when it exists so release/local app packaging can include the already-built Linux package without requiring another env var or rebuilding it in the macOS app pass.
-	rm -rf "$target_dir"
+	# CDXC:Build 2026-09-23 WHY: the two packages are 458MB; wiping the target first re-copied all of it on every start, while rsync alone copies only what changed.
 	mkdir -p "$target_dir"
 	rsync -a --delete "$source_dir"/ "$target_dir"/
 }
@@ -974,13 +978,19 @@ package_gxserver_if_needed() {
 		exit 1
 	fi
 	package_version="$(gxserver_rust_package_version)"
+	# packages/shared/gxserver-protocol.ts is a barrel over gxserver-protocol-*.ts; hash every part.
+	local protocol_path_args=()
+	local protocol_source
+	for protocol_source in "$REPO_ROOT"/packages/shared/gxserver-protocol*.ts; do
+		protocol_path_args+=(--path "$protocol_source")
+	done
 	package_digest="$(fingerprint_inputs \
 		--value "gxserver-package-v9-rust-only" \
 		--value "arch=$GHOSTEX_MACOS_ARCH" \
 		--value "version=$package_version" \
 		--value "rust=$(path_identity "$rust_bin")" \
 		--path "$SCRIPT_DIR/prepare-macos-runtime.sh" \
-		--path "$REPO_ROOT/packages/shared/gxserver-protocol.ts" \
+		"${protocol_path_args[@]}" \
 		--path "$GXSERVER_RS_ROOT/src" \
 		--path "$GXSERVER_RS_ROOT/Cargo.toml" \
 		--path "$GXSERVER_RS_ROOT/Cargo.lock" \
@@ -1118,7 +1128,23 @@ if [[ "${GHOSTEX_MACOS_CODE_SERVER_COMPONENT_ONLY:-0}" == "1" ]]; then
 	exit 0
 fi
 
-# CDXC:Build 2026-05-29-11:24: `bun run start` builds zmx and its Ghostty Zig dependency.
+# CDXC:Build 2026-09-24 SEE-ALSO:
+# `cargo xtask start-server` (tooling/xtask/src/start_server.rs) rebuilds only the gxserver package through this mode and installs it into the running app. It packages the zmx binary the last full start staged; building zmx stays the full start's job.
+if [[ "${GHOSTEX_MACOS_GXSERVER_ONLY:-0}" == "1" ]]; then
+	if [[ ! -x "$WEB_DIR/bin/zmx" ]]; then
+		echo "The staged zmx binary is missing: $WEB_DIR/bin/zmx. Run \`cargo xtask start\` once first." >&2
+		exit 1
+	fi
+	package_gxserver_if_needed
+	mkdir -p "$CLI_DIR"
+	cp "$WEB_DIR/gxserver/bin/ghostex" "$CLI_DIR/ghostex"
+	ln -sfh "ghostex" "$CLI_DIR/gx"
+	chmod 755 "$CLI_DIR/ghostex"
+	printf 'Prepared the gxserver package only at %s\n' "$WEB_DIR/gxserver"
+	exit 0
+fi
+
+# CDXC:Build 2026-05-29-11:24: `cargo xtask start` builds zmx and its Ghostty Zig dependency.
 # Both are on Zig 0.16 now (zmx was re-ported onto upstream/main for 0.16, matching the
 # vendored ghostty pin), so the repo needs exactly one Zig toolchain. An explicit `ZIG` still
 # wins; otherwise prefer a 0.16 binary from PATH/Homebrew/mise instead of blindly taking the
@@ -1161,7 +1187,7 @@ Selected Zig:
 Install a 0.16 toolchain or set ZIG explicitly:
   brew install zig
   mise install zig@0.16.0
-  ZIG=/opt/homebrew/bin/zig bun run start
+  ZIG=/opt/homebrew/bin/zig cargo xtask start
 EOF
 	exit 1
 fi
@@ -1191,7 +1217,7 @@ Git cannot move a submodule working tree with the gitlink, so your checkout
 stayed at the old path and .dependencies/zmx is empty.
 
 Unblock this build without moving anything:
-  ZMX_ROOT=$ZMX_LEGACY_ROOT bun run start
+  ZMX_ROOT=$ZMX_LEGACY_ROOT cargo xtask start
 
 Repair the checkout (keeps the built zig-out payload):
   cd $REPO_ROOT
@@ -1222,9 +1248,10 @@ x86_64)
 	;;
 esac
 build_zmx_if_needed
-rm -rf "$WEB_DIR/bin"
+# CDXC:Build 2026-09-23 WHY: a fresh copy gave zmx a new modification time on every start, so the packager re-copied it into the bundle and re-signed it; rsync keeps the source's time and skips an unchanged binary.
 mkdir -p "$WEB_DIR/bin"
-cp "$ZMX_ROOT/zig-out/bin/zmx" "$WEB_DIR/bin/zmx"
+find "$WEB_DIR/bin" -mindepth 1 -maxdepth 1 ! -name zmx -exec rm -rf {} +
+rsync -a "$ZMX_ROOT/zig-out/bin/zmx" "$WEB_DIR/bin/zmx"
 chmod 755 "$WEB_DIR/bin/zmx"
 # CDXC:Build 2026-06-22-23:23: Optional contributor submodules should be packaged when present and strict, but absent optional checkouts should only disable their feature in local starts. Keep zmx above as the hard terminal/persistence dependency; gate Source independently so one missing feature cannot remove the rest of the app shell.
 if [[ -n "$CODE_SERVER_ROOT" ]]; then

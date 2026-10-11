@@ -17,6 +17,7 @@ use crate::*;
 pub(crate) fn store_latest_gpui_project_snapshot_from_sidebar_contract_json(
     latest_snapshot: &mut Option<GpuiProjectSnapshot>,
     text: &str,
+    admit: impl FnOnce(&GpuiProjectSnapshot, Option<u64>) -> bool,
 ) -> Result<GpuiProjectSnapshotStoreResult, GpuiProjectSnapshotContractError> {
     /*
     CDXC:CefRuntime 2026-06-22-19:32:
@@ -28,10 +29,25 @@ pub(crate) fn store_latest_gpui_project_snapshot_from_sidebar_contract_json(
     CDXC:CefRuntime 2026-06-23-06:53:
     The store helper returns an explicit change result so bridge callers can no-op duplicate valid payloads. Parse and validate exactly as before, preserve the previous snapshot on errors, and replace the in-memory snapshot only after the parsed snapshot differs; do not add project/path/name heuristics, fallbacks, persistence, or logging of raw contract data.
     */
-    let snapshot = gpui_project_snapshot_from_sidebar_contract_json(text)?;
+    let value = serde_json::from_str::<serde_json::Value>(text)
+        .map_err(|_| GpuiProjectSnapshotContractError::MalformedJson)?;
+    let snapshot = gpui_project_snapshot_from_sidebar_contract_value(&value)?;
+    /*
+    CDXC:FocusRouting 2026-09-19 WHY:
+    `focusStamp` was the newest store focus stamp the sidebar runtime had been told when it produced this payload, the same echo its focus state carried. A project context produced before the runtime heard of a newer local selection must not swap the workspace: the focus state that rides with it is judged stale and would swap it straight back (two workspace swaps and a lost click). The caller decides through `admit`; a payload it refuses is not stored, so the stored snapshot never names a project the workspace did not follow. Since the runtime was deleted on 2026-09-25 the only producer is the store's own publish (gx_store/focus_publish.rs), which sends no stamp and publishes the context again on its next focus change.
+    */
+    let focus_stamp = match value.get("focusStamp") {
+        None => None,
+        Some(stamp) => Some(
+            stamp
+                .as_u64()
+                .ok_or(GpuiProjectSnapshotContractError::MalformedField)?,
+        ),
+    };
     if latest_snapshot
         .as_ref()
         .is_some_and(|latest_snapshot| latest_snapshot == &snapshot)
+        || !admit(&snapshot, focus_stamp)
     {
         return Ok(GpuiProjectSnapshotStoreResult::Unchanged);
     }
@@ -54,7 +70,7 @@ pub(crate) fn gpui_project_snapshot_from_sidebar_contract_value(
     value: &serde_json::Value,
 ) -> Result<GpuiProjectSnapshot, GpuiProjectSnapshotContractError> {
     let object = gpui_contract_object(value)?;
-    reject_unexpected_contract_keys(object, &["version", "type", "activeProject"])?;
+    reject_unexpected_contract_keys(object, &["version", "type", "activeProject", "focusStamp"])?;
 
     let version = object
         .get("version")
@@ -76,102 +92,6 @@ pub(crate) fn gpui_project_snapshot_from_sidebar_contract_value(
         .get("activeProject")
         .ok_or(GpuiProjectSnapshotContractError::MissingField)?;
     gpui_project_snapshot_from_contract_project_value(active_project)
-}
-
-pub(crate) fn gpui_sidebar_workspace_terminal_focus_from_json(
-    text: &str,
-) -> Result<GpuiSidebarWorkspaceTerminalFocusMessage, GpuiGxserverPresentationFocusStateContractError>
-{
-    let value = serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|_| GpuiGxserverPresentationFocusStateContractError::MalformedJson)?;
-    gpui_sidebar_workspace_terminal_focus_from_value(&value)
-}
-
-pub(crate) fn gpui_sidebar_workspace_terminal_focus_from_value(
-    value: &serde_json::Value,
-) -> Result<GpuiSidebarWorkspaceTerminalFocusMessage, GpuiGxserverPresentationFocusStateContractError>
-{
-    let object = gpui_gxserver_focus_contract_object(value)?;
-    reject_unexpected_gxserver_focus_contract_keys(
-        object,
-        &[
-            "version",
-            "type",
-            "forceRemount",
-            "placement",
-            "placementTargetSessionId",
-            "preferredInterface",
-            "projectId",
-            "sessionId",
-            "startupRestore",
-            "keepView",
-        ],
-    )?;
-
-    let version = object
-        .get("version")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion)?;
-    if version != GPUI_SIDEBAR_WORKSPACE_TERMINAL_FOCUS_MESSAGE_VERSION {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion);
-    }
-
-    let message_type = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType)?;
-    if message_type != GPUI_SIDEBAR_WORKSPACE_TERMINAL_FOCUS_MESSAGE_TYPE {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType);
-    }
-
-    let project_id = gxserver_workspace_focus_project_id_field(object, "projectId")?;
-    let session_id = gxserver_workspace_focus_session_id_field(object, "sessionId")?;
-    let placement_target_session_id = object
-        .get("placementTargetSessionId")
-        .map(|_| gxserver_workspace_focus_session_id_field(object, "placementTargetSessionId"))
-        .transpose()?;
-    let force_remount = match object.get("forceRemount") {
-        None => false,
-        Some(value) => value
-            .as_bool()
-            .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedJson)?,
-    };
-    let placement = match object.get("placement") {
-        None => GpuiWorkspaceTerminalFocusPlacement::Tab,
-        Some(value) => value
-            .as_str()
-            .and_then(GpuiWorkspaceTerminalFocusPlacement::from_str)
-            .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedJson)?,
-    };
-    let preferred_interface = match object.get("preferredInterface") {
-        None => GpuiPreferredAgentInterface::Terminal,
-        Some(value) => value
-            .as_str()
-            .and_then(GpuiPreferredAgentInterface::from_str)
-            .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedJson)?,
-    };
-    let startup_restore = match object.get("startupRestore") {
-        None => false,
-        Some(value) => value
-            .as_bool()
-            .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedJson)?,
-    };
-    let keep_view = match object.get("keepView") {
-        None => false,
-        Some(value) => value
-            .as_bool()
-            .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedJson)?,
-    };
-    Ok(GpuiSidebarWorkspaceTerminalFocusMessage {
-        force_remount,
-        placement,
-        placement_target_session_id,
-        preferred_interface,
-        project_id,
-        session_id,
-        startup_restore,
-        keep_view,
-    })
 }
 
 pub(crate) fn gpui_sidebar_create_project_agent_from_json(
@@ -350,83 +270,4 @@ pub(crate) fn gpui_sidebar_workspace_terminal_rename_command_from_value(
         session_id,
         title,
     })
-}
-
-pub(crate) fn gpui_sidebar_workspace_terminal_enter_from_json(
-    text: &str,
-) -> Result<GpuiSidebarWorkspaceTerminalEnterMessage, GpuiGxserverPresentationFocusStateContractError>
-{
-    let value = serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|_| GpuiGxserverPresentationFocusStateContractError::MalformedJson)?;
-    gpui_sidebar_workspace_terminal_enter_from_value(&value)
-}
-
-pub(crate) fn gpui_sidebar_workspace_terminal_enter_from_value(
-    value: &serde_json::Value,
-) -> Result<GpuiSidebarWorkspaceTerminalEnterMessage, GpuiGxserverPresentationFocusStateContractError>
-{
-    let object = gpui_gxserver_focus_contract_object(value)?;
-    reject_unexpected_gxserver_focus_contract_keys(
-        object,
-        &["version", "type", "projectId", "sessionId"],
-    )?;
-
-    let version = object
-        .get("version")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion)?;
-    if version != GPUI_SIDEBAR_WORKSPACE_TERMINAL_ENTER_MESSAGE_VERSION {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion);
-    }
-
-    let message_type = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType)?;
-    if message_type != GPUI_SIDEBAR_WORKSPACE_TERMINAL_ENTER_MESSAGE_TYPE {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType);
-    }
-
-    let project_id = gxserver_workspace_focus_project_id_field(object, "projectId")?;
-    let session_id = gxserver_workspace_focus_session_id_field(object, "sessionId")?;
-    Ok(GpuiSidebarWorkspaceTerminalEnterMessage {
-        project_id,
-        session_id,
-    })
-}
-
-pub(crate) fn gpui_sidebar_session_completion_sound_from_json(
-    text: &str,
-) -> Result<String, GpuiGxserverPresentationFocusStateContractError> {
-    let value = serde_json::from_str::<serde_json::Value>(text)
-        .map_err(|_| GpuiGxserverPresentationFocusStateContractError::MalformedJson)?;
-    let object = gpui_gxserver_focus_contract_object(&value)?;
-    reject_unexpected_gxserver_focus_contract_keys(object, &["version", "type", "sound"])?;
-
-    let version = object
-        .get("version")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion)?;
-    if version != GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MESSAGE_VERSION {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedVersion);
-    }
-
-    let message_type = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType)?;
-    if message_type != GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MESSAGE_TYPE {
-        return Err(GpuiGxserverPresentationFocusStateContractError::UnexpectedMessageType);
-    }
-
-    let sound = object
-        .get("sound")
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::MissingField)?
-        .as_str()
-        .ok_or(GpuiGxserverPresentationFocusStateContractError::MalformedField)?;
-    let trimmed = sound.trim();
-    if trimmed.is_empty() || trimmed.len() > GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MAX_CHARS {
-        return Err(GpuiGxserverPresentationFocusStateContractError::MalformedField);
-    }
-    Ok(trimmed.to_string())
 }

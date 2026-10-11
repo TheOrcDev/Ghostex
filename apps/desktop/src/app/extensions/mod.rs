@@ -1,4 +1,3 @@
-mod chat_bar;
 mod context;
 mod launch;
 mod permissions;

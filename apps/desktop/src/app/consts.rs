@@ -22,27 +22,15 @@ pub(crate) const GPUI_SESSION_CHAT_DRAFT_TRANSFER_TIMEOUT: Duration = Duration::
 CDXC:SessionChat 2026-08-21:
 The terminal view's "Queued: N" chip needs the queue size for the handful of
 sessions actually on screen in terminal mode. gxserver publishes the same count
-as `queuedPromptCount` on its presentation snapshot, which the sidebar runtime
-already receives; when that field reaches Rust through the focus-state tab
-sessions this read should be deleted rather than kept beside it. Until then the
+as `queuedPromptCount` on its presentation snapshot, which the Rust store
+already receives (gx_store/sidebar_snapshot.rs); when the terminal view reads
+that field from the store this read should be deleted rather than kept beside it. Until then the
 poll stays deliberately narrow: Agents mode only, visible panes only, the active
 tab only, chat-capable sessions only — never a per-session sweep of the project.
 */
 pub(crate) const GPUI_SESSION_CHAT_QUEUE_COUNT_POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 pub(crate) const GPUI_SESSION_CHAT_QUEUE_COUNT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Confirmed idle, empty pages enter the reusable renderer pool immediately.
-/// Age and count limits apply to unused pooled renderers; protected session bindings stay mounted until their fresh release probe succeeds.
-pub(crate) const GPUI_AGENTS_CHAT_SURFACE_HIDDEN_EVICT_AFTER: Duration =
-    Duration::from_secs(5 * 60);
-
-/// CDXC:SessionChat 2026-09-13 DECISION:
-/// User approved app-wide shared chat state and renderer ownership tied to visible panes, retaining the three spare pages and five-minute expiry.
-/// Durable drafts and active streams outlive mounted pages; only unfinished UI operations and unconfirmed draft transfers protect a hidden binding.
-pub(crate) const GPUI_AGENTS_CHAT_SURFACE_HIDDEN_MAX: usize = 3;
-
-pub(crate) const GPUI_AGENTS_CHAT_SURFACE_EVICT_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 #[cfg(target_os = "linux")]
 pub(crate) static GPUI_LINUX_WINDOW_ICON: std::sync::OnceLock<Arc<image::RgbaImage>> =
@@ -66,24 +54,64 @@ pub(crate) static GPUI_TITLEBAR_FOREGROUND_RGB: AtomicU64 = AtomicU64::new(0xfff
 
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 235.0;
 
-pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 150.0;
+/// CDXC:Sidebar 2026-09-21 DECISION:
+/// User: the sidebar cannot be dragged narrower than 190px (was 150px). A saved width below it is clamped up on the next start.
+#[cfg(not(target_os = "windows"))]
+pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 190.0;
+
+/// CDXC:Sidebar 2026-10-05 DECISION:
+/// User: "300 px min sidebar width on windows is good", then corrected: "i want 300px actual px
+/// with 1.5x scaling not 450". On Windows the sidebar cannot be dragged narrower than 200 logical
+/// px (300 physical px at 150% display scaling), and a saved width below it is clamped up on the
+/// next start. At that width the top row holds exactly Search, Notifications and the menu button,
+/// and Send Feedback lives in the menu. macOS and Linux keep 190px. This supersedes the 300 logical
+/// px minimum set earlier the same day.
+#[cfg(target_os = "windows")]
+pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 
 pub(crate) const SIDEBAR_MAX_WIDTH: f32 = 520.0;
 
 pub(crate) const SIDEBAR_RESET_WIDTH: f32 = 235.0;
 
-/// The native resize rail between the sidebar column and the Agents
-/// workspace. It is painted with the workspace background so it reads as a
-/// 5px black gap, mirrored on both sidebar sides:
-/// `window edge | sidebar page | 5px rail | workspace` on the left and the
-/// reverse on the right. The sidebar page's own CSS supplies the 5px
-/// sidebar-colored gutters on both of its edges, so the native column adds
-/// no padding of its own.
-pub(crate) const SIDEBAR_DIVIDER_WIDTH: f32 = 5.0;
+/// CDXC:Sidebar 2026-09-28 DECISION:
+/// User: the Commands row collapses to an icon-only button below a 260px sidebar, with its label
+/// and shortcut moved into a tooltip and its buttons aligned right. The Search button is always
+/// icon-only, which supersedes the 2026-09-21 340px Search threshold.
+/// CDXC:Sidebar 2026-10-11 DECISION:
+/// User: at a sidebar width of 441px or less the Commands area is just the lightning icon button
+/// (tooltip "Commands (Ctrl+Shift+P)"), because the word was cut off ("Comm"); above 441px it
+/// shows as before. "exactly at 441px as i see it don't do weird scaling calculations please",
+/// then "no fam i said 441px you did ~663": 441 means real screen pixels as the user sees them
+/// (a ~150% display makes 441 real px about 294 logical), so the sidebar's logical width times the
+/// window's display scale factor is compared with this number, with no UI zoom applied on top.
+/// This supersedes the 260px threshold above.
+pub(crate) const SIDEBAR_COMPACT_COMMANDS_WIDTH: f32 = 441.0;
 
-pub(crate) const SIDEBAR_DIVIDER_LINE_WIDTH: f32 = 1.0;
+/*
+CDXC:Sidebar 2026-09-20 DECISION:
+User: the session list fades out at its bottom end only, into the usage strip and the Commands row.
+The matching ramp at the top was removed; nothing shades the list under the project header. There is
+still no rule under the Search row and none above the usage strip or the Commands row, so this one
+ramp is the only edge the list has. Its height is screen 01's own mask (the `calc(100% - 28px)` stop
+of `linear-gradient(transparent, #000 22px, #000 calc(100% - 28px), transparent)` in
+docs/2026-09-19/titlebarless-workspace/shared.css). This supersedes both the 2026-09-19 rule that
+framed the list with a hairline at each end and the earlier 2026-09-20 rule that faded both ends.
+SEE-ALSO: apps/desktop/src/app/native_sidebar/scroll_fade.rs, apps/desktop/src/app/native_sidebar/navigation.rs.
+*/
+pub(crate) const SIDEBAR_LIST_BOTTOM_FADE_HEIGHT: f32 = 28.0;
 
-pub(crate) const SIDEBAR_DIVIDER_HOVER_LINE_WIDTH: f32 = 3.0;
+/// CDXC:Workarea 2026-09-19 DECISION:
+/// User: resize rails between areas (sidebar, main area, companion sidepanes, command pane, pane splits) should look like Waku's instead of 5px black gaps: one 1px line between sections, with as few double border lines as possible.
+/// Every rail is therefore a 1px reserved layout sibling in its neighbours' neutral border colour, panes leave their own border off the sides that touch a rail, and hovering or dragging shows a 2px accent line. The grab area is the wider invisible strip in `render/resize_rail.rs`. This supersedes the 5px gap rails with a centred 3px hover line.
+pub(crate) const SIDEBAR_DIVIDER_WIDTH: f32 = 1.0;
+
+/// How far a rail's invisible grab strip reaches into each neighbouring pane.
+pub(crate) const RESIZE_RAIL_GRAB_REACH: f32 = 4.0;
+
+/// The reach of a grab strip that lies on one side of its rail only, because the other side is a CEF page.
+pub(crate) const RESIZE_RAIL_GRAB_ONE_SIDED_REACH: f32 = 7.0;
+
+pub(crate) const SIDEBAR_DIVIDER_HOVER_LINE_WIDTH: f32 = 2.0;
 
 /* A chat file link routed to Docs waits this long for the Manage surface. */
 pub(crate) const PENDING_DOCS_FILE_OPEN_RETRY_INTERVAL: Duration = Duration::from_millis(120);
@@ -105,14 +133,6 @@ pub(crate) const SIDEBAR_DIVIDER_HOVER_FADE_DURATION: Duration = Duration::from_
 pub(crate) const COMMAND_ACTION_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(crate) const CEF_DARK_PREPAINT_BACKGROUND_COLOR: u32 = 0xFF0E0E0E;
-
-pub(crate) const CEF_SESSION_CHAT_DARK_PREPAINT_BACKGROUND_COLOR: u32 = 0xFF0D0D0D;
-
-/* Find keeps the older near-black its own page paints; only the chat surface
-moved. */
-pub(crate) const CEF_FIND_PROMPTS_DARK_PREPAINT_BACKGROUND_COLOR: u32 = 0xFF111111;
-
-pub(crate) const CEF_LIGHT_PREPAINT_BACKGROUND_COLOR: u32 = 0xFFFDFDFD;
 
 /// Matches `ghostexEditorProtocolVersion` in apps/editor/macos DaemonSupport.swift.
 pub(crate) const GHOSTEX_EDITOR_PROTOCOL_VERSION: u64 = 1;
@@ -168,48 +188,108 @@ pub(crate) const ACCOUNT_INDICATOR_FONT_FAMILY: &str = ".AppleSystemUIFontMonosp
 #[cfg(not(target_os = "macos"))]
 pub(crate) const ACCOUNT_INDICATOR_FONT_FAMILY: &str = "monospace";
 
-pub(crate) const TITLEBAR_HEIGHT: f32 = 28.0;
+/*
+CDXC:Titlebar 2026-09-20 DECISION:
+User: the window has no titlebar row any more. A header inside the workspace column takes over its
+job, with no line under it: it paints the workspace background and the content fades out beneath it.
+This supersedes every rule that positioned something "below the titlebar"; the header's measured
+bottom edge (`workarea_header_bottom_y`) is the only anchor now, and `TITLEBAR_HEIGHT` is gone.
+SEE-ALSO: apps/desktop/src/app/render/workarea_header/, apps/desktop/src/app/render/root.rs.
+*/
+pub(crate) const WORKAREA_HEADER_HEIGHT: f32 = 36.0;
 
-pub(crate) const TITLEBAR_CONTROL_HEIGHT: f32 = TITLEBAR_HEIGHT - 1.0;
+/*
+CDXC:Titlebar 2026-09-20 WHY:
+How far below the floating header's bottom edge the content passing under it finishes fading out.
+The ramp lives in the column that owns that content, so it is only ever painted over scrolling
+content, never over a pane outline or a tab bar; the decision it serves is on the header itself in
+render/workarea_header/shell.rs.
+*/
+pub(crate) const WORKAREA_HEADER_FADE_HEIGHT: f32 = 28.0;
 
+/// Below this workspace-column width the header drops its labels and the project half of the
+/// breadcrumb, the way the mockup's narrow chat column does.
+pub(crate) const WORKAREA_HEADER_COMPACT_WIDTH: f32 = 720.0;
+
+/// The header's own left and right edge padding, matching the old titlebar inset.
+pub(crate) const WORKAREA_HEADER_EDGE_PADDING: f32 = 9.0;
+
+/*
+CDXC:Titlebar 2026-09-20 WHY:
+The macOS traffic lights are a window option (`traffic_light_position` in main.rs), not a child of
+any row, so whatever occupies the window's top-left has to leave them room: the sidebar's Search row
+while the sidebar is expanded, the workarea header while it is collapsed. The three 12px lights run
+from x=11 to x=63, and 79 is where the old titlebar put its first control, so both reserves use it.
+Windows and Linux draw their caption buttons as trailing header children instead, so they reserve
+nothing on the left.
+*/
 #[cfg(target_os = "macos")]
-pub(crate) const TITLEBAR_PROJECT_LEFT: f32 = 88.0;
+pub(crate) const WINDOW_CONTROLS_LEADING_RESERVE: f32 = 79.0;
+
+/// CDXC:Titlebar 2026-09-23 DECISION:
+/// User: on Windows and Linux the Toggle sidebar and Agents Panel buttons sit at the top left of
+/// the sidebar, as on macOS, from the same code; the only difference is that macOS clears its
+/// traffic lights first. This is the button's window x on every OS, whichever of the docked
+/// Search row or the collapsed header draws it. Off macOS it is the reveal edge strip's width, so
+/// the collapsed header, which starts right of that strip, draws it flush and it does not move.
+#[cfg(target_os = "macos")]
+pub(crate) const SIDEBAR_TOGGLE_LEADING_X: f32 = WINDOW_CONTROLS_LEADING_RESERVE;
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) const TITLEBAR_PROJECT_LEFT: f32 = 9.0;
+pub(crate) const SIDEBAR_TOGGLE_LEADING_X: f32 =
+    crate::app::floating_reveal::model::FLOATING_REVEAL_EDGE_WIDTH;
+
+/// Height of the header's own controls (buttons, split buttons, mode tabs).
+pub(crate) const TITLEBAR_CONTROL_HEIGHT: f32 = 27.0;
 
 pub(crate) const TITLEBAR_PROJECT_CONTEXT_DISABLED_REASON: &str =
     "Switch to a project to access this view";
 
-/*
-CDXC:Titlebar 2026-08-20:
-Source (Code) has no working remote runtime yet: code-server is launched on this
-machine against a local path, so a machine-scoped remote project would open the
-wrong tree. Disable the tab for remote projects through the same availability
-contract the Quick/projectless reasons use, so the tab click, the compact mode
-menu, hotkeys, and restored-mode coercion all refuse it in one place.
-*/
-pub(crate) const TITLEBAR_REMOTE_SOURCE_DISABLED_REASON: &str =
-    "Code is currently disabled for remote projects";
-
-#[cfg(target_os = "macos")]
-pub(crate) const TITLEBAR_COMPACT_MODE_WIDTH_THRESHOLD: f32 = 1050.0;
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) const TITLEBAR_COMPACT_MODE_WIDTH_THRESHOLD: f32 = 1330.0;
-
+/// Fixed square width kept only for the Linux caption-control gap; every other header button sizes
+/// to its icon now.
+#[cfg(target_os = "linux")]
 pub(crate) const TITLEBAR_BUTTON_WIDTH: f32 = 42.0;
 
 /*
-CDXC:Titlebar 2026-09-06 DECISION:
-User: the leading titlebar buttons - sidebar collapse, update, Back and
-Forward - are one square button family of the same width, so they read as a
-row instead of three differently sized affordances. Back/Forward and update
-additionally stand 1px taller than TITLEBAR_CONTROL_HEIGHT at the top and the
-bottom.
+CDXC:Titlebar 2026-09-19 DECISION:
+User: the trailing titlebar icon buttons and the browser address bar buttons have no border lines
+between them and no gap; each button is its icon plus 7px of padding on each side, so two
+neighbouring icons sit 14px apart. The leading buttons (sidebar collapse,
+update, Back, reveal session, Forward, Notifications) use the same padding so their gaps match
+the right side; this supersedes the 2026-09-06 fixed 29px leading width.
 */
-pub(crate) const TITLEBAR_LEADING_BUTTON_WIDTH: f32 = 29.0;
+pub(crate) const TITLEBAR_BUTTON_HORIZONTAL_PADDING: f32 = 7.0;
 
+/*
+CDXC:Titlebar 2026-09-20 DECISION:
+User: every header button carries the same corner rounding the Quick Actions split button already
+had, so the sidebar toggle, Back/Forward, the reveal-session dot, the ⋯ menu and the two panel
+toggles round their hover and active fills exactly like Start / Open / Commit.
+*/
+pub(crate) const TITLEBAR_BUTTON_RADIUS: f32 = 7.0;
+
+/*
+CDXC:Titlebar 2026-09-19 DECISION:
+User: the mode tabs are "soft segments" (mockup style 10): today's active and hover fills with
+the hairlines removed, 21px tall (22px trimmed by 1px from the top, so the bottom edge stays put)
+with 6px corners, 2px apart, 12px side padding. Exit Focus and the compact view dropdown reuse
+the same metrics because both are styled as a mode tab.
+*/
+pub(crate) const TITLEBAR_MODE_TAB_HEIGHT: f32 = 21.0;
+
+/// Pushes the tab row down so the 1px trimmed off the tab height comes off the top edge.
+pub(crate) const TITLEBAR_MODE_TAB_TOP_INSET: f32 = 1.0;
+
+pub(crate) const TITLEBAR_MODE_TAB_RADIUS: f32 = 6.0;
+
+pub(crate) const TITLEBAR_MODE_TAB_HORIZONTAL_PADDING: f32 = 12.0;
+
+/*
+CDXC:Titlebar 2026-09-06 DECISION:
+User: Back/Forward and update stand 1px taller than TITLEBAR_CONTROL_HEIGHT at
+the top and the bottom. (The same decision's shared 29px width was replaced on
+2026-09-19 by TITLEBAR_BUTTON_HORIZONTAL_PADDING.)
+*/
 pub(crate) const TITLEBAR_LEADING_TALL_BUTTON_HEIGHT: f32 = TITLEBAR_CONTROL_HEIGHT + 2.0;
 
 pub(crate) const TITLEBAR_TOOLTIP_HEIGHT: f32 = 20.0;
@@ -220,12 +300,6 @@ pub(crate) const TITLEBAR_TOOLTIP_LINE_HEIGHT: f32 = 18.0;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) const TITLEBAR_WINDOW_BUTTON_WIDTH: f32 = 46.0;
-
-pub(crate) const TITLEBAR_SETTINGS_BUTTON_WIDTH: f32 = 45.0;
-
-pub(crate) const TITLEBAR_DROPDOWN_TIPS_PANEL_WIDTH: f32 = 556.0;
-
-pub(crate) const TITLEBAR_DROPDOWN_READING_PANEL_HEIGHT: f32 = 650.0;
 
 pub(crate) const TITLEBAR_PROJECT_LABEL_FALLBACK: &str = "Ghostex";
 
@@ -252,11 +326,6 @@ pub(crate) const GPUI_TITLEBAR_GIT_MENU_BRANCH_MAX_CHARS: usize = 200;
 
 pub(crate) const GPUI_TITLEBAR_GIT_MENU_MAX_ROWS: usize = 16;
 
-pub(crate) const GPUI_SIDEBAR_TITLEBAR_GIT_ACTION_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_TITLEBAR_GIT_ACTION_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.titlebarGitAction";
-
 pub(crate) const GPUI_TITLEBAR_GIT_ACTION_REFRESH_SELECTOR: &str = "refresh";
 
 pub(crate) const GPUI_SIDEBAR_COMMAND_ACTION_MESSAGE_VERSION: u64 = 1;
@@ -264,20 +333,10 @@ pub(crate) const GPUI_SIDEBAR_COMMAND_ACTION_MESSAGE_VERSION: u64 = 1;
 pub(crate) const GPUI_SIDEBAR_COMMAND_ACTION_MESSAGE_TYPE: &str =
     "ghostex.gpui.sidebar.commandAction";
 
-pub(crate) const GPUI_SIDEBAR_COMMAND_RUN_END_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_COMMAND_RUN_END_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.commandRunEnd";
-
 pub(crate) const GPUI_SIDEBAR_GXSERVER_FOCUS_STATE_MESSAGE_VERSION: u64 = 1;
 
 pub(crate) const GPUI_SIDEBAR_GXSERVER_FOCUS_STATE_MESSAGE_TYPE: &str =
     "ghostex.gpui.sidebar.gxserverPresentationFocusState";
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_FOCUS_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_FOCUS_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalFocus";
 
 pub(crate) const GPUI_SIDEBAR_CREATE_PROJECT_AGENT_MESSAGE_VERSION: u64 = 1;
 
@@ -296,80 +355,23 @@ pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_RENAME_COMMAND_MESSAGE_TYPE: &s
 
 pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_RENAME_COMMAND_TITLE_MAX_CHARS: usize = 120;
 
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_ENTER_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_ENTER_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalEnter";
-
 pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_LIFECYCLE_REQUEST_MESSAGE_VERSION: u64 = 1;
 
 pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_LIFECYCLE_REQUEST_MESSAGE_TYPE: &str =
     "ghostex.gpui.sidebar.workspaceTerminalLifecycleRequest";
 
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_LIFECYCLE_RESULT_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_LIFECYCLE_RESULT_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalLifecycleResult";
-
 pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_LIFECYCLE_REQUEST_ID_MAX: u64 =
     9_007_199_254_740_991;
 
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_BELL_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_BELL_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalBell";
-
-#[cfg(target_os = "windows")]
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_TITLE_CHANGED_MESSAGE_VERSION: u64 = 1;
-
-#[cfg(target_os = "windows")]
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_TITLE_CHANGED_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalTitleChanged";
-
 #[cfg(target_os = "windows")]
 pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_TITLE_MAX_CHARS: usize = 512;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_ESCAPE_PRESSED_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_ESCAPE_PRESSED_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalEscapePressed";
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_FIRST_PROMPT_TITLE_CANCEL_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_FIRST_PROMPT_TITLE_CANCEL_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceFirstPromptTitleGenerationCancel";
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_SESSION_ATTENTION_ACKNOWLEDGE_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_SESSION_ATTENTION_ACKNOWLEDGE_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceSessionAttentionAcknowledge";
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TERMINAL_RUNTIME_ACTION_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTerminalRuntimeAction";
-
-pub(crate) const GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.sessionCompletionSound";
-
-pub(crate) const GPUI_SIDEBAR_SESSION_COMPLETION_SOUND_MAX_CHARS: usize = 64;
 
 pub(crate) const GPUI_SIDEBAR_OPEN_BROWSER_URL_MESSAGE_VERSION: u64 = 1;
 
 pub(crate) const GPUI_SIDEBAR_OPEN_BROWSER_URL_MESSAGE_TYPE: &str =
     "ghostex.gpui.sidebar.openBrowserUrl";
 
-pub(crate) const GPUI_SIDEBAR_BROWSER_TAB_FOCUS_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.browserTabFocus";
-
 pub(crate) const GPUI_SIDEBAR_OPEN_BROWSER_URL_MAX_CHARS: usize = 16 * 1024;
-
-pub(crate) const GPUI_SIDEBAR_PROJECT_BOARD_CONVERSATION_REQUEST_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_PROJECT_BOARD_CONVERSATION_REQUEST_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.projectBoardConversationRequest";
 
 pub(crate) const GPUI_SIDEBAR_PROJECT_BOARD_CONVERSATION_RESPONSE_MESSAGE_VERSION: u64 = 1;
 
@@ -429,58 +431,6 @@ Actions past the cap stay runnable from Settings and Ghostex Quick Access.
 */
 pub(crate) const GPUI_TAB_STRIP_MAX_GLOBAL_ACTIONS: usize = 8;
 
-pub(crate) const GPUI_SIDEBAR_STATUS_PET_ACTIVATION_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_STATUS_PET_ACTIVATION_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.statusPetActivation";
-
-pub(crate) const GPUI_SIDEBAR_MENU_BAR_PROJECT_ACTIVATION_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_MENU_BAR_PROJECT_ACTIVATION_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.menuBarProjectActivation";
-
-pub(crate) const GPUI_SIDEBAR_MENU_BAR_SESSION_ACTIVATION_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_MENU_BAR_SESSION_ACTIVATION_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.menuBarSessionActivation";
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TAB_SESSION_SELECTED_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TAB_SESSION_SELECTED_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.workspaceTabSessionSelected";
-
-pub(crate) const GPUI_SIDEBAR_COMMAND_PALETTE_SESSION_FOCUS_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_COMMAND_PALETTE_SESSION_FOCUS_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.commandPaletteSessionFocus";
-
-pub(crate) const GPUI_SIDEBAR_STASHED_PROMPT_SESSION_JUMP_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_STASHED_PROMPT_SESSION_JUMP_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.stashedPromptSessionJump";
-
-pub(crate) const GPUI_SIDEBAR_COMMAND_PALETTE_RUN_COMMAND_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_COMMAND_PALETTE_RUN_COMMAND_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.commandPaletteRunSidebarCommand";
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.nativeAppShotCaptured";
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_PROMPT_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_PROMPT_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.nativeAppShotPrompt";
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_PROMPT_RESULT_MESSAGE_VERSION: u64 = 1;
-
-pub(crate) const GPUI_SIDEBAR_NATIVE_APP_SHOT_PROMPT_RESULT_MESSAGE_TYPE: &str =
-    "ghostex.gpui.sidebar.nativeAppShotPromptResult";
-
-pub(crate) const GPUI_SIDEBAR_REMOTE_EVENT_NAME: &str = "ghostex-gpui-sidebar-remote-event";
-
 pub(crate) const GPUI_PROJECT_CONTRACT_STRING_MAX_CHARS: usize = 512;
 
 pub(crate) const GPUI_PROJECT_CONTRACT_PATH_MAX_CHARS: usize = 4096;
@@ -493,11 +443,10 @@ pub(crate) const GPUI_TITLEBAR_OPEN_TARGET_SELECTIONS_SETTINGS_KEY: &str =
 pub(crate) const GPUI_TITLEBAR_ACTION_SELECTIONS_SETTINGS_KEY: &str =
     "gpuiTitlebarActionCommandByProject";
 
-pub(crate) const GPUI_NATIVE_APP_SHOT_PROMPT_MAX_CHARS: usize = 24 * 1024;
-
 pub(crate) const GPUI_SIDEBAR_VISIBLE_SESSION_IDS_MAX: usize = 64;
 
-pub(crate) const GPUI_SIDEBAR_WORKSPACE_TAB_SESSIONS_MAX: usize = 128;
+/// CDXC:Workarea 2026-09-21 WHY: This is a sanity bound on a renderer payload, not a product limit, and nothing limits how many sessions a project holds. At 128 the project's 129th session made Rust refuse every focus-state payload whole (and the persisted session mappings on the next start), so the tab list froze: no session there was chat eligible, the terminal agent bar disappeared, Chat View did nothing, and no focus stamp was ever confirmed again. Keep it far above any real project.
+pub(crate) const GPUI_SIDEBAR_WORKSPACE_TAB_SESSIONS_MAX: usize = 4096;
 
 pub(crate) const GPUI_STATUS_INDICATOR_MAX_PROJECTS: usize = 32;
 
@@ -541,8 +490,6 @@ pub(crate) const SIDEBAR_FOCUS_BORDER_HANDOFF_TIMEOUT: Duration = Duration::from
 
 pub(crate) const GPUI_PET_OVERLAY_IDLE_SPEED_MULTIPLIER: u64 = 6;
 
-pub(crate) const GPUI_LOCAL_APP_SHOT_SESSION_MAP_MAX: usize = 64;
-
 pub(crate) const GPUI_REMOTE_MACHINE_ID_MAX_CHARS: usize = 80;
 
 pub(crate) const TITLEBAR_ICON_INFO: &str = "titlebar/info-circle.svg";
@@ -552,6 +499,8 @@ pub(crate) const TITLEBAR_ICON_HELP: &str = "titlebar/help-circle.svg";
 pub(crate) const TITLEBAR_ICON_DEVICE_DESKTOP: &str = "titlebar/device-desktop.svg";
 
 pub(crate) const TITLEBAR_ICON_EXTENSIONS: &str = "titlebar/puzzle.svg";
+
+pub(crate) const TITLEBAR_ICON_DOTS: &str = "titlebar/dots.svg";
 
 pub(crate) const TITLEBAR_ICON_GIT_COMMIT: &str = "titlebar/git-commit.svg";
 
@@ -563,22 +512,27 @@ pub(crate) const TITLEBAR_ICON_VSCODE: &str = "titlebar/vscode.svg";
 
 pub(crate) const TITLEBAR_ICON_CHEVRON_LEFT: &str = "titlebar/chevron-left.svg";
 
+pub(crate) const TITLEBAR_ICON_CHEVRON_RIGHT: &str = "titlebar/chevron-right.svg";
+
 pub(crate) const TITLEBAR_ICON_CHEVRON_DOWN: &str = "titlebar/chevron-down.svg";
 
 pub(crate) const TITLEBAR_ICON_LAYOUT_SIDEBAR: &str = "titlebar/layout-sidebar.svg";
-
-pub(crate) const TITLEBAR_ICON_COMPANION_HIDE: &str = "titlebar/companion-hide.svg";
-
-pub(crate) const TITLEBAR_ICON_COMPANION_SHOW: &str = "titlebar/companion-show.svg";
 
 pub(crate) const TITLEBAR_ICON_LAYOUT_SIDEBAR_LEFT_EXPAND: &str =
     "titlebar/layout-sidebar-left-expand.svg";
 
 pub(crate) const TITLEBAR_ICON_LAYOUT_BOARD_SPLIT: &str = "titlebar/layout-board-split.svg";
 
-pub(crate) const TITLEBAR_ICON_LAYOUT_SPLIT_VERTICAL: &str = "titlebar/layout-split-vertical.svg";
-
 pub(crate) const TITLEBAR_ICON_LAYOUT_SINGLE_PANE: &str = "titlebar/layout-single-pane.svg";
+
+pub(crate) const TITLEBAR_ICON_LAYOUT_COLUMNS: &str = "titlebar/layout-columns.svg";
+
+pub(crate) const TITLEBAR_ICON_PANEL_BOTTOM: &str = "titlebar/panel-bottom.svg";
+
+pub(crate) const TITLEBAR_ICON_PANEL_RIGHT: &str = "titlebar/panel-right.svg";
+
+pub(crate) const TITLEBAR_ICON_TERMINAL: &str = "titlebar/terminal-2.svg";
+pub(crate) const TITLEBAR_ICON_MESSAGE: &str = "titlebar/message.svg";
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) const TITLEBAR_ICON_WINDOW_MINIMIZE: &str = "titlebar/window-minimize.svg";
@@ -610,7 +564,27 @@ pub(crate) const TITLEBAR_ICON_GIT_PULL_REQUEST: &str = "titlebar/git-pull-reque
 
 pub(crate) const TITLEBAR_ICON_DOWNLOAD: &str = "titlebar/download.svg";
 
-pub(crate) const TITLEBAR_TIPS_READ_STORAGE_KEY: &str = "ghostex.titlebar.tips.readIds";
+pub(crate) const TITLEBAR_ICON_WORLD: &str = "titlebar/world.svg";
+
+pub(crate) const TITLEBAR_ICON_BOLT: &str = "titlebar/bolt.svg";
+pub(crate) const TITLEBAR_ICON_MESSAGES: &str = "titlebar/messages.svg";
+
+pub(crate) const TITLEBAR_ICON_FILE_TEXT: &str = "titlebar/file-text.svg";
+
+pub(crate) const TITLEBAR_ICON_PLUS: &str = "titlebar/plus.svg";
+
+pub(crate) const TITLEBAR_ICON_EYE_OFF: &str = "titlebar/eye-off.svg";
+
+pub(crate) const TITLEBAR_ICON_X: &str = "titlebar/x.svg";
+
+pub(crate) const TITLEBAR_ICON_EXTERNAL_LINK: &str = "titlebar/external-link.svg";
+
+pub(crate) const TITLEBAR_ICON_MAXIMIZE: &str = "titlebar/maximize.svg";
+
+pub(crate) const TITLEBAR_ICON_ARROWS_DIAGONAL: &str = "titlebar/arrows-diagonal.svg";
+
+pub(crate) const TITLEBAR_ICON_ARROWS_DIAGONAL_MINIMIZE: &str =
+    "titlebar/arrows-diagonal-minimize.svg";
 
 pub(crate) const TITLEBAR_TIP_IDS: &[&str] = &[
     "command-palette-all-actions",
@@ -658,13 +632,18 @@ pub(crate) const FIND_BAR_CLOSE_BUTTON_WIDTH: f32 = 41.0;
 
 pub(crate) const BROWSER_TOOLBAR_HEIGHT: f32 = 35.0;
 
-pub(crate) const BROWSER_TOOLBAR_BUTTON_WIDTH: f32 = TITLEBAR_BUTTON_WIDTH;
+/// CDXC:Browser 2026-09-21 DECISION:
+/// User: the address bar's buttons match the look of the view tab strip's buttons above them and line up with them. They use the strip's panel-toggle metrics (`TITLEBAR_CONTROL_HEIGHT` tall, `TITLEBAR_BUTTON_HORIZONTAL_PADDING` either side of an 18px icon, `TITLEBAR_BUTTON_RADIUS` corners, a 2px gap), start at the strip's 6px leading inset and end where the strip's panel toggles end (`WORKAREA_HEADER_EDGE_PADDING` plus `WORKAREA_HEADER_PINNED_GAP`, 2026-09-24). The Docs header mirrors the same numbers in `apps/desktop/views/manage/styles.ts`.
+pub(crate) const BROWSER_TOOLBAR_BUTTON_ICON_SIZE: f32 = TITLEBAR_SIDEBAR_COLLAPSE_ICON_SIZE;
 
-pub(crate) const BROWSER_TOOLBAR_BUTTON_ICON_SIZE: f32 = 16.0;
+pub(crate) const BROWSER_TOOLBAR_BUTTON_WIDTH: f32 =
+    BROWSER_TOOLBAR_BUTTON_ICON_SIZE + 2.0 * TITLEBAR_BUTTON_HORIZONTAL_PADDING;
+
+pub(crate) const BROWSER_TOOLBAR_LEADING_PADDING: f32 = 6.0;
 
 pub(crate) const BROWSER_TOOLBAR_HORIZONTAL_PADDING: f32 = 12.0;
 
-pub(crate) const BROWSER_TOOLBAR_ITEM_GAP: f32 = 0.0;
+pub(crate) const BROWSER_TOOLBAR_ITEM_GAP: f32 = 2.0;
 
 pub(crate) const BROWSER_TOOLBAR_ADDRESS_GAP: f32 = 18.0;
 
@@ -698,10 +677,6 @@ pub(crate) const BROWSER_FAVICON_IMAGE_MAX_PIXELS: u64 = 512 * 512;
 
 pub(crate) const BROWSER_FAVICON_IMAGE_MAX_FRAMES: usize = 16;
 
-pub(crate) const BROWSER_TAB_FAVICON_COLORS: [u32; 8] = [
-    0x3ed2a4, 0xffc857, 0xff7a7a, 0x8ba7ff, 0xb877ff, 0x52d6ff, 0xf28cc6, 0x9bd45a,
-];
-
 pub(crate) const BROWSER_TAB_CLOSE_SIZE: f32 = 20.0;
 
 pub(crate) const BROWSER_TAB_ACTION_BUTTON_SIZE: f32 = 42.0;
@@ -728,34 +703,6 @@ pub(crate) const APP_MODAL_HOST_CEF_PROFILE_ID: &str = "app-modal";
 
 pub(crate) const APP_MODAL_HOST_ID: &str = "ghostex-gpui-app-modal-host";
 
-/*
-CDXC:Onboarding 2026-08-13:
-YouTube rejects an iframe embedded by the file:// modal host because that
-request cannot carry the HTTP referrer identity required by the player. Keep
-the tutorial in the normal native child window, but load the watch page as its
-top-level CEF document so playback follows the same working path as Browser.
-*/
-pub(crate) const GHOSTEX_TUTORIAL_VIDEO_URL: &str = "https://www.youtube.com/watch?v=APdP-j5n4Mw";
-
-/// CDXC:Onboarding 2026-08-18: the watch page reports
-/// main-frame load-end before its player has installed keyboard shortcuts, so
-/// the host-side fullscreen key press waits this long after that edge.
-pub(crate) const GPUI_TUTORIAL_VIDEO_FULLSCREEN_KEY_DELAY: Duration = Duration::from_millis(1500);
-
-pub(crate) const TITLEBAR_TIPS_PANEL_CEF_PROFILE_ID: &str = "titlebar-tips-panel";
-
-pub(crate) const TITLEBAR_TIPS_PANEL_ID: &str = "ghostex-gpui-titlebar-tips-panel";
-
-pub(crate) const TITLEBAR_RESOURCES_PANEL_CEF_PROFILE_ID: &str = "titlebar-resources-panel";
-
-pub(crate) const TITLEBAR_RESOURCES_PANEL_ID: &str = "ghostex-gpui-titlebar-resources-panel";
-
-pub(crate) const TITLEBAR_DROPDOWN_RESOURCES_PANEL_WIDTH: f32 = 656.0;
-
-pub(crate) const GPUI_TITLEBAR_NATIVE_PROCESS_REQUEST_ID_MAX_CHARS: usize = 256;
-
-pub(crate) const GPUI_TITLEBAR_NATIVE_PROCESS_REJECTED_EXIT_CODE: i32 = 126;
-
 pub(crate) const APP_MODAL_HOST_WINDOW_WIDTH: f32 = 1080.0;
 
 pub(crate) const APP_MODAL_HOST_WINDOW_HEIGHT: f32 = 760.0;
@@ -775,25 +722,19 @@ pub(crate) const APP_MODAL_HOST_SIDEBAR_SPACE_EDITOR_WINDOW_WIDTH: f32 = 480.0;
 
 pub(crate) const APP_MODAL_HOST_SIDEBAR_SPACE_EDITOR_WINDOW_HEIGHT: f32 = 380.0;
 
-pub(crate) const APP_MODAL_HOST_PREVIOUS_SESSIONS_WINDOW_HEIGHT: f32 = 680.0;
+/// CDXC:AppModal 2026-09-22 DECISION:
+/// User: make the height of the Ghostex Quick Access modal 25% less. All four Quick Access tabs open on this one frame, 510px instead of the previous 680px.
+pub(crate) const APP_MODAL_HOST_PREVIOUS_SESSIONS_WINDOW_HEIGHT: f32 = 510.0;
 
-/*
- * CDXC:AgentLauncher 2026-09-09 DECISION:
- * User: the native New Thread picker is sized to its rows: the search field,
- * the key-hint row, one row per agent up to twelve, the divider, and the
- * Browser and Terminal rows; more agents scroll. The chrome height is the 6px
- * top inset, 36px search field, 26px hint row, 2px list inset, 9px divider,
- * two 36px rows, the 6px bottom inset, and the 2px frame border.
- */
-pub(crate) const NEW_THREAD_PICKER_WIDTH: f32 = 420.0;
+/// The Settings and Search by Prompt base frame: the Quick Access frame, 30% wider and taller; they open 10% bigger
+/// (CDXC:AppModal 2026-10-01 in app/model/app_modal_kind.rs).
+pub(crate) const APP_MODAL_HOST_SETTINGS_WINDOW_WIDTH: f32 = 900.0;
 
-pub(crate) const NEW_THREAD_PICKER_SEARCH_HEIGHT: f32 = 36.0;
+pub(crate) const APP_MODAL_HOST_SETTINGS_WINDOW_HEIGHT: f32 = 663.0;
 
-pub(crate) const NEW_THREAD_PICKER_ROW_HEIGHT: f32 = 36.0;
-
-pub(crate) const NEW_THREAD_PICKER_MAX_AGENT_ROWS: usize = 12;
-
-pub(crate) const NEW_THREAD_PICKER_CHROME_HEIGHT: f32 = 159.0;
+/// CDXC:AppModal 2026-09-22 WHY:
+/// Browser History used to borrow the Quick Access frame; it keeps the earlier 680px height so the Quick Access decision above does not shorten it as a side effect.
+pub(crate) const APP_MODAL_HOST_BROWSER_HISTORY_WINDOW_HEIGHT: f32 = 680.0;
 
 pub(crate) const APP_MODAL_HOST_DELAYED_SEND_WINDOW_WIDTH: f32 = 470.0;
 
@@ -843,16 +784,6 @@ pub(crate) const APP_MODAL_HOST_EXPORT_TRANSCRIPT_RESULT_WINDOW_HEIGHT: f32 = 52
 pub(crate) const APP_MODAL_HOST_RENAME_SESSION_WINDOW_HEIGHT: f32 = 440.0;
 
 /*
- * CDXC:AppModal 2026-07-28:
- * Bounds for the one-shot `contentHeightMeasured` window fit. The floor keeps
- * a broken measurement from collapsing the window below a usable dialog; the
- * ceiling keeps it inside the smallest supported display height.
- */
-pub(crate) const APP_MODAL_HOST_FIT_CONTENT_MIN_WINDOW_HEIGHT: f32 = 200.0;
-
-pub(crate) const APP_MODAL_HOST_FIT_CONTENT_MAX_WINDOW_HEIGHT: f32 = 850.0;
-
-/*
  * CDXC:AppModal 2026-07-26-07:20:
  * Every app-modal child window is a fitted, non-resizable frame. The compact
  * form and list modals below were measured against the real modal-host React
@@ -887,10 +818,6 @@ pub(crate) const APP_MODAL_HOST_REMOTE_SETUP_WINDOW_WIDTH: f32 = 560.0;
 
 pub(crate) const APP_MODAL_HOST_REMOTE_SETUP_WINDOW_HEIGHT: f32 = 760.0;
 
-pub(crate) const APP_MODAL_HOST_REMOTE_PROJECT_PICKER_WINDOW_WIDTH: f32 = 720.0;
-
-pub(crate) const APP_MODAL_HOST_REMOTE_PROJECT_PICKER_WINDOW_HEIGHT: f32 = 640.0;
-
 pub(crate) const APP_MODAL_HOST_UPDATE_AVAILABLE_WINDOW_WIDTH: f32 = 640.0;
 
 pub(crate) const APP_MODAL_HOST_UPDATE_AVAILABLE_WINDOW_HEIGHT: f32 = 560.0;
@@ -913,8 +840,6 @@ pub(crate) const APP_MODAL_HOST_UPDATE_AVAILABLE_WINDOW_HEIGHT: f32 = 560.0;
 pub(crate) const APP_MODAL_HOST_ADD_PROJECT_WINDOW_WIDTH: f32 = 640.0;
 
 pub(crate) const APP_MODAL_HOST_ADD_PROJECT_WINDOW_HEIGHT: f32 = 460.0;
-
-pub(crate) const APP_MODAL_HOST_READY_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(crate) const BROWSER_ICON_CHEVRON_RIGHT: &str = "titlebar/chevron-right.svg";
 
@@ -942,13 +867,15 @@ pub(crate) const TITLEBAR_POPUP_READING_MENU_MAX_HEIGHT: f32 = 650.0;
 
 pub(crate) const TITLEBAR_DROPDOWN_SCROLLBAR_WIDTH: f32 = 5.0;
 
-pub(crate) const TITLEBAR_POPUP_MENU_GAP: f32 = 6.0;
+/// CDXC:Theming 2026-09-25 DECISION:
+/// User: "For all these menus that drop down from the headers, we need to have a 4px gap. Right now, they are touching. We need to have a 4px gap vertically between the button itself and the menu that pops up." Every menu or panel that drops from a header button (the work area header's split buttons, ⋯ menu and panels, the sidebar's ☰ and project header buttons) opens exactly this far below the button, or this far above it when it flips upward. Supersedes the sidebar menu's 5px and the project header menus' 6px.
+pub(crate) const HEADER_MENU_TRIGGER_GAP: f32 = 4.0;
 
-pub(crate) const TITLEBAR_POPUP_MENU_ROW_HEIGHT: f32 = 30.0;
+pub(crate) const TITLEBAR_POPUP_MENU_ROW_HEIGHT: f32 = 34.0;
 
 pub(crate) const TITLEBAR_POPUP_MENU_ROW_TEXT_SIZE: f32 = 13.0;
 
-pub(crate) const TITLEBAR_POPUP_MENU_ROW_ICON_SIZE: f32 = 16.0;
+pub(crate) const TITLEBAR_POPUP_MENU_ROW_ICON_SIZE: f32 = 14.0;
 
 pub(crate) const TITLEBAR_POPUP_GIT_SECTION_LABEL_HEIGHT: f32 = 22.0;
 
@@ -966,26 +893,18 @@ pub(crate) const TITLEBAR_POPUP_READING_HEADER_BUTTON_TEXT_SIZE: f32 = 12.0;
 
 pub(crate) const TITLEBAR_POPUP_READING_HEADER_BUTTON_ICON_SIZE: f32 = 16.0;
 
-pub(crate) const TITLEBAR_POPUP_VERTICAL_OFFSET: f32 = 6.0;
-
 /*
-CDXC:Titlebar 2026-07-09:
-The titlebar popup NSPanels are sized before opening, so their height math
-must mirror gpui-component PopupMenu layout exactly or the last menu rows get
-clipped: the popover root adds a 1px border on each side, the items column
-adds 4px vertical padding on each side (10px chrome total), adjacent items
-are separated by a 2px column gap, separators render as a 2px border plus
-2px vertical margins (6px), and every item row is at least 26px tall. All
-menus keep the full 10px vertical chrome; zeroing the bottom item padding
-makes the last row sit flush on the window edge and read as clipped.
+CDXC:ContextMenus 2026-09-16 WHY:
+Popup windows are sized before rendering, so these measurements must match the shared menu appearance: 6px panel padding plus 1px borders (14px chrome), 2px row gaps, and 1px separators with 6px vertical margins (13px).
+Keep the minimum row height at 34px, including label-only context menus, so a content-sized popup never clips its final action or gains a blank scroll range.
 */
-pub(crate) const TITLEBAR_POPUP_MENU_VERTICAL_CHROME: f32 = 10.0;
+pub(crate) const TITLEBAR_POPUP_MENU_VERTICAL_CHROME: f32 = 14.0;
 
 pub(crate) const TITLEBAR_POPUP_MENU_ITEM_GAP: f32 = 2.0;
 
-pub(crate) const TITLEBAR_POPUP_MENU_SEPARATOR_HEIGHT: f32 = 6.0;
+pub(crate) const TITLEBAR_POPUP_MENU_SEPARATOR_HEIGHT: f32 = 13.0;
 
-pub(crate) const TITLEBAR_POPUP_MENU_MIN_ITEM_HEIGHT: f32 = 26.0;
+pub(crate) const TITLEBAR_POPUP_MENU_MIN_ITEM_HEIGHT: f32 = 34.0;
 
 pub(crate) const TITLEBAR_POPUP_MENU_BORDER_CHROME: f32 = 2.0;
 
@@ -994,21 +913,6 @@ pub(crate) const TITLEBAR_POPUP_ACTION_PREVIEW_TEXT_SIZE: f32 = 11.0;
 pub(crate) const GPUI_TITLEBAR_TIPS_READ_IDS_SETTINGS_KEY: &str = "gpuiTitlebarTipsReadIds";
 
 pub(crate) const TITLEBAR_ACTION_UNCONFIGURED_PREVIEW: &str = "Set the command";
-
-pub(crate) const TITLEBAR_TIPS_TOOLTIP: &str = "Tips";
-
-pub(crate) const TITLEBAR_HELP_TOOLTIP: &str = "Ghostex Help";
-
-pub(crate) const TITLEBAR_RESOURCES_TOOLTIP: &str = "Resources Monitor";
-
-pub(crate) const TITLEBAR_EXTENSIONS_TOOLTIP: &str = "Extensions";
-
-pub(crate) const TITLEBAR_GIT_TOOLTIP: &str = "Git actions";
-
-pub(crate) const TITLEBAR_ACTIONS_TOOLTIP: &str = "Quick Actions. Right click for more options";
-
-pub(crate) const TITLEBAR_OPEN_TARGETS_TOOLTIP: &str =
-    "Open in an app. Right click for more options";
 
 pub(crate) const TITLEBAR_UPDATE_AVAILABLE_TOOLTIP: &str =
     "Update Ghostex! All your sessions will continue running.";
@@ -1057,10 +961,9 @@ pub(crate) const BROWSER_ICON_WORLD: &str = "titlebar/world.svg";
 pub(crate) const BROWSER_ICON_TOOLS: &str = "titlebar/tools.svg";
 
 /*
-GPUI Tips uses the same gpui-component PopupMenu child-window path as the
-other titlebar dropdowns. The legacy React titlebar host remains available to
-the macOS app, while these first-party URLs stay bounded before they enter a
-GPUI Browser pane.
+GPUI Tips uses the same child-window path as the other titlebar dropdowns.
+Its Docs and Updates actions open only these first-party URLs in a GPUI
+Browser pane.
 */
 pub(crate) const GHOSTEX_CHANGELOG_URL: &str = "https://github.com/maddada/ghostex/releases";
 
@@ -1095,7 +998,7 @@ CDXC:Workarea 2026-06-22-06:24:
 GPUI workspace chrome should match the macOS workspace shell constants: terminal tab bars are 36px high, workspace tabs stay in the 170-175px macOS width band, command titlebars and collapsed strips are 26px high, and divider/resize rails remain real layout siblings around 5px with 1px visual separators.
 
 CDXC:Workarea 2026-06-22-06:24:
-The command panel stores an in-memory height ratio, but its default and double-click reset derive from the shared command-pane default-height setting when that fits within the 5%-90% available-content clamp. Project-editor companions default to roughly 32% of the editor area with a practical minimum and persist resize/reset mutations through the GPUI shell state.
+The command panel stores an in-memory height ratio, but its default and double-click reset derive from the shared command-pane default-height setting when that fits within the 5%-90% available-content clamp. The workarea split stores its own ratio the same way, per project, with a practical minimum on each side.
 
 CDXC:CommandPane 2026-06-25-11:29:
 GPUI command-pane initial height, missing persisted height, and double-click reset must honor the same Settings.commandsPanelDefaultHeightPx value as the macOS app. Keep the Rust side on the shared 125px default and 40px-600px setting clamp so changing the Workspace setting affects future opens/resets without rewriting explicit persisted ratios.
@@ -1148,62 +1051,12 @@ Browser tab right-click context menus are GPUI popup menus scoped to the clicked
         CDXC:CommandPane 2026-06-22-16:18:
         Agents workspace tabs can also be dragged to an expanded command-pane tab-strip boundary or end target. This creates a command-only placeholder tab with the visible Agents title at the exact requested command tab index, focuses/expands that command group, then removes the Agents source only after insertion succeeds; it never transfers libghostty state, terminal content, command text, process state, Source/Kanban/Automate/Manage surfaces, CEF state, overlays, hidden hit regions, or native/root hit-test routing.
         */
-pub(crate) const WORKSPACE_TAB_BAR_HEIGHT: f32 = 36.0;
-
-pub(crate) const WORKSPACE_TAB_WIDTH: f32 = 172.0;
-
-pub(crate) const WORKSPACE_TAB_ICON_WIDTH: f32 = 14.0;
-
-pub(crate) const WORKSPACE_TAB_AGENT_ICON_SIZE: f32 = 14.0;
-
-pub(crate) const WORKSPACE_TAB_CLOSE_SIZE: f32 = 20.0;
-
-pub(crate) const WORKSPACE_TAB_CLOSE_TRAILING_PADDING: f32 = 4.0;
-
-pub(crate) const WORKSPACE_TAB_CLOSE_TOP_OFFSET: f32 =
-    (WORKSPACE_TAB_BAR_HEIGHT - WORKSPACE_TAB_CLOSE_SIZE) / 2.0;
-
-pub(crate) const WORKSPACE_TAB_CLOSE_ICON_SIZE: f32 = 10.0;
-
-pub(crate) const WORKSPACE_TAB_STATUS_INDICATOR_SIZE: f32 = 7.0;
-
-pub(crate) const WORKSPACE_TAB_STATUS_INDICATOR_TRAILING_PADDING: f32 = 10.0;
-
-pub(crate) const WORKSPACE_TAB_SLEEP_ICON_SIZE: f32 = WORKSPACE_TAB_AGENT_ICON_SIZE;
-
-pub(crate) const WORKSPACE_TAB_SLEEP_SVG_SIZE: f32 = 11.0;
-
-pub(crate) const WORKSPACE_TAB_SLEEP_ICON_TRAILING_PADDING: f32 = 11.0;
-
-pub(crate) const WORKSPACE_TAB_STATUS_TITLE_GAP: f32 = 4.0;
-
-pub(crate) const WORKSPACE_TAB_STATUS_TITLE_RESERVED_WIDTH: f32 =
-    WORKSPACE_TAB_STATUS_INDICATOR_SIZE
-        + WORKSPACE_TAB_STATUS_INDICATOR_TRAILING_PADDING
-        + WORKSPACE_TAB_STATUS_TITLE_GAP;
-
-pub(crate) const WORKSPACE_TAB_SLEEP_TITLE_RESERVED_WIDTH: f32 = WORKSPACE_TAB_SLEEP_ICON_SIZE
-    + WORKSPACE_TAB_SLEEP_ICON_TRAILING_PADDING
-    + WORKSPACE_TAB_STATUS_TITLE_GAP;
-
-pub(crate) const WORKSPACE_TAB_ACTION_BUTTON_WIDTH: f32 = 42.0;
-
-pub(crate) const WORKSPACE_TAB_ACTION_BUTTON_HEIGHT: f32 = 34.0;
-
-pub(crate) const WORKSPACE_TAB_ACTION_ICON_SIZE: f32 = 15.0;
-
-pub(crate) const WORKSPACE_TAB_SELECTED_WHITE_OVERLAY_ALPHA: f32 = 0.13;
-
-pub(crate) const WORKSPACE_TAB_INACTIVE_WHITE_OVERLAY_ALPHA: f32 = 0.06;
-
-pub(crate) const WORKSPACE_SPLIT_HANDLE_THICKNESS: f32 = 5.0;
-
-pub(crate) const WORKSPACE_SPLIT_SEPARATOR_THICKNESS: f32 = 1.0;
+pub(crate) const WORKSPACE_SPLIT_HANDLE_THICKNESS: f32 = 1.0;
 
 pub(crate) const WORKSPACE_BOTTOM_ROW_TOP_RATIO: f32 = 0.72;
 
 /// CDXC:CommandPane 2026-09-14 DECISION:
-/// User: chat view companion sidepanes and agent panes in general have a minimum width of 388px.
+/// User: chat view sidepanes and agent panes in general have a minimum width of 388px.
 pub(crate) const PANE_RESIZE_MINIMUM_WIDTH: f32 = 388.0;
 
 pub(crate) const PANE_RESIZE_MINIMUM_HEIGHT: f32 = 160.0;
@@ -1330,17 +1183,11 @@ pub(crate) const COMMAND_PANE_TAB_SEPARATOR_WIDTH: f32 = 1.0;
 
 /*
 CDXC:CommandPane 2026-06-25-14:36:
-Native command tabs use the AppKit pane-tab compositing base (#050608) with white overlays: 13% for active command tabs and 6% for inactive command tabs. Hover reveals close chrome only; it does not brighten the tab fill.
+Native command tabs use the AppKit pane-tab compositing base with white overlays: 13% for active command tabs and 6% for inactive command tabs. Hover reveals close chrome only; it does not brighten the tab fill. Since 2026-09-22 the base is the themed command chrome (command_pane_chrome_color) rather than the fixed #050608.
 
 CDXC:SessionSleep 2026-06-25-14:39:
 Inactive sleeping command tabs use the native parked-tab visual treatment: keep selected sleeping tabs visually selected, but reduce inactive sleeping tab fill to a 3.2% white overlay and dim its title by 48%.
 */
-pub(crate) const COMMAND_PANE_TAB_BACKGROUND_BASE_RED: u8 = 0x05;
-
-pub(crate) const COMMAND_PANE_TAB_BACKGROUND_BASE_GREEN: u8 = 0x06;
-
-pub(crate) const COMMAND_PANE_TAB_BACKGROUND_BASE_BLUE: u8 = 0x08;
-
 pub(crate) const COMMAND_PANE_TAB_ACTIVE_OVERLAY_ALPHA: f32 = 0.13;
 
 pub(crate) const COMMAND_PANE_TAB_INACTIVE_OVERLAY_ALPHA: f32 = 0.06;
@@ -1401,7 +1248,7 @@ pub(crate) const COMMAND_PANE_CONTROL_COLLAPSED_TRAILING_PADDING: f32 = 0.0;
 
 pub(crate) const COMMAND_PANE_VISIBILITY_ICON_LEADING_PADDING: f32 = 4.0;
 
-pub(crate) const COMMAND_PANE_SPLIT_HANDLE_THICKNESS: f32 = 5.0;
+pub(crate) const COMMAND_PANE_SPLIT_HANDLE_THICKNESS: f32 = 1.0;
 
 pub(crate) const COMMAND_PANE_DEFAULT_SESSION_TITLE: &str = "Command Terminal";
 
@@ -1428,26 +1275,6 @@ pub(crate) const COMMAND_PANE_DEFAULT_WIDTH_RATIO: f32 = 0.38;
 pub(crate) const COMMAND_PANE_MIN_WIDTH_RATIO: f32 = 0.10;
 
 pub(crate) const COMMAND_PANE_MAX_WIDTH_RATIO: f32 = 0.90;
-
-/*
-CDXC:SessionSleep 2026-06-25-14:49:
-Sleeping command-pane bodies should mirror native AppKit placeholders: black body, centered medium 13px wake text, and the exact "Press Any Key to Wake" affordance only when click-to-wake placeholders are enabled.
-
-CDXC:SessionSleep 2026-06-27-00:22:
-Native `SleepingPanePlaceholderContentView` measures the wake label from the exact command body: max width is body width minus 8, max height is body height minus 16, nonpositive max dimensions hide the label, text wraps by character, width is ceil(measured width)+8 clamped to the max, height is ceil(measured height) with an 18px minimum clamped to the max, and the frame is centered in the body.
-
-CDXC:SessionSleep 2026-06-27-00:22:
-The GPUI wake label must be paint-only body chrome inside the normal command body canvas so it cannot own hit testing, keyboard routing, persistence, logs, or fallback geometry. Existing body click/key wake handlers remain the only wake behavior.
-*/
-pub(crate) const COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL: &str = "Press Any Key to Wake";
-
-pub(crate) const COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_FONT_SIZE: f32 = 13.0;
-
-pub(crate) const COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_LINE_HEIGHT: f32 = 18.0;
-
-pub(crate) const COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_HORIZONTAL_PADDING: f32 = 4.0;
-
-pub(crate) const COMMAND_PANE_SLEEPING_PLACEHOLDER_WAKE_LABEL_VERTICAL_PADDING: f32 = 8.0;
 
 pub(crate) const GPUI_KEEP_AWAKE_POWER_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -1488,7 +1315,7 @@ pub(crate) const COMMAND_PANE_DELAYED_SEND_BADGE_BODY_WIDTH_CLAMP_INSET: f32 = 3
 
 pub(crate) const COMMAND_PANE_DELAYED_SEND_BADGE_BODY_HEIGHT_CLAMP_INSET: f32 = 24.0;
 
-pub(crate) const COMMAND_PANE_DELAYED_SEND_MIN_DELAY_MS: u64 = 60_000;
+pub(crate) const COMMAND_PANE_DELAYED_SEND_MIN_DELAY_MS: u64 = 1;
 
 pub(crate) const COMMAND_PANE_DELAYED_SEND_MAX_DELAY_MS: u64 = 2_147_483_647;
 

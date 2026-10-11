@@ -1,0 +1,507 @@
+//! The Accounts page (settings-modal/tabs/accounts.tsx (deleted 2026-10-01) wrapping accounts/manager.tsx (deleted 2026-10-01)): the Accounts
+//! section (Refresh accounts, Hide emails, the read state), then one section per provider with its
+//! saved accounts (expandable into their editor), New session defaults, the add-account setup, the
+//! sign-in flow in progress, Claude Swap / Codex Swap maintenance, and the Connect your accounts
+//! guide.
+//!
+//! CDXC:Settings 2026-09-28 WHY:
+//! The page reads and changes accounts through the Settings host's gxserver call
+//! (`/api/agentAccounts`) instead of the React page's `fetch` with the injected bootstrap, so it
+//! works without CEF. Only this computer is offered, as the desktop's React page did
+//! (`getAccountsConnections()` had one connection there).
+pub(crate) mod client;
+mod connect;
+pub(crate) mod data;
+mod editor;
+mod guide;
+mod helper_tools;
+mod manager;
+mod sign_in_watch;
+pub(crate) mod widgets;
+
+use super::super::fields::{
+    FieldStates, RowSpec, SettingsPage, SizedButtonSize, SizedButtonVariant,
+};
+use super::super::fields::{
+    settings_list_item, settings_section, settings_sized_button, toggle_field_with,
+};
+use super::super::model::SettingsTabId;
+use super::super::page::{PageBlock, settings_page};
+use super::super::rail::{rail_pages, render_no_matches};
+use super::super::search::should_show_section;
+use super::super::store::SettingsStore;
+use client::AccountsClient;
+use connect::FlowState;
+use editor::EditorDraft;
+use gpui::{
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, FocusHandle, IntoElement,
+    ParentElement as _, Render, SharedString, Task, Window, div,
+};
+use helper_tools::HelperToolsState;
+use manager::SetupDraft;
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+/// Creates the Accounts page view.
+///
+/// CDXC:Settings 2026-09-09 DECISION:
+/// User: account management has its own Accounts page in Settings, replacing the Accounts section under Agents. Claude uses cswap and Codex uses xswap.
+pub(crate) fn accounts_tab_view(
+    store: &Entity<SettingsStore>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyView {
+    cx.new(|cx| AccountsTab::new(store.clone(), window, cx))
+        .into()
+}
+
+/// `setInterval(poll, 2000)` of the manager's setup watch.
+const SETUP_POLL: Duration = Duration::from_secs(2);
+
+pub(crate) struct AccountsTab {
+    pub(crate) store: Entity<SettingsStore>,
+    fields: FieldStates,
+    pub(crate) client: Entity<AccountsClient>,
+    /// The provider whose Connection guide is open.
+    pub(crate) guide: Option<String>,
+    pub(crate) guide_focus: FocusHandle,
+    /// The provider whose Add account setup is open.
+    pub(crate) adding: Option<String>,
+    /// The account whose editor is open.
+    pub(crate) editing: Option<String>,
+    pub(crate) defaults_open: Option<String>,
+    pub(crate) highlighted: Option<String>,
+    /// The sign-in in progress (`pendingJob`).
+    pub(crate) pending_job: Option<Value>,
+    completed_job: String,
+    setup_poll: Option<Task<()>>,
+    pub(crate) helpers: HelperToolsState,
+    pub(crate) editors: HashMap<String, EditorDraft>,
+    pub(crate) setups: HashMap<String, SetupDraft>,
+    pub(crate) flows: HashMap<String, FlowState>,
+    /// The command whose copy button shows its check (`CopyCommand`'s `copied`).
+    pub(crate) copied: Option<(String, Task<()>)>,
+    was_active: bool,
+    preview_applied: bool,
+    /// The inputs masked as passwords (`sync_masked`).
+    pub(crate) masked_inputs: HashMap<SharedString, bool>,
+    /// The editor inputs that save when they lose focus or take Enter (`commit_on_blur`).
+    pub(crate) commit_inputs: HashSet<SharedString>,
+}
+
+impl super::HoldsUnsavedInput for AccountsTab {
+    /// An Add account setup, an account editor or an Uninstall confirmation is open.
+    fn holds_unsaved_input(&self, _cx: &gpui::App) -> bool {
+        self.adding.is_some() || self.editing.is_some() || self.helpers.confirm_uninstall.is_some()
+    }
+}
+
+impl SettingsPage for AccountsTab {
+    fn settings_store(&self) -> &Entity<SettingsStore> {
+        &self.store
+    }
+
+    fn field_states(&mut self) -> &mut FieldStates {
+        &mut self.fields
+    }
+}
+
+impl AccountsTab {
+    pub(crate) fn new(
+        store: Entity<SettingsStore>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // The page view outlives a switch to another page, which is when it closes and reopens.
+        cx.observe(&store, |page, _, cx| {
+            page.sync_active(cx);
+            cx.notify();
+        })
+        .detach();
+        // CDXC:Settings 2026-09-08 DECISION: Refresh accounts every time the Accounts page opens and show loading on the Refresh accounts button itself.
+        let client = cx.new(|cx| AccountsClient::new(store.clone(), true, cx));
+        cx.observe(&client, |_, _, cx| cx.notify()).detach();
+        // Settings closing drops the page with a sign-in still running in the browser.
+        cx.on_release(|page: &mut Self, cx| page.hand_off_sign_ins(cx))
+            .detach();
+        cx.observe_window_activation(window, |page: &mut Self, window, cx| {
+            if window.is_window_active() {
+                page.client
+                    .update(cx, |client, cx| client.refresh_on_focus(cx));
+            }
+        })
+        .detach();
+        Self {
+            store,
+            fields: FieldStates::default(),
+            client,
+            guide: None,
+            guide_focus: cx.focus_handle(),
+            adding: None,
+            editing: None,
+            defaults_open: None,
+            highlighted: None,
+            pending_job: None,
+            completed_job: String::new(),
+            setup_poll: None,
+            helpers: HelperToolsState::default(),
+            editors: HashMap::new(),
+            setups: HashMap::new(),
+            flows: HashMap::new(),
+            copied: None,
+            was_active: false,
+            preview_applied: false,
+            masked_inputs: HashMap::new(),
+            commit_inputs: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn hide_emails(&self, cx: &App) -> bool {
+        self.store.read(cx).bool("hideAccountEmails")
+    }
+
+    /// The page opened (read the accounts, watch sign-ins, read the helper tools) or closed.
+    fn sync_active(&mut self, cx: &mut Context<Self>) {
+        let active = self.store.read(cx).active_tab() == SettingsTabId::Accounts;
+        if active == self.was_active {
+            return;
+        }
+        self.was_active = active;
+        self.client
+            .update(cx, |client, cx| client.set_active(active, cx));
+        if !active {
+            self.hand_off_sign_ins(cx);
+            self.setup_poll = None;
+            self.helpers.poll = None;
+            for flow in self.flows.values_mut() {
+                flow.poll = None;
+            }
+            return;
+        }
+        sign_in_watch::stop();
+        if !self.client.read(cx).connected(cx) {
+            return;
+        }
+        self.poll_setup_jobs(cx);
+        self.setup_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(SETUP_POLL).await;
+                if this
+                    .update(cx, |page, cx| page.poll_setup_jobs(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+        self.load_helper_tools(false, false, cx);
+    }
+
+    /// The manager's watch: the sign-in in progress, and a finished one highlights and opens its
+    /// account.
+    ///
+    /// CDXC:AgentProviders 2026-09-08 DECISION:
+    /// Finishing login reopens Settings at Accounts, even if the user left Settings while the browser was open. The account is already registered before this completion is announced.
+    /// This watch runs while the Accounts page is open; a sign-in still running when the page closes is watched by `sign_in_watch`, which reopens Settings at Accounts when it completes.
+    fn poll_setup_jobs(&mut self, cx: &mut Context<Self>) {
+        let this = cx.weak_entity();
+        let params = json!({ "operation": "setupStatus", "owner": client::ACCOUNT_SETUP_OWNER });
+        client::AccountsClient::call(
+            &self.client.clone(),
+            params,
+            move |result, cx| {
+                let Ok(state) = result else {
+                    return;
+                };
+                let jobs: Vec<Value> = state["setupJobs"].as_array().cloned().unwrap_or_default();
+                let _ = this.update(cx, |page, cx| {
+                    page.pending_job = jobs
+                        .iter()
+                        .filter(|job| {
+                            !matches!(job["status"].as_str(), Some("complete" | "failed"))
+                        })
+                        .next_back()
+                        .cloned();
+                    let complete = jobs
+                        .iter()
+                        .filter(|job| job["status"] == "complete")
+                        .next_back()
+                        .cloned();
+                    if let Some(complete) = complete
+                        && let Some(account_id) =
+                            complete["accountId"].as_str().filter(|id| !id.is_empty())
+                        && complete["id"].as_str() != Some(page.completed_job.as_str())
+                    {
+                        page.completed_job =
+                            complete["id"].as_str().unwrap_or_default().to_string();
+                        page.highlighted = Some(account_id.to_string());
+                        page.adding = None;
+                        page.guide = None;
+                        page.editing = Some(account_id.to_string());
+                        page.client.update(cx, |client, cx| {
+                            client.request(
+                                json!({ "operation": "list", "refresh": true }),
+                                None,
+                                cx,
+                            )
+                        });
+                    }
+                    cx.notify();
+                });
+            },
+            cx,
+        );
+    }
+
+    /// The page is leaving with sign-ins still running: watch them from outside the page
+    /// (`sign_in_watch`).
+    fn hand_off_sign_ins(&self, cx: &mut App) {
+        let mut job_ids: Vec<String> = self
+            .flows
+            .values()
+            .filter_map(|flow| flow.job.as_ref())
+            .chain(self.pending_job.as_ref())
+            .filter(|job| !matches!(job["status"].as_str(), Some("complete" | "failed")))
+            .filter_map(|job| job["id"].as_str().map(str::to_string))
+            .collect();
+        job_ids.sort();
+        job_ids.dedup();
+        if !job_ids.is_empty() && self.client.read(cx).connected(cx) {
+            sign_in_watch::watch(self.store.read(cx).host(), job_ids, cx);
+        }
+    }
+
+    /// `request(params)` of the manager: a mutation whose answer is the new state.
+    pub(crate) fn account_request(
+        &mut self,
+        params: Value,
+        done: Option<Box<dyn FnOnce(bool, &mut App)>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.client
+            .update(cx, |client, cx| client.request(params, done, cx));
+    }
+
+    /// `showAccountFlowToast`.
+    pub(crate) fn flow_toast(&self, title: &str, description: &str, cx: &mut App) {
+        self.store
+            .update(cx, |store, cx| store.toast("info", title, description, cx));
+    }
+
+    /// The preview binary's state: the rows and dialogs no open message reaches.
+    fn apply_preview_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preview_applied {
+            return;
+        }
+        let Some(state) = self.store.read(cx).request().preview_state.clone() else {
+            self.preview_applied = true;
+            return;
+        };
+        if self.client.read(cx).data.is_none()
+            && !matches!(state.as_str(), "accounts-error" | "accounts-loading")
+        {
+            return;
+        }
+        self.preview_applied = true;
+        match state.as_str() {
+            "accounts-editor" | "accounts-editor-actions" => {
+                self.editing = Some("claude-1".into())
+            }
+            "accounts-defaults" => self.defaults_open = Some("claude".into()),
+            "accounts-add" => self.adding = Some("claude".into()),
+            "accounts-guide" => self.open_guide("claude".into(), window, cx),
+            "accounts-uninstall" => {
+                self.helpers.confirm_uninstall = Some("claude".into());
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// The Accounts section.
+    ///
+    /// CDXC:Settings 2026-09-20 DECISION:
+    /// User: recommend adding even a single account so usage stats are easy to find in the sidebar usage strip and the status lines. This is the 2026-09-09 decision with the meters' new home named; the titlebar row they used to sit in is gone.
+    fn render_accounts_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.store.read(cx).palette();
+        let hide = self.hide_emails(cx);
+        let (connected, data, error, busy, refreshing) = {
+            let client = self.client.read(cx);
+            (
+                client.connected(cx),
+                client.data.is_some(),
+                client.error.clone(),
+                client.busy,
+                client.refreshing,
+            )
+        };
+        let refresh = connected.then(|| {
+            settings_sized_button(
+                &p,
+                "accounts-refresh",
+                if refreshing {
+                    "Refreshing…"
+                } else {
+                    "Refresh accounts"
+                },
+                Some("modals/settings/refresh.svg"),
+                None,
+                SizedButtonVariant::Ghost,
+                SizedButtonSize::Default,
+                busy || refreshing,
+                Some("Accounts are being read.".into()),
+                |page: &mut Self, _window, cx| {
+                    let this = cx.weak_entity();
+                    page.account_request(
+                        json!({ "operation": "list", "refresh": true }),
+                        Some(Box::new(move |ok, cx| {
+                            if ok {
+                                let _ = this.update(cx, |page, cx| {
+                                    page.flow_toast(
+                                        "Accounts refreshed",
+                                        "Saved accounts and usage are up to date.",
+                                        cx,
+                                    )
+                                });
+                            }
+                        })),
+                        cx,
+                    );
+                },
+                cx,
+            )
+        });
+        let mut rows: Vec<AnyElement> = vec![toggle_field_with(
+            &p,
+            "hide-account-emails",
+            RowSpec::new("Hide emails").description(
+                "Show only the first and last address characters and obscure the domain.",
+            ),
+            hide,
+            None,
+            |page: &mut Self, next, _window, cx| {
+                let store = page.store.clone();
+                store.update(cx, |store, cx| {
+                    store.update_setting("hideAccountEmails", json!(next), cx)
+                });
+            },
+            cx,
+        )];
+        if !connected {
+            rows.push(settings_list_item(
+                &p,
+                None,
+                None,
+                "No computer connected",
+                Some(
+                    div()
+                        .child("Connect to a computer to manage its accounts.")
+                        .into_any_element(),
+                ),
+                None,
+            ));
+        }
+        if connected && !error.is_empty() {
+            let retry = settings_sized_button(
+                &p,
+                "accounts-try-again",
+                "Try again",
+                None,
+                None,
+                SizedButtonVariant::Outline,
+                SizedButtonSize::Sm,
+                false,
+                None,
+                |page: &mut Self, _window, cx| {
+                    page.account_request(json!({ "operation": "list", "refresh": true }), None, cx)
+                },
+                cx,
+            );
+            rows.push(settings_list_item(
+                &p,
+                Some(super::super::fields::ListItemStatus::Warning),
+                None,
+                "Accounts could not be read",
+                Some(
+                    div()
+                        .child(widgets::account_text(&error, hide))
+                        .into_any_element(),
+                ),
+                Some(retry),
+            ));
+        }
+        if connected && !data && error.is_empty() {
+            rows.push(settings_list_item(
+                &p,
+                None,
+                None,
+                if busy {
+                    "Reading saved accounts and usage…"
+                } else {
+                    "Account information is unavailable."
+                },
+                None,
+                None,
+            ));
+        }
+        settings_section(
+            &p,
+            "Accounts",
+            Some("Add your account to see usage and reset times in Ghostex, even if you only use one account. Star an account to show its stats in the sidebar; in chat context details, star Account limits to show usage in the status line.".into()),
+            refresh,
+            rows,
+        )
+        .map(IntoElement::into_any_element)
+        .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
+impl Render for AccountsTab {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_active(cx);
+        self.apply_preview_state(window, cx);
+        let (p, search, searching) = {
+            let store = self.store.read(cx);
+            (
+                store.palette(),
+                store.tab_search(SettingsTabId::Accounts),
+                store.is_searching(),
+            )
+        };
+        let mut blocks: Vec<PageBlock> = Vec::new();
+        if !should_show_section(&search.section("accounts"), true) {
+            if searching {
+                let store = self.store.clone();
+                let matching: Vec<SettingsTabId> = rail_pages(self.store.read(cx))
+                    .into_iter()
+                    .map(|page| page.tab)
+                    .collect();
+                blocks.push(PageBlock::plain(render_no_matches(
+                    &p,
+                    SettingsTabId::Accounts,
+                    &matching,
+                    move |tab, _, cx| store.update(cx, |store, cx| store.set_active_tab(tab, cx)),
+                )));
+            }
+            return settings_page(&self.store, SettingsTabId::Accounts, &p, blocks, cx);
+        }
+        blocks.push(PageBlock::section(
+            "accounts",
+            self.render_accounts_section(cx),
+        ));
+        if self.client.read(cx).data.is_some() {
+            for provider in data::PROVIDERS {
+                let section = self.render_provider_section(&p, provider, window, cx);
+                blocks.push(PageBlock::section(
+                    SharedString::from(format!("accounts-{provider}")).to_string(),
+                    section,
+                ));
+            }
+        }
+        if let Some(guide) = self.render_guide(&p, window, cx) {
+            blocks.push(PageBlock::plain(guide));
+        }
+        settings_page(&self.store, SettingsTabId::Accounts, &p, blocks, cx)
+    }
+}

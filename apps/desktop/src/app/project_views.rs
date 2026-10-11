@@ -7,6 +7,7 @@ use std::{collections::HashMap, time::Duration};
 #[derive(Default)]
 pub(crate) struct ProjectViews {
     entries: HashMap<String, Entry>,
+    pub(crate) website_editor: Option<super::project_websites::WebsiteHomeEditor>,
 }
 struct Entry {
     fingerprint: String,
@@ -19,17 +20,71 @@ struct Entry {
     started: bool,
     parked: Option<ProjectWorkareaRuntimeCefSurface>,
 }
+
+impl ProjectViews {
+    /// Every parked website or extension page, as its entry key, project, view and page, for the
+    /// idle sweep (`web_page_sleep.rs`).
+    pub(crate) fn parked_views(
+        &self,
+    ) -> impl Iterator<Item = (&str, &str, TitlebarMode, &Entity<CefSurface>)> {
+        self.entries.iter().filter_map(|(key, entry)| {
+            let parked = entry.parked.as_ref()?;
+            let view_id = ExtensionId::new(key.rsplit('\n').next()?)?;
+            Some((
+                key.as_str(),
+                entry.project_id.as_str(),
+                TitlebarMode::Extension(view_id),
+                &parked.surface,
+            ))
+        })
+    }
+
+    /// Closes one parked page. The view keeps its entry and loads again when it is next opened.
+    pub(crate) fn close_parked_view(&mut self, key: &str) -> bool {
+        self.entries
+            .get_mut(key)
+            .and_then(|entry| entry.parked.take())
+            .is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
 #[action(namespace=ghostex_gpui,no_json)]
 pub(crate) struct ProjectViewCommand {
     pub id: String,
     pub operation: String,
 }
+/// The HUD fields the app-modal Settings window needs to render the view scope editors.
+pub(crate) const PROJECT_VIEW_SCOPE_OPTION_HUD_KEYS: [&str; 2] =
+    ["projectViewSpaces", "projectViewProjects"];
+
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 impl GhostexGpuiApp {
+    /// CDXC:Spaces 2026-09-18 WHY:
+    /// Settings builds its own hydrate, which omitted the sidebar's spaces and showed an empty picker despite existing spaces.
+    /// Reuse the store HUD's complete local/remote options, including their computer-scoped identities.
+    /// The project list rides along for the same reason: the scope editor lists the sidebar's own
+    /// rows, which only the native sidebar's snapshot enumerates.
+    pub(crate) fn with_project_view_scope_options(&self, mut message: Value) -> Value {
+        let Some(hud) = self
+            .native_sidebar
+            .snapshot
+            .as_ref()
+            .map(|snapshot| &snapshot.hud)
+        else {
+            return message;
+        };
+        for key in PROJECT_VIEW_SCOPE_OPTION_HUD_KEYS {
+            if let Some(value) = hud.get(key) {
+                message["hud"][key] = value.clone();
+            }
+        }
+        message
+    }
+
     /// CDXC:Extensions 2026-09-09 WHY:
     /// Two projects can resolve to the same website. Keep their page navigation separate and park the actual CEF child when switching projects or opening command output.
     pub(crate) fn park_custom_project_view(&mut self, owned: ProjectWorkareaRuntimeCefSurface) {
@@ -56,32 +111,6 @@ impl GhostexGpuiApp {
             .parked
             .take()?;
         owned.matches_runtime_url(url).then_some(owned)
-    }
-    pub(crate) fn show_project_view_menu(
-        &self,
-        id: ExtensionId,
-        position: gpui::Point<gpui::Pixels>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let mut menu = self.titlebar_view_lifecycle_menu(TitlebarMode::Extension(id));
-        for (label, operation) in [
-            ("Start / Restart", "restart"),
-            ("Stop", "stop"),
-            ("Command output", "output"),
-            ("Configure view", "configure"),
-        ] {
-            menu = menu.menu(
-                label,
-                Box::new(ProjectViewCommand {
-                    id: id.as_str().into(),
-                    operation: operation.into(),
-                }),
-            );
-        }
-        menu.separator()
-            .menu("Extensions", Box::new(OpenGpuiExtensionsModal))
-            .show(position, window, cx);
     }
     fn project_view_key(&self, id: ExtensionId) -> Option<String> {
         let project = self
@@ -133,6 +162,9 @@ impl GhostexGpuiApp {
         &self,
         id: ExtensionId,
     ) -> Option<ProjectWorkareaRealRuntimeUrl> {
+        if self.website_home_editor_is_open(id) {
+            return None;
+        }
         let entry = self
             .project_views
             .entries
@@ -157,6 +189,9 @@ impl GhostexGpuiApp {
             .project_view_key(id)
             .and_then(|key| self.project_views.entries.get(&key));
         let status = entry.map(|e| e.status.clone()).unwrap_or(Value::Null);
+        if let Some(provider) = super::project_websites::website_provider(id) {
+            return website_placeholder(id, provider, name, text(&status, "state"));
+        }
         let show_output = entry.is_some_and(|e| e.show_output);
         let state = text(&status, "state");
         let message = if show_output {
@@ -186,7 +221,11 @@ impl GhostexGpuiApp {
             actions: if show_output {
                 vec![ProjectViewOpen, ProjectViewRetry, ProjectViewStop]
             } else if ["failed", "stopped", "unconfigured"].contains(&state) {
-                vec![ProjectViewRetry, ProjectViewConfigure, ProjectViewOutput]
+                if id.as_str() == "storybook" {
+                    vec![ProjectViewRetry, ProjectViewOutput]
+                } else {
+                    vec![ProjectViewRetry, ProjectViewConfigure, ProjectViewOutput]
+                }
             } else {
                 vec![ProjectViewStop, ProjectViewOutput]
             },
@@ -201,8 +240,35 @@ impl GhostexGpuiApp {
         let Some(id) = ExtensionId::new(&action.id) else {
             return;
         };
+        if action.operation == "home" {
+            self.open_website_home_editor(id, window, cx);
+            return;
+        }
         if action.operation == "configure" {
-            self.open_gpui_settings_extensions_page(Some(window), cx);
+            if id.as_str() == "storybook" {
+                self.open_view_scope_settings(
+                    TitlebarMode::Extension(id).switcher_index(),
+                    window,
+                    cx,
+                );
+                return;
+            }
+            let modal = GpuiAppModalKind::Settings;
+            let sidebar_state_message =
+                self.gpui_app_modal_sidebar_state_message_for_open(modal, cx);
+            self.open_gpui_app_modal_window(
+                modal,
+                json!({
+                    "initialTab": "extensions",
+                    "initialCustomViewId": id.as_str(),
+                    "modal": modal.modal_id(),
+                    "type": "open",
+                    "latestSidebarStateMessage": sidebar_state_message.clone(),
+                }),
+                sidebar_state_message,
+                Some(window),
+                cx,
+            );
             return;
         }
         if action.operation == "output" {
@@ -234,6 +300,29 @@ impl GhostexGpuiApp {
         let Some(project_id) = snapshot.active_project_id.as_ref().map(|id| id.0.clone()) else {
             return;
         };
+        for view in super::project_websites::website_views()
+            .into_iter()
+            .filter(|view| view.enabled)
+        {
+            let provider =
+                super::project_websites::website_provider(view.id).expect("website provider");
+            let home = self.website_home(provider, &project_id);
+            let key = format!("{project_id}\n{}", view.id.as_str());
+            let fingerprint = home.clone().unwrap_or_default();
+            if self
+                .project_views
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.fingerprint == fingerprint)
+            {
+                continue;
+            }
+            self.project_views.entries.insert(key, Entry {
+                fingerprint, params: Value::Null,
+                status: json!({"state":if home.is_some() {"ready"} else {"unconfigured"}, "url":home, "available":!provider.automatic() || home.is_some()}),
+                operation:None, project_id:project_id.clone(), show_output:false, was_active:false, started:false, parked:None,
+            });
+        }
         let project = self.extension_projects.get(&project_id);
         let repository_origin_url = project.and_then(|p| p.git_remote_origin_url.clone());
         let path = project
@@ -261,10 +350,11 @@ impl GhostexGpuiApp {
                 .map(|r| gpui_remote_scoped_project_id(&r.remote_machine_id, &id))
                 .unwrap_or(id)
         });
-        for view in gpui_custom_views_from_settings()
-            .into_iter()
-            .filter(|v| v.enabled && v.definition.get("source").is_some())
-        {
+        for view in gpui_custom_views_from_settings().into_iter().filter(|v| {
+            v.enabled
+                && v.definition.get("source").is_some()
+                && super::project_websites::website_provider(v.id).is_none()
+        }) {
             let key = format!("{project_id}\n{}", view.id.as_str());
             if text(&view.definition, "availability") == "selected"
                 && !view.definition["projectIds"]
@@ -393,7 +483,7 @@ impl GhostexGpuiApp {
                             entry.status = match result {
                                 Ok(value) => value["status"].clone(),
                                 Err(error) => {
-                                    json!({"state":"failed","available":true,"error":error})
+                                    json!({"state":"failed","available":id.as_str() != "storybook" || entry.status["available"].as_bool().unwrap_or(false),"error":error})
                                 }
                             };
                             app.ensure_project_workarea_runtime_cef_surfaces_for_current_context(
@@ -407,7 +497,22 @@ impl GhostexGpuiApp {
                     if !keep {
                         break;
                     }
-                    background.timer(Duration::from_secs(2)).await;
+                    let delay = this
+                        .update(cx, |app, _| {
+                            let undetected = app.project_views.entries.get(&key).is_some_and(|entry| {
+                                entry.status["available"].as_bool() != Some(true)
+                            });
+                            if id.as_str() == "storybook"
+                                && app.active_mode != TitlebarMode::Extension(id)
+                                && undetected
+                            {
+                                15
+                            } else {
+                                2
+                            }
+                        })
+                        .unwrap_or(2);
+                    background.timer(Duration::from_secs(delay)).await;
                 }
                 let _ = this.update(cx, |app, _| {
                     if app
@@ -427,6 +532,34 @@ impl GhostexGpuiApp {
             })
             .detach();
         }
+    }
+}
+/// CDXC:Extensions 2026-10-10 WHY:
+/// A project website runs no command: its URL comes from settings or the cached git origin. It used to share the command view's card, so waiting for the browser engine showed "Opening GitHub…" with Stop and Command output buttons. Draw the page skeleton while it opens, and one plain sentence when there is no URL.
+fn website_placeholder(
+    id: ExtensionId,
+    provider: &super::project_websites::WebsiteProvider,
+    name: &str,
+    state: &str,
+) -> ProjectEditorPlaceholderSignature {
+    let (title, message) = if state == "ready" {
+        (format!("Opening {name}…"), String::new())
+    } else if provider.automatic() {
+        (
+            name.to_string(),
+            format!("This project has no {name} remote."),
+        )
+    } else {
+        (
+            name.to_string(),
+            format!("Choose a {name} home for this project."),
+        )
+    };
+    ProjectEditorPlaceholderSignature {
+        mode: TitlebarMode::Extension(id),
+        title: Some(title),
+        message,
+        actions: Vec::new(),
     }
 }
 fn project_view_rpc(

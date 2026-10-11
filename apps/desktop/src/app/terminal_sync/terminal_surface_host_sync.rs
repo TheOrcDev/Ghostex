@@ -1,6 +1,6 @@
 // C1 wave-4 re-cluster: further split out of app/terminal_sync.rs (~5,603
 // lines, itself moved verbatim out of main.rs) into descriptively named
-// modules; pure move, no logic changes. Cluster: layout-bounds bookkeeping for terminal mount slots plus command/project-editor-companion terminal surface host sync.
+// modules; pure move, no logic changes. Cluster: layout-bounds bookkeeping for terminal mount slots plus command terminal surface host sync.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -10,9 +10,7 @@ use gpui::Bounds;
 use gpui::Pixels;
 
 use crate::app::consts::*;
-use crate::app::helpers::*;
 use crate::app::model::*;
-use crate::app::terminal_sync::GpuiTerminalViewerRecipe;
 use crate::*;
 
 impl GhostexGpuiApp {
@@ -73,7 +71,7 @@ impl GhostexGpuiApp {
         same-slot body size change instead re-arms the trailing-edge resize
         debounce, mirroring macOS surfaced-pane and resize-settled refreshes.
         */
-        if self.active_mode == TitlebarMode::Agents && slot_is_current {
+        if self.agents_workspace_visible() && slot_is_current {
             match previous_bounds {
                 None => self.refresh_zmx_persistence_agents_terminal_if_stale(slot_id, cx),
                 Some(previous) if previous.size != bounds.size => {
@@ -96,7 +94,7 @@ impl GhostexGpuiApp {
         Record Mounting startup body geometry only for the current visible selected Mounting slot and keep it keyed by `AgentsTerminalStartupBodySlotId`, not the Running mount slot. The existing placeholder body remains the click/drop owner, and this runtime map is cleared or pruned before it can become stale, persisted, logged, or used to create a Ghostty surface.
         */
         record_agents_terminal_startup_body_slot_geometry(
-            self.active_mode == TitlebarMode::Agents,
+            self.agents_workspace_visible(),
             &self.agents_workspace,
             &mut self.agents_terminal_startup_body_slot_geometries,
             slot_id,
@@ -118,7 +116,7 @@ impl GhostexGpuiApp {
         Non-startup Mounting wake/reattach bodies may record only runtime geometry for exact parked-owner transfer. The record is accepted from the normal placeholder body, stays out of shell-state JSON/logs, does not create startup candidates or launch payloads, and cannot mark Running without an exact parked owner move.
         */
         record_agents_terminal_parked_owner_body_slot_geometry(
-            self.active_mode == TitlebarMode::Agents,
+            self.agents_workspace_visible(),
             &self.agents_workspace,
             &mut self.agents_terminal_parked_owner_body_slot_geometries,
             slot_id,
@@ -176,58 +174,12 @@ impl GhostexGpuiApp {
         }
     }
 
-    pub(crate) fn record_project_editor_companion_terminal_mount_slot_bounds(
-        &mut self,
-        slot_id: ProjectEditorCompanionTerminalBodyMountSlotId,
-        bounds: Bounds<Pixels>,
-        scale_factor: f32,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let current_slot_ids = self.current_project_editor_companion_terminal_body_mount_slots();
-        let slot_is_current =
-            self.is_current_project_editor_companion_terminal_body_mount_slot(slot_id);
-        // Render-persistent refresh map, not the per-render-cleared geometry
-        // map — see the Agents bounds hook
-        // (CDXC:Zmx 2026-07-11).
-        let previous_bounds = self
-            .project_editor_companion_zmx_refresh_recorded_bounds
-            .get(&slot_id)
-            .copied();
-        self.project_editor_companion_terminal_mount_slot_bounds
-            .retain(|stored_slot_id, _| current_slot_ids.contains(stored_slot_id));
-        if slot_is_current {
-            self.project_editor_companion_terminal_mount_slot_bounds
-                .insert(slot_id, bounds);
-            self.project_editor_companion_zmx_refresh_recorded_bounds
-                .insert(slot_id, bounds);
-        } else {
-            self.project_editor_companion_terminal_mount_slot_bounds
-                .remove(&slot_id);
-            self.project_editor_companion_zmx_refresh_recorded_bounds
-                .remove(&slot_id);
-        }
-        self.sync_project_editor_companion_terminal_surface_host(scale_factor, cx);
-        // See the Agents bounds hook: first-record = surfaced refresh, body
-        // size change = trailing-edge resize debounce (CDXC:Zmx).
-        if slot_is_current {
-            match previous_bounds {
-                None => {
-                    self.refresh_zmx_persistence_companion_terminal_if_stale(slot_id.mode, cx);
-                }
-                Some(previous) if previous.size != bounds.size => {
-                    self.schedule_zmx_persistence_refresh_after_resize(cx);
-                }
-                _ => {}
-            }
-        }
-    }
-
     pub(crate) fn sync_command_terminal_surface_host(
         &mut self,
         scale_factor: f32,
         cx: &mut gpui::Context<Self>,
     ) {
-        if GPUI_APP_QUIT_IN_PROGRESS.load(Ordering::Acquire) {
+        if GPUI_APP_QUIT_IN_PROGRESS.load(Ordering::Acquire) || self.workspace_window_closing {
             return;
         }
         /*
@@ -324,8 +276,9 @@ impl GhostexGpuiApp {
         CDXC:Workarea 2026-07-03:
         Workspace/Agents tab drags can drop into expanded command groups, so mounted command terminals hide-and-park for the whole drag exactly like a command-panel collapse. The reattach pass must pause with the same gate; otherwise the body canvas keeps recording bounds during the drag and parked command owners would reattach and detach every frame.
         */
+        self.sync_command_pane_view_dock_visibility();
         let command_terminal_native_views_may_be_visible =
-            self.command_pane.is_expanded() && !self.workspace_tab_drag_active;
+            self.command_pane.any_dock_visible() && !self.workspace_tab_drag_active;
         let commands = self
             .command_terminal_surface_host
             .sync_visible_command_slots(
@@ -418,221 +371,5 @@ impl GhostexGpuiApp {
         }
         #[cfg(not(target_os = "macos"))]
         let _ = (decisions, scale_factor);
-    }
-
-    pub(crate) fn sync_project_editor_companion_terminal_surface_host(
-        &mut self,
-        scale_factor: f32,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.agents_terminal_runtime_sessions
-            .reconcile_with_workspace(&self.agents_workspace);
-        self.sync_project_editor_companion_terminal_selection();
-        self.prune_project_editor_companion_remote_attach_states();
-        let logical_slot_ids = self.current_project_editor_companion_terminal_body_mount_slots();
-        let settings =
-            shared_settings::shared_sidebar_settings_snapshot().gpui_terminal_engine_settings();
-        if settings.enabled {
-            for slot_id in logical_slot_ids.iter().copied() {
-                if self
-                    .agents_gpui_engine_terminals
-                    .contains_key(&slot_id.session_id)
-                {
-                    if let Some(runtime_session_id) = self
-                        .agents_terminal_runtime_sessions
-                        .runtime_session_id_for_shell_session(slot_id.session_id)
-                    {
-                        let _ = self
-                            .project_editor_companion_terminal_launch_payload_source
-                            .take_explicit_payload_for_mount_slot(runtime_session_id, slot_id);
-                    }
-                    continue;
-                }
-                let Some(runtime_session_id) = self
-                    .agents_terminal_runtime_sessions
-                    .runtime_session_id_for_shell_session(slot_id.session_id)
-                else {
-                    continue;
-                };
-                let Some(payload) = self
-                    .project_editor_companion_terminal_launch_payload_source
-                    .take_explicit_payload_for_mount_slot(runtime_session_id, slot_id)
-                else {
-                    let chat_only = self.agents_chat_mode_sessions.contains(&slot_id.session_id)
-                        && !self.terminal_bell_notifications_enabled();
-                    if !(chat_only
-                        && self.agents_terminal_has_detachable_viewer(slot_id.session_id))
-                        && (chat_only
-                            || !self
-                                .ensure_agents_gpui_engine_terminal_view(slot_id.session_id, cx))
-                    {
-                        self.request_project_editor_companion_terminal_attach_payload(slot_id, cx);
-                    }
-                    continue;
-                };
-                if self.agents_chat_mode_sessions.contains(&slot_id.session_id)
-                    && !self.terminal_bell_notifications_enabled()
-                    && self.terminal_viewer_target_is_daemon_backed(
-                        GpuiEngineTerminalEventTarget::Agents(slot_id.session_id),
-                    )
-                    && payload.initial_input.as_deref().is_none_or(str::is_empty)
-                    && payload.command.is_some()
-                {
-                    self.remember_gpui_terminal_viewer_recipe(
-                        GpuiEngineTerminalEventTarget::Agents(slot_id.session_id),
-                        GpuiTerminalViewerRecipe {
-                            runtime_session_id,
-                            working_directory: payload.working_directory,
-                            command: payload.command,
-                            env_vars: payload.env_vars,
-                            wait_after_command: payload.wait_after_command,
-                        },
-                    );
-                    self.sync_agents_terminal_chat_claims(cx);
-                    cx.notify();
-                    continue;
-                }
-                if let Some(record) = self.spawn_gpui_engine_terminal_record(
-                    GpuiEngineTerminalEventTarget::Agents(slot_id.session_id),
-                    runtime_session_id,
-                    payload.working_directory,
-                    payload.command,
-                    payload.env_vars,
-                    payload.initial_input,
-                    payload.wait_after_command,
-                    &settings,
-                    cx,
-                ) {
-                    self.agents_gpui_engine_terminals
-                        .insert(slot_id.session_id, record);
-                    cx.notify();
-                }
-            }
-        }
-        let current_slot_ids = if settings.enabled {
-            Vec::new()
-        } else {
-            logical_slot_ids
-                .iter()
-                .copied()
-                .filter(|slot_id| {
-                    !self
-                        .agents_gpui_engine_terminals
-                        .contains_key(&slot_id.session_id)
-                        && self
-                            .project_editor_companion_remote_attach_unavailable_message(*slot_id)
-                            .is_none()
-                })
-                .collect::<Vec<_>>()
-        };
-        self.project_editor_companion_terminal_mount_slot_bounds
-            .retain(|slot_id, _| current_slot_ids.contains(slot_id));
-        self.project_editor_companion_terminal_launch_payload_source
-            .retain_current_mount_slots(&logical_slot_ids, &self.agents_terminal_runtime_sessions);
-        self.project_editor_companion_terminal_attach_plan_pending
-            .retain(|slot_id| logical_slot_ids.contains(slot_id));
-        let companion_native_views_may_be_visible = self
-            .project_editor_companion_terminal_slot_for_mode(self.active_mode)
-            .is_some();
-        let commands = self
-            .project_editor_companion_terminal_surface_host
-            .sync_visible_slots(
-                companion_native_views_may_be_visible,
-                &current_slot_ids,
-                &self.project_editor_companion_terminal_mount_slot_bounds,
-            );
-        let decisions = self
-            .project_editor_companion_terminal_surface_lifecycle
-            .reconcile_host_commands(&commands);
-        #[cfg(target_os = "macos")]
-        {
-            for command in &commands {
-                if let terminal_surface_host::NativeTerminalSurfaceHostCommand::HideAndDetach {
-                    plan,
-                } = *command
-                {
-                    self.project_editor_companion_terminal_ghostty_surfaces
-                        .remove(&plan.slot_id);
-                    terminal_native_view::set_app_owned_terminal_host_native_view_visible(
-                        self.project_editor_companion_terminal_host_native_views
-                            .get(&plan.slot_id),
-                        false,
-                    );
-                }
-            }
-            let companion_parent = self.companion_native_parent();
-            let frame_operations =
-                terminal_native_view::reconcile_app_owned_terminal_host_native_view(
-                    &mut self.project_editor_companion_terminal_host_native_views,
-                    &mut self.project_editor_companion_terminal_surface_lifecycle,
-                    companion_parent,
-                    &commands,
-                    &decisions,
-                    terminal_native_view::TerminalHostNativeViewFactory::create,
-                );
-            self.reparent_floating_companion_terminal_hosts();
-            terminal_native_view::execute_app_owned_terminal_host_frame_operations(
-                &self.project_editor_companion_terminal_host_native_views,
-                &frame_operations,
-            );
-            let terminal_config = current_gpui_terminal_ghostty_surface_config();
-            let mut config_requests = HashMap::new();
-            let mut attach_payload_needed_slot_ids = Vec::new();
-            for (slot_id, host_view) in self
-                .project_editor_companion_terminal_host_native_views
-                .iter()
-            {
-                let Some(request) =
-                    terminal_native_view::ghostty_surface_config_request_for_app_owned_terminal_host_native_view(
-                        Some(host_view),
-                        f64::from(scale_factor),
-                    )
-                    .ok()
-                    .flatten()
-                else {
-                    continue;
-                };
-                let Some(runtime_session_id) = self
-                    .agents_terminal_runtime_sessions
-                    .runtime_session_id_for_shell_session(slot_id.session_id)
-                else {
-                    continue;
-                };
-                let request = request.with_terminal_config(terminal_config);
-                if self
-                    .project_editor_companion_terminal_ghostty_surfaces
-                    .contains_key(slot_id)
-                {
-                    config_requests.insert(*slot_id, request);
-                    continue;
-                }
-                /*
-                CDXC:CodeEditor 2026-07-06:
-                A companion slot without a live surface may only mount with the
-                daemon-built zmx attach payload for its session; otherwise the
-                slot stays unmounted while the attach plan is fetched, instead
-                of spawning a default shell that is not the user's session.
-                */
-                match self
-                    .project_editor_companion_terminal_launch_payload_source
-                    .take_payload_for_mount_slot(runtime_session_id, *slot_id)
-                {
-                    Ok(Some(launch_payload)) => {
-                        config_requests
-                            .insert(*slot_id, request.with_launch_payload(launch_payload));
-                    }
-                    Ok(None) => attach_payload_needed_slot_ids.push(*slot_id),
-                    Err(_) => {}
-                }
-            }
-            self.project_editor_companion_terminal_ghostty_surface_config_requests =
-                config_requests;
-            for slot_id in attach_payload_needed_slot_ids {
-                self.request_project_editor_companion_terminal_attach_payload(slot_id, cx);
-            }
-            self.sync_project_editor_companion_terminal_ghostty_surfaces(cx);
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = (decisions, scale_factor, cx);
     }
 }

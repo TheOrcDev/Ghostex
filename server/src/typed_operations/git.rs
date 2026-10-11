@@ -24,7 +24,23 @@ pub(crate) async fn run_git_action(
             "stdout": line_count.to_string(),
         }));
     }
-    let command = build_git_command(&action, params, &context.cwd)?;
+    let mut params = params.clone();
+    if action == "addAll" {
+        let file_paths = optional_relative_file_paths(params.get("filePaths"))?;
+        if !file_paths.is_empty() {
+            let stageable = retain_stageable_file_paths(file_paths, context).await?;
+            if stageable.is_empty() {
+                return Ok(json!({
+                    "action": action,
+                    "exitCode": 0,
+                    "stderr": "",
+                    "stdout": "",
+                }));
+            }
+            params.insert("filePaths".to_string(), json!(stageable));
+        }
+    }
+    let command = build_git_command(&action, &params, &context.cwd)?;
     let output = run_process_command(&command, context).await?;
     let mut result = typed_result(&action, &command, output);
     if action == "listBranches" && result.get("exitCode").and_then(Value::as_i64) == Some(0) {
@@ -39,6 +55,48 @@ pub(crate) async fn run_git_action(
         );
     }
     Ok(result)
+}
+
+/// CDXC:Git 2026-09-30 WHY: A deletion that is already staged (`D ` in status) exists neither on disk nor in the index, so `git add -A -- <path>` fails with "pathspec did not match" and the commit reported that the reviewed files changed again. Such paths have nothing left to stage; drop them before `git add` and keep every path that is on disk or still in the index.
+async fn retain_stageable_file_paths(
+    file_paths: Vec<String>,
+    context: &TypedOperationContext,
+) -> Result<Vec<String>, TypedOperationError> {
+    let cwd = std::path::Path::new(&context.cwd);
+    let missing = file_paths
+        .iter()
+        .filter(|path| cwd.join(path).symlink_metadata().is_err())
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(file_paths);
+    }
+    let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
+    args.extend(missing.iter().cloned());
+    let command = ProcessCommand::new("git", args, context.cwd.as_str())
+        .with_env("GIT_LITERAL_PATHSPECS", "1")
+        .with_preserved_stdout_whitespace();
+    let output = run_process_command(&command, context).await?;
+    if output.exit_code != 0 {
+        return Ok(file_paths);
+    }
+    let indexed = output
+        .stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>();
+    Ok(file_paths
+        .into_iter()
+        .filter(|path| {
+            !missing.contains(path)
+                || indexed.iter().any(|entry| {
+                    *entry == path
+                        || entry
+                            .strip_prefix(path.as_str())
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+        })
+        .collect())
 }
 
 pub(crate) fn build_git_command(

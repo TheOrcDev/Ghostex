@@ -1,7 +1,7 @@
 /*
 CDXC:SessionChat 2026-08-26:
 POSITIVE evidence that an agent CLI's input box is on screen and accepting
-input, as opposed to the negative evidence session_chat_notice.rs collects.
+input, as opposed to the negative evidence session_chat_notice/ collects.
 
 The two are not the same question and cannot be answered by one detector. A
 notice rule says "this specific screen — a trust dialog, an expired login, a
@@ -58,6 +58,20 @@ use crate::storage::open_gxserver_database;
 #[path = "session_chat_composer_input.rs"]
 mod input;
 pub use input::{claude_composer_draft, session_chat_composer_input, SessionChatComposerInput};
+pub(crate) use input::{
+    empryo_composer_busy, empryo_input_head, empryo_input_unfocused, empryo_tab_bar,
+};
+
+/// The row Hermes's live composer starts on, the one readiness reads, or `None` when it is not on screen.
+pub(crate) fn hermes_composer_row(screen_text: &str) -> Option<usize> {
+    let raw_lines: Vec<_> = screen_text.lines().map(strip_ansi_sgr).collect();
+    input::hermes_input_region(&raw_lines).map(|region| region.start)
+}
+
+/// The first row of OMP's live input on an untrimmed, ANSI-stripped screen, found by the shapes `omp_input_region` reads, or `None` when it is not on screen.
+pub(crate) fn omp_composer_input_row(lines: &[String]) -> Option<usize> {
+    input::omp_input_region(lines).map(|region| region.start)
+}
 
 /// Non-blank lines kept from the bottom of a capture. Wide enough to hold
 /// opencode's mid-screen composer plus the banner above it on an 80x24 pane,
@@ -113,28 +127,29 @@ pub struct SessionChatComposerReadiness {
     /// Newest `SESSION_CHAT_COMPOSER_TAIL_LINES` non-blank screen lines,
     /// ANSI-stripped, oldest first — the evidence behind the verdict.
     pub screen_tail: Vec<String>,
-    /// This exact blocking screen is navigation chrome that Escape safely
-    /// closes, rather than a question or decision the user must answer.
-    dismiss_with_escape: bool,
+    /// This exact blocking screen is navigation chrome the send path safely
+    /// closes (Escape for Claude's panels, Ctrl+C for Codex's side
+    /// conversation), rather than a question or decision the user must answer.
+    dismissible: bool,
 }
 
 impl SessionChatComposerReadiness {
     /// CDXC:SessionChat 2026-09-08 DECISION:
     /// User: do not send while Grok is not ready. Missing capture evidence must hold its message just like a missing input box.
+    /// CDXC:AgentScreenDetection 2026-10-06 DECISION:
+    /// "Composer readiness. A send waits for a readable Empryo input box under the existing AgentScreenDetection decisions. A send into an unrecognised screen is refused." Ctrl+C on Empryo's empty input quits it, so nothing is typed until its input box is proven.
     pub fn blocks_message_for(&self, agent_id: Option<&str>) -> bool {
         self.is_not_ready()
-            || (matches!(
-                normalize_agent_id(agent_id).as_deref(),
-                Some("grok" | "codex" | "zcode")
-            ) && self.state != SessionChatComposerState::Ready)
+            || (requires_ready_composer(normalize_agent_id(agent_id).as_deref())
+                && self.state != SessionChatComposerState::Ready)
     }
 
     pub fn is_not_ready(&self) -> bool {
         self.state == SessionChatComposerState::NotReady
     }
 
-    pub fn should_dismiss_with_escape(&self) -> bool {
-        self.dismiss_with_escape
+    pub fn should_dismiss(&self) -> bool {
+        self.dismissible
     }
 
     fn unknown(screen_tail: Vec<String>) -> Self {
@@ -142,7 +157,7 @@ impl SessionChatComposerReadiness {
             state: SessionChatComposerState::Unknown,
             reason: None,
             screen_tail,
-            dismiss_with_escape: false,
+            dismissible: false,
         }
     }
 
@@ -151,7 +166,7 @@ impl SessionChatComposerReadiness {
             state: SessionChatComposerState::Ready,
             reason: None,
             screen_tail,
-            dismiss_with_escape: false,
+            dismissible: false,
         }
     }
 
@@ -160,18 +175,23 @@ impl SessionChatComposerReadiness {
             state: SessionChatComposerState::NotReady,
             reason: Some(reason),
             screen_tail,
-            dismiss_with_escape: false,
+            dismissible: false,
         }
     }
 
-    fn not_ready_dismiss_with_escape(reason: String, screen_tail: Vec<String>) -> Self {
+    fn not_ready_dismissible(reason: String, screen_tail: Vec<String>) -> Self {
         Self {
             state: SessionChatComposerState::NotReady,
             reason: Some(reason),
             screen_tail,
-            dismiss_with_escape: true,
+            dismissible: true,
         }
     }
+}
+
+/// The agents whose sends wait for positive evidence of the input box, never failing open.
+fn requires_ready_composer(agent: Option<&str>) -> bool {
+    matches!(agent, Some("grok" | "codex" | "zcode" | "empryo"))
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +252,14 @@ enum ComposerSignature {
     /// gemini draws dialogs and the composer with the same rounded chrome, so
     /// only the composer's exact height admits a match.
     ShortRoundedBoxMarker { marker: char },
+    /// The last rounded box above a fixed footer, holding no nested box (Freebuff).
+    FooteredRoundedBox,
+    /// The lowest rounded box on screen, its first row opening with Empryo's prompt glyph or
+    /// spinner, with only the statusline below it.
+    EmpryoInputBox,
+    /// Antigravity's `>` rule sandwich, which may have its active-items list (one
+    /// `● [HH:MM:SS] … running` row per background task) framed by rules below it.
+    AntigravityInputBox,
 }
 
 /// Tallest rounded box `TrailingRoundedFoot` will accept as a composer. Two
@@ -267,8 +295,9 @@ fn composer_signature(agent: &str) -> Option<ComposerSignature> {
         },
         // `>` between two full-width rules, statusline below (`? for
         // shortcuts` idle, `esc to cancel` while working). Measured
-        // 2026-09-02, Antigravity CLI 1.1.24.
-        "antigravity" => ComposerSignature::RuleSandwich { markers: &['>'] },
+        // 2026-09-02, Antigravity CLI 1.1.24; the active-items list under
+        // it measured 2026-10-11 on 1.3.3.
+        "antigravity" => ComposerSignature::AntigravityInputBox,
         // `❯` (or `<profile> ❯`) between two full-width rules, statusline
         // above the top rule (measured 2026-08-29, Hermes Agent v0.20.4;
         // profile prefix confirmed against v0.20.5 source on 2026-08-30).
@@ -287,10 +316,16 @@ fn composer_signature(agent: &str) -> Option<ComposerSignature> {
         "cursor" => ComposerSignature::HalfBlockFrame { marker: '\u{2192}' },
         // `┃` rows over a `╹▀▀▀▀` foot; mid-screen when fresh.
         "opencode" => ComposerSignature::HeavyBarFoot,
-        // Two-line rounded box at the bottom with the statusline in its border.
+        // Two-line rounded box at the bottom with the statusline in its border;
+        // readiness reads every `composer.shape` through `omp_input_region`.
         "omp" => ComposerSignature::TrailingRoundedFoot,
         // Three-line rounded box with a `>` input marker.
         "gemini" => ComposerSignature::ShortRoundedBoxMarker { marker: '>' },
+        // Rounded box over `<model> · <folder> · /model to change` and `← for history · ? for
+        // help`. Measured 2026-10-04, Freebuff 0.2.12.
+        "freebuff" => ComposerSignature::FooteredRoundedBox,
+        // `╭─╮ / │ ◈ … │ / ╰─╯` with the statusline below. Measured 2026-10-06, Empryo 3.9.0-beta.
+        "empryo" => ComposerSignature::EmpryoInputBox,
         _ => return None,
     })
 }
@@ -365,6 +400,41 @@ fn composer_screen_tail(lines: &[String]) -> Vec<String> {
         .skip(lines.len().saturating_sub(SESSION_CHAT_COMPOSER_TAIL_LINES))
         .map(|line| line.trim_end().to_string())
         .collect()
+}
+
+/// CDXC:AgentScreenDetection 2026-09-22 WHY:
+/// Claude 2.1.278's agents dashboard draws the same input frame as a conversation, but its prompt creates a new session. After /exit detaches a background conversation, treating this dashboard as its composer makes account switching try to clear the dashboard placeholder.
+pub(crate) fn is_claude_code_agents_screen(screen_text: &str) -> bool {
+    let lines = composer_lines(screen_text);
+    lines.iter().any(|line| {
+        (line.contains("space to reply")
+            && line.contains("ctrl+x to delete")
+            && line.contains("? for shortcuts"))
+            || line.starts_with("A different way to work with Claude:")
+    }) && ["Needs input", "Working", "Completed"]
+        .iter()
+        .all(|heading| lines.iter().any(|line| line.trim() == *heading))
+}
+
+/// CDXC:AgentScreenDetection 2026-09-22 WHY:
+/// Claude's usage-limit choice dialog covers its composer and blocks /exit during account switching. Escape cancels the dialog without selecting paid usage credits.
+pub(crate) fn is_claude_usage_limit_dialog(screen_text: &str) -> bool {
+    let lines = composer_lines(screen_text);
+    lines
+        .last()
+        .is_some_and(|line| line.trim() == "Enter to confirm · Esc to cancel")
+        && lines
+            .iter()
+            .any(|line| line.trim() == "What do you want to do?")
+        && lines
+            .iter()
+            .any(|line| line.contains("1. Stop and wait for limit to reset"))
+        && lines
+            .iter()
+            .any(|line| line.contains("2. Wait here, then continue automatically"))
+        && lines
+            .iter()
+            .any(|line| line.contains("3. Switch to usage credits"))
 }
 
 /*
@@ -664,6 +734,9 @@ fn signature_matches(signature: ComposerSignature, lines: &[String]) -> bool {
                     && lines[index + 2].trim_start().starts_with('\u{2570}')
             })
         }
+        ComposerSignature::FooteredRoundedBox => input::freebuff_input_region(lines).is_some(),
+        ComposerSignature::EmpryoInputBox => input::empryo_input_region(lines).is_some(),
+        ComposerSignature::AntigravityInputBox => input::antigravity_input_region(lines).is_some(),
     }
 }
 
@@ -698,6 +771,14 @@ pub fn detect_session_chat_composer_ready(
     let Some(signature) = composer_signature(&agent) else {
         return SessionChatComposerReadiness::unknown(screen_tail);
     };
+    if agent == "codex"
+        && crate::session_chat_codex_side::codex_side_conversation_on_screen(screen_text)
+    {
+        return SessionChatComposerReadiness::not_ready_dismissible(
+            "Codex's side conversation is open instead of the main thread.".to_string(),
+            screen_tail,
+        );
+    }
     if agent == "codex" {
         let blocked = crate::session_chat_codex_dialog::detect_codex_dialog(screen_text)
             .map(|dialog| format!("Codex's {} dialog is open.", dialog.title))
@@ -709,15 +790,68 @@ pub fn detect_session_chat_composer_ready(
             return SessionChatComposerReadiness::not_ready(reason, screen_tail);
         }
     }
+    if agent == "empryo" {
+        if crate::session_chat_empryo_question::detect_empryo_choice_panel(screen_text).is_some() {
+            return SessionChatComposerReadiness::not_ready(
+                "Empryo is waiting for an answer to its question. Answer it in chat before sending."
+                    .to_string(),
+                screen_tail,
+            );
+        }
+        // Escape closes every Empryo panel without applying anything (verified live 2026-10-06
+        // on `/router`, `/models`, `/settings`, `/effort`, `/git status` and the Ctrl+K palette).
+        if empryo_input_unfocused(screen_text) {
+            return SessionChatComposerReadiness::not_ready_dismissible(
+                "An Empryo panel has the keyboard instead of the input box.".to_string(),
+                screen_tail,
+            );
+        }
+    }
     if is_claude_code_settings_screen(agent_id, screen_text) {
-        return SessionChatComposerReadiness::not_ready_dismiss_with_escape(
+        return SessionChatComposerReadiness::not_ready_dismissible(
             "Claude Code settings are open instead of the input box.".to_string(),
+            screen_tail,
+        );
+    }
+    // CDXC:SessionChat 2026-09-27 DECISION: User: sending a message while a side answer card is open closes the card first, then sends; the answer is already kept in the chat. Claude's `/btw` panel takes Escape like the popups below.
+    if matches!(agent.as_str(), "claude" | "openclaude")
+        && crate::session_chat_claude_panel::side_question_on_screen(screen_text)
+    {
+        return SessionChatComposerReadiness::not_ready_dismissible(
+            "Claude Code's side question is open instead of the input box.".to_string(),
+            screen_tail,
+        );
+    }
+    if matches!(agent.as_str(), "claude" | "openclaude") {
+        if let Some(popup) =
+            crate::session_chat_claude_popups::claude_escape_safe_popup(screen_text)
+        {
+            return SessionChatComposerReadiness::not_ready_dismissible(
+                format!("Claude Code's {popup} is open instead of the input box."),
+                screen_tail,
+            );
+        }
+    }
+    if agent == "claude" && is_claude_usage_limit_dialog(screen_text) {
+        return SessionChatComposerReadiness::not_ready_dismissible(
+            "Claude Code's usage-limit dialog is open instead of the input box.".to_string(),
+            screen_tail,
+        );
+    }
+    if matches!(agent.as_str(), "claude" | "openclaude")
+        && is_claude_code_agents_screen(screen_text)
+    {
+        return SessionChatComposerReadiness::not_ready(
+            "Claude Code's agents dashboard is open instead of this conversation. Return to the conversation in the terminal before sending.".to_string(),
             screen_tail,
         );
     }
     let matches = if agent == "codex" && screen_text.contains('\u{1b}') {
         session_chat_composer_input("codex", screen_text).is_some()
-    } else if matches!(agent.as_str(), "cursor" | "hermes-agent" | "pi" | "omp" | "zcode") {
+    } else if matches!(
+        agent.as_str(),
+        "cursor" | "hermes-agent" | "pi" | "omp" | "zcode"
+    ) {
         let raw_lines: Vec<_> = screen_text.lines().map(strip_ansi_sgr).collect();
         match agent.as_str() {
             "cursor" => input::cursor_input_region(&raw_lines).is_some(),
@@ -730,7 +864,16 @@ pub fn detect_session_chat_composer_ready(
     } else {
         signature_matches(signature, &lines)
     };
-    if matches {
+    if matches
+        && matches!(agent.as_str(), "claude" | "openclaude")
+        && crate::session_chat_claude_popups::claude_agents_list_focused(screen_text)
+    {
+        SessionChatComposerReadiness::not_ready_dismissible(
+            "Claude Code's background-agents list has the keyboard instead of the input box."
+                .to_string(),
+            screen_tail,
+        )
+    } else if matches {
         SessionChatComposerReadiness::ready(screen_tail)
     } else {
         SessionChatComposerReadiness::not_ready(
@@ -753,6 +896,11 @@ pub fn detect_session_chat_composer_readiness(
     notice: Option<&SessionChatTerminalNotice>,
 ) -> SessionChatComposerReadiness {
     let readiness = detect_session_chat_composer_ready(agent_id, screen_text);
+    // A notice read off the same panel must not erase this verdict: the panel is the one Escape
+    // closes, and the send path closes it instead of refusing.
+    if readiness.should_dismiss() {
+        return readiness;
+    }
     match notice.filter(|notice| notice.blocks_input()) {
         Some(notice) => SessionChatComposerReadiness::not_ready(
             format!("{}. Clear it in the terminal before sending.", notice.title),
@@ -825,7 +973,7 @@ pub async fn wait_for_session_chat_composer(
     // User: cover Codex's input-owning states so we know when we can type. Require a readable, enabled composer before releasing a write, including when the terminal capture is unavailable.
     let agent = normalize_agent_id(agent_id);
     let codex = agent.as_deref() == Some("codex");
-    let require_ready = matches!(agent.as_deref(), Some("grok" | "codex" | "zcode"));
+    let require_ready = requires_ready_composer(agent.as_deref());
     let mut last_not_ready = require_ready.then(|| {
         SessionChatComposerReadiness::not_ready(
             format!(
@@ -846,7 +994,7 @@ pub async fn wait_for_session_chat_composer(
         };
         match capture {
             Some(screen) => {
-                let notice = require_ready
+                let notice = (require_ready || agent.as_deref() == Some("claude"))
                     .then(|| {
                         crate::session_chat_notice::classify_session_chat_terminal_notice(
                             agent_id, &screen,

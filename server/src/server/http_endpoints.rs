@@ -193,6 +193,7 @@ pub(crate) fn hold_sessions_awake(
         crate::telemetry::client_connected("mobile", crate::telemetry::ClientPlatform::default());
     }
     let ttl_ms = session_keep_awake::normalize_ttl_ms(params.get("ttlMs").and_then(Value::as_i64));
+    crate::session_auto_sleep::note_shown_sessions_report(&holder_id);
     let release = params.get("release").and_then(Value::as_bool) == Some(true);
     let requested = params
         .get("sessions")
@@ -569,11 +570,17 @@ pub(crate) fn domain_error_response(
         "dependencyUnavailable" => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    routed_json(
+    let reason = crate::session_chat_send_diagnostics::SendFailureReason {
+        code: error.code.to_string(),
+        message: error.message.clone(),
+    };
+    let mut response = routed_json(
         Some(endpoint_path),
         status,
         rpc_error(error.code, error.message, Some(request_id)),
-    )
+    );
+    response.response.extensions_mut().insert(reason);
+    response
 }
 
 pub(crate) async fn handle_automation_http(

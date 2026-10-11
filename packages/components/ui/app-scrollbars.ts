@@ -134,6 +134,7 @@ export function installAppScrollbars(ownerWindow: Window & typeof globalThis = g
     const nextObserved = new Set<Element>();
     const targets = new Set<Element | null>([
       drag?.viewport ?? hovered,
+      hovered?.closest('.ghostex-chat-markdown-table')?.querySelector('.ghostex-chat-markdown-table-scroll') ?? null,
       ...document.querySelectorAll('.ghostex-chat-composer-lexical-content[data-scrolling="true"]'),
     ]);
     for (const target of targets) {
@@ -142,6 +143,9 @@ export function installAppScrollbars(ownerWindow: Window & typeof globalThis = g
         nextObserved.add(root);
         for (let node = target; node && (root === document.body || root.contains(node)); node = node.parentElement) {
           if (!(node instanceof HTMLElement) || node.closest(PRESERVE)) continue;
+          // Chat owns its full-height track and drag navigation policy.
+          // Decorating the same viewport here rendered two transcript scrollbars.
+          if (node.dataset.appScrollbarOwner === 'chat') continue;
           if (
             node.matches('.ghostex-chat-composer-lexical-content') &&
             node.dataset.scrolling !== 'true' &&
@@ -196,6 +200,14 @@ export function installAppScrollbars(ownerWindow: Window & typeof globalThis = g
             if (bar.hidden) return;
             bar.style.opacity = '1';
             bar.style.pointerEvents = 'auto';
+            // The floating layer can live outside a locally themed chat or modal.
+            bar.style.colorScheme = style.colorScheme;
+            const schemes = style.colorScheme.split(/\s+/);
+            bar.dataset.appScrollbarTheme =
+              schemes.includes('dark') &&
+              (!schemes.includes('light') || window.matchMedia('(prefers-color-scheme: dark)').matches)
+                ? 'dark'
+                : 'light';
             const length = Math.max(
               0,
               (horizontalAxis ? (right - left) / scaleX : (bottom - top) / scaleY) -
@@ -268,7 +280,7 @@ export function installAppScrollbars(ownerWindow: Window & typeof globalThis = g
     subtree: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ['data-scrolling'],
+    attributeFilter: ['data-scrolling', 'data-chat-theme', 'data-sidebar-theme', 'class'],
   });
   document.addEventListener('pointerover', hover, true);
   documentRoot.addEventListener('pointerleave', leave);

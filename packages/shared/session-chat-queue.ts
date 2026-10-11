@@ -1,7 +1,6 @@
 // Session Chat prompt queue + cross-client composer draft.
 // Canonical wire types shared by gxserver (Rust mirror in
-// server/src/session_chat_queue.rs), the shared React chat components
-// (packages/core-ui/chat/), and every client host. Re-exported from ./session-chat and
+// server/src/session_chat_queue.rs) and the client hosts. Re-exported from ./session-chat and
 // ./gxserver-protocol so consumers keep a single import surface.
 // All values must stay plain JSON: they cross the /api/events websocket, the
 // CEF bridge, the mobile bridge, and the gpui remote-machine proxy.
@@ -159,6 +158,8 @@ export interface GxserverQueueSessionChatPromptParams {
   sessionId: string;
   /** Appended at the END of the queue. Callers trim before sending. */
   text: string;
+  /** See `GxserverSendSessionChatMessageParams.sendRequestId`: a repeated id is not queued twice. */
+  sendRequestId?: string;
 }
 
 export interface GxserverQueueSessionChatPromptResult extends GxserverSessionChatQueueResult {

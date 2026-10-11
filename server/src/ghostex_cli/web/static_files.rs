@@ -62,14 +62,14 @@ pub(crate) fn resolve_web_dist_dir(config: &GxserverConfig) -> PathBuf {
     let executable_candidate = std::env::current_exe()
         .ok()
         .and_then(|executable| executable.parent().map(Path::to_path_buf))
-        .map(|directory| directory.join("apps/web/dist"));
+        .map(|directory| directory.join("apps/gpui-web/www/dist"));
     if let Some(candidate) = executable_candidate.filter(|candidate| candidate.is_dir()) {
         return candidate;
     }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
-        .join("apps/web/dist")
+        .join("apps/gpui-web/www/dist")
 }
 
 pub(crate) fn decode_web_path(request_path: &str) -> std::result::Result<PathBuf, ()> {
@@ -161,6 +161,10 @@ pub(crate) fn static_content_type(path: &Path) -> &'static str {
         Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
         Some("png") => "image/png",
+        Some("wasm") => "application/wasm",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("json") => "application/json; charset=utf-8",
         Some("map") => "application/json; charset=utf-8",
         _ => "application/octet-stream",
     }
@@ -181,7 +185,7 @@ pub(crate) fn is_hashed_asset(path: &Path) -> bool {
 }
 
 pub(crate) fn web_not_built_response() -> Response<Body> {
-    let html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ghostex Web</title></head><body><h1>The Ghostex web app is not built</h1><p>Run <code>bun run web:build</code> from the Ghostex checkout.</p></body></html>";
+    let html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ghostex Web</title></head><body><h1>The Ghostex web app is not built</h1><p>Run <code>cargo xtask web-build</code> from the Ghostex checkout.</p></body></html>";
     let mut response = Response::new(Body::from(html));
     response.headers_mut().insert(
         header::CONTENT_TYPE,

@@ -34,6 +34,9 @@ patch_files() {
 	0007-teardown-deadlock-hardening)
 		echo "src/Surface.zig src/renderer/generic.zig src/termio/Exec.zig src/termio/Termio.zig src/termio/mailbox.zig src/termio/stream_handler.zig"
 		;;
+	0008-embed-custom-shader-msl-api)
+		echo "src/apprt/embedded.zig"
+		;;
 	*)
 		echo "unknown patch: $1" >&2
 		return 1
@@ -48,6 +51,7 @@ PATCH_NAMES=(
 	0005-embed-config-string-apis
 	0006-mouse-cmd-click-encode-and-mod-dedupe
 	0007-teardown-deadlock-hardening
+	0008-embed-custom-shader-msl-api
 )
 
 pinned_commit() {
@@ -125,7 +129,7 @@ sync() {
 Synced to $sha. Now verify (see .dependencies/ghostty-patches/README.md):
   1. cd .dependencies/ghostty && zig build test-lib-vt
   2. cd apps/desktop && cargo check
-  3. Re-audit apps/desktop/src/ghostty_vt.rs + ghostty_kit.rs against .dependencies/ghostty/include/
+  3. Re-audit apps/desktop/src/ghostty_vt/ffi.rs + ghostty_kit.rs against .dependencies/ghostty/include/
      (implicit C enums renumber when upstream inserts entries!)
   4. cd .dependencies/ghostty && zig build -Demit-xcframework -Dxcframework-target=universal \\
        -Demit-macos-app=false -Doptimize=ReleaseSafe

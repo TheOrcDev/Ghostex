@@ -1,167 +1,111 @@
-use super::account_reset_flow::{self as flow, Mode};
+use crate::app::window::account_usage::AccountUsagePanel;
 use crate::*;
-use gpui_component::{WindowExt, notification::Notification};
-use serde_json::Value;
-use std::{
-    collections::HashSet,
-    sync::{Mutex, OnceLock},
-    time::Duration,
-};
-
-static ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-struct ResetGuard(String);
-impl Drop for ResetGuard {
-    fn drop(&mut self) {
-        if let Ok(mut active) = ACTIVE.get_or_init(Mutex::default).lock() {
-            active.remove(&self.0);
-        }
-    }
-}
-fn rpc(
-    target: &Option<GpuiRemoteGxserverRequestTarget>,
-    path: &str,
-    params: &Value,
-) -> Result<Value, String> {
-    match target {
-        Some(target) => {
-            gpui_remote_gxserver_rpc_result(target, path, params, Duration::from_secs(60))
-        }
-        None => gpui_gxserver_rpc_result(path, params, Duration::from_secs(60)),
-    }
-}
-
-fn reset_project_id(active_project: Option<&str>, account_machine: &str) -> Result<String, String> {
-    let project_id = active_project
-        .filter(|id| !id.is_empty())
-        .ok_or("Open a project before redeeming a reset.")?;
-    if let Some(reference) = gpui_remote_project_reference_from_project_id(project_id) {
-        if reference.remote_machine_id == account_machine {
-            return Ok(reference.project_id);
-        }
-    } else if account_machine == "local" && !project_id.starts_with("remote:") {
-        return Ok(project_id.to_string());
-    }
-    Err("Open a project on the same computer as this account before redeeming a reset.".into())
-}
+use serde_json::{Value, json};
+use std::time::Duration;
 
 impl GhostexGpuiApp {
-    pub(crate) fn start_account_reset(
+    /// CDXC:Notifications 2026-10-05 DECISION:
+    /// User: a banked reset expiry warning has "an action to redeem now / open the usage panel". Opening the row (click, jump key, or its system notification) opens that account's usage panel, where its resets are used, anchored to the bell. An account without a titlebar usage button on this computer has no panel to open, so it opens Settings > Accounts instead.
+    pub(crate) fn open_account_notification(
         &mut self,
-        account: &Value,
-        window: &mut Window,
+        account_id: &str,
         cx: &mut gpui::Context<Self>,
     ) {
-        if account["provider"] != "codex" || account["registered"] != true {
-            return;
-        }
-        let Some(account_id) = account["id"].as_str().map(str::to_string) else {
+        let usage = self
+            .titlebar_accounts
+            .iter()
+            .find(|a| a["id"].as_str() == Some(account_id) && a["titlebarMachine"] == "local")
+            .and_then(|a| ExtensionId::new(a["titlebarKey"].as_str().unwrap_or("")));
+        let anchor = self.titlebar_notification_bell_bounds.get();
+        let (Some(id), Some(main), Some(anchor)) = (usage, self.main_window_handle, anchor) else {
+            self.open_gpui_settings_accounts_page(None, cx);
             return;
         };
+        let app = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = main.update(cx, |_, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    if !app.titlebar_popup_menu_open(GpuiTitlebarPopupKind::AccountUsage(id)) {
+                        app.open_titlebar_account_usage(id, anchor, window, cx);
+                    }
+                });
+            });
+        });
+    }
+
+    /// Claims the reset the user confirmed in an account's usage panel on the gxserver that owns the account, then refreshes every account button and hands the result back to the panel.
+    pub(crate) fn redeem_account_reset(
+        &mut self,
+        titlebar_key: &str,
+        credit_id: String,
+        request_id: String,
+        panel: gpui::WeakEntity<AccountUsagePanel>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let account = self
+            .titlebar_accounts
+            .iter()
+            .find(|a| a["titlebarKey"] == titlebar_key && a["registered"] == true)
+            .cloned()
+            .unwrap_or(Value::Null);
         let machine = account["titlebarMachine"]
             .as_str()
             .unwrap_or("local")
             .to_string();
-        let snapshot = self
-            .latest_sidebar_project_snapshot
-            .as_ref()
-            .filter(|snapshot| !snapshot.is_quick_projectless);
-        let project_id = reset_project_id(gpui_active_project_id_from_snapshot(snapshot), &machine);
-        self.close_gpui_titlebar_popup(None, window, cx);
-        let project_id = match project_id {
-            Ok(project_id) => project_id,
-            Err(error) => {
-                window.push_notification(Notification::warning(error), cx);
-                return;
-            }
-        };
         let target = if machine == "local" {
-            None
+            Ok(None)
         } else {
-            let Some(connection) = self.remote_gxserver_connections.get(&machine) else {
-                return;
-            };
-            Some(connection.request_target())
+            self.remote_gxserver_connections
+                .get(&machine)
+                .map(|connection| Some(connection.request_target()))
+                .ok_or("That computer is no longer connected.")
         };
-        let key = format!("{machine}:{account_id}");
-        let Ok(mut active) = ACTIVE.get_or_init(Mutex::default).lock() else {
-            return;
+        let request = match (account["id"].as_str(), target) {
+            (Some(id), Ok(target)) => Ok((
+                target,
+                json!({"operation":"redeemReset","id":id,"creditId":credit_id,"requestId":request_id}),
+            )),
+            (None, _) => Err("This account is no longer available.".to_string()),
+            (_, Err(error)) => Err(error.to_string()),
         };
-        if !active.insert(key.clone()) {
-            window.push_notification(
-                Notification::warning("A reset is already in progress for this account."),
-                cx,
-            );
-            return;
-        }
-        drop(active);
-        let guard = ResetGuard(key);
-        window.push_notification(
-            Notification::info("Opening a Codex chat to redeem the reset expiring soonest."),
-            cx,
-        );
         cx.spawn(async move |this, cx| {
-            let create_target = target.clone();
-            let create_id = account_id.clone();
-            let created = cx.background_executor().spawn(async move {
-                flow::create(&|path, params| rpc(&create_target, path, params), &create_id, &project_id)
-            }).await;
-            let result = match created {
-                Ok(session) => {
-                    let session_id = session.target["sessionId"].as_str().unwrap_or("");
-                    let project_id = session.target["projectId"].as_str().unwrap_or("");
-                    let sidebar_id = if machine == "local" {
-                        gpui_combined_presentation_session_id(project_id, session_id)
-                    } else {
-                        gpui_remote_scoped_session_id(&machine, project_id, session_id)
-                    };
-                    let focused = this.update_in(cx, |this, _window, cx| {
-                        let focused = this.dispatch_gpui_command_palette_session_focus(&sidebar_id, cx);
-                        this.reveal_sidebar_session(&sidebar_id, cx);
-                        focused
-                    }).unwrap_or(false);
-                    if !focused {
-                        Err("The reset chat was created, but could not be opened. Continue from the sidebar.".to_string())
-                    } else {
-                        cx.background_executor().spawn(async move {
-                            let result = flow::drive(&|path, params| rpc(&target, path, params), &session, &account_id, Mode::Redeem);
-                            if result.is_ok() {
-                                let _ = rpc(&target, "/api/agentAccounts", &serde_json::json!({"operation":"titlebar","refresh":true}));
+            let result = match request {
+                Ok((target, params)) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let timeout = Duration::from_secs(90);
+                            match target {
+                                Some(target) => gpui_remote_gxserver_rpc_result(
+                                    &target,
+                                    "/api/agentAccounts",
+                                    &params,
+                                    timeout,
+                                ),
+                                None => {
+                                    gpui_gxserver_rpc_result("/api/agentAccounts", &params, timeout)
+                                }
                             }
-                            result
-                        }).await
-                    }
+                        })
+                        .await
                 }
                 Err(error) => Err(error),
             };
-            let _ = this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(()) => window.push_notification(Notification::success("Reset redeemed. Account limits are refreshing."), cx),
-                    Err(error) => window.push_notification(Notification::warning(super::account_usage::account_display_text(&error)), cx),
-                }
+            let (outcome, message) = match result {
+                Ok(value) => (
+                    value["outcome"].as_str().unwrap_or("failed").to_string(),
+                    value["message"].as_str().unwrap_or("").to_string(),
+                ),
+                Err(error) => (
+                    "failed".to_string(),
+                    super::account_usage::account_display_text(&error),
+                ),
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.titlebar_accounts_revision = this.titlebar_accounts_revision.wrapping_add(1);
                 this.refresh_titlebar_accounts(cx);
             });
-            drop(guard);
-        }).detach();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::reset_project_id;
-
-    #[test]
-    fn reset_uses_the_active_project_on_the_accounts_computer() {
-        assert_eq!(reset_project_id(Some("P3lv0"), "local").unwrap(), "P3lv0");
-        assert_eq!(
-            reset_project_id(
-                Some("remote:remote-workstation:project:P42"),
-                "remote-workstation"
-            )
-            .unwrap(),
-            "P42"
-        );
-        assert!(reset_project_id(Some("remote:remote-workstation:project:P42"), "local").is_err());
-        assert!(reset_project_id(Some("P3lv0"), "remote-workstation").is_err());
-        assert!(reset_project_id(None, "local").is_err());
+            let _ = panel.update(cx, |panel, cx| panel.finish_claim(&outcome, message, cx));
+        })
+        .detach();
     }
 }

@@ -1,0 +1,1 @@
+../../desktop/src/terminal_scrollbar_reveal.rs

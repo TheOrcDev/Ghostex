@@ -32,6 +32,7 @@ import {
 import { releaseProvenanceAssetName, validateReleaseProvenance } from './provenance.mjs';
 import { DEFAULT_BASELINE_COUNT, computePlan, planSummaryLine, renderPlanText, scopeFromEnv } from './plan.mjs';
 import { withRetryProfile } from './retry.mjs';
+import { componentsGithubRepo } from './components-repo.mjs';
 
 const versionPattern = /^\d+\.\d+\.\d+$/u;
 const releaseTagPattern = /^v(\d+\.\d+\.\d+)$/u;
@@ -363,7 +364,13 @@ export function resolveComponentIdentities({ baselines, entries, overrides = {},
 }
 
 /* The published platform assets of `<component>-<componentVersion>`. */
-export async function collectComponentTagState({ baselines, identities, repo }) {
+/*
+ * Reuse probes look in the components repository only. Component tags that
+ * exist solely in the app repository (published before 2026-09-16) are not
+ * reuse candidates: they are mirrored there by hand with
+ * mirror-component-release.mjs, after which the probe finds them.
+ */
+export async function collectComponentTagState({ baselines, identities, repo = componentsGithubRepo() }) {
   const state = {};
   for (const component of COMPONENT_IDS) {
     const componentVersion = identities[component];
@@ -511,6 +518,8 @@ export function planGithubOutputs(plan) {
     job_android: plan.jobs.android,
     job_code_server_arm64: plan.jobs.code_server_arm64,
     job_code_server_darwin_arm64: plan.jobs.code_server_darwin_arm64,
+    job_code_server_windows_arm64: plan.jobs.code_server_windows_arm64,
+    job_code_server_windows_x64: plan.jobs.code_server_windows_x64,
     job_code_server_x64: plan.jobs.code_server_x64,
     job_gxserver_arm64: plan.jobs.gxserver_arm64,
     job_gxserver_x64: plan.jobs.gxserver_x64,
@@ -582,7 +591,7 @@ export async function buildPlanFromRepository(options) {
     componentTagState = await collectComponentTagState({
       baselines,
       identities: componentIdentities,
-      repo: options.repo,
+      repo: componentsGithubRepo(),
     });
   }
 

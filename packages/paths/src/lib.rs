@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod powershell;
+
 const PRODUCT_DIR_UNIX: &str = "ghostex";
 #[cfg(target_os = "windows")]
 const PRODUCT_DIR_NATIVE: &str = "Ghostex";
@@ -88,6 +90,13 @@ impl GhostexPaths {
 
     pub fn gxserver_data_dir(&self) -> PathBuf {
         self.data_dir.join("gxserver")
+    }
+
+    /// CDXC:PlatformSupport 2026-09-28 WHY:
+    /// Windows local starts can install the app outside Program Files (`GHOSTEX_INSTALL_DIR`), and the managed CLI under Data/gxserver cannot tell where the app lives from its own path. The desktop app records its folder here on every gxserver start; readers try it before Program Files.
+    /// SEE-ALSO: apps/desktop/src/windows_terminal_backend/native_package.rs, server/src/ghostex_cli/editors/prompt.rs, server/src/ghostex_cli/launchers.rs, apps/desktop/src/app/helpers/remote/windows.rs (the PowerShell readers hardcode `gxserver/windows-app-dir`).
+    pub fn windows_app_dir_file(&self) -> PathBuf {
+        self.gxserver_data_dir().join("windows-app-dir")
     }
 
     pub fn clients_dir(&self) -> PathBuf {

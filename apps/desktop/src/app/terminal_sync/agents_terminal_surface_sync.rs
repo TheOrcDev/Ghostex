@@ -15,6 +15,11 @@ impl GhostexGpuiApp {
         scale_factor: f32,
         cx: &mut gpui::Context<Self>,
     ) {
+        // A window closing beside another one detaches its terminals; that is not their sessions
+        // exiting (app/workspace_windows/).
+        if self.workspace_window_closing {
+            return;
+        }
         /*
         CDXC:Terminal 2026-06-22-22:45:
         The GPUI App owns native terminal host plans as runtime-only slot-keyed maps, not persisted workspace model data. Recompute them only from current rendered running Agents mount slots, active Agents visibility, and runtime body bounds so stale tabs, sleeping/missing sessions, hidden leaves, and inactive tabs cannot retain or fabricate native terminal views.
@@ -88,12 +93,12 @@ impl GhostexGpuiApp {
         */
         self.reconcile_preferred_agents_chat_launch_intents(cx);
         prune_agents_terminal_startup_body_slot_geometries(
-            self.active_mode == TitlebarMode::Agents,
+            self.agents_workspace_visible(),
             &self.agents_workspace,
             &mut self.agents_terminal_startup_body_slot_geometries,
         );
         prune_agents_terminal_parked_owner_body_slot_geometries(
-            self.active_mode == TitlebarMode::Agents,
+            self.agents_workspace_visible(),
             &self.agents_workspace,
             &mut self.agents_terminal_parked_owner_body_slot_geometries,
         );
@@ -107,14 +112,14 @@ impl GhostexGpuiApp {
         );
         self.agents_terminal_startup_coordinator
             .sync_visible_mounting_startup_candidates(
-                self.active_mode == TitlebarMode::Agents,
+                self.agents_workspace_visible(),
                 &self.agents_workspace,
                 &mut self.agents_terminal_runtime_sessions,
                 &self.agents_terminal_startup_body_slot_geometries,
             );
         self.agents_terminal_startup_coordinator
             .sync_startup_launch_plans(
-                self.active_mode == TitlebarMode::Agents,
+                self.agents_workspace_visible(),
                 &self.agents_workspace,
                 &self.agents_terminal_runtime_sessions,
                 &self.agents_terminal_startup_body_slot_geometries,
@@ -313,7 +318,7 @@ impl GhostexGpuiApp {
         let startup_host_preservation_keys = self
             .agents_terminal_startup_coordinator
             .startup_host_preservation_keys(
-                self.active_mode == TitlebarMode::Agents,
+                self.agents_workspace_visible(),
                 &self.agents_workspace,
                 &self.agents_terminal_runtime_sessions,
             );
@@ -361,7 +366,7 @@ impl GhostexGpuiApp {
         );
         let failed_results = failed_agents_terminal_startup_results_from_metadata(
             &self.agents_terminal_startup_coordinator,
-            self.active_mode == TitlebarMode::Agents,
+            self.agents_workspace_visible(),
             &self.agents_workspace,
             &self.agents_terminal_runtime_sessions,
             metadata_snapshots.iter().copied(),
@@ -720,6 +725,123 @@ impl GhostexGpuiApp {
                 app.tick();
                 self.drain_agents_terminal_runtime_clipboard_requests(cx);
             };
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn drain_agents_terminal_runtime_clipboard_requests(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        /*
+        CDXC:Clipboard 2026-06-23-19:07:
+        Agents runtime clipboard handoff is authorized by exact mounted surface ownership, not focus. The drain snapshots current Agents mount keys, re-gets the still-mounted owner on the app thread, enables only standard clipboard for owner-local queued Ghostty requests, reads only explicit string entries, and writes only runtime-provided text without logging, persistence, selection clipboard support, or fallback requester inference.
+
+        CDXC:Clipboard 2026-06-27-10:28:
+        Runtime Ghostty clipboard reads share the direct-paste previewable-image normalization so menu/Cmd paste and runtime clipboard requests convert the same validated image inputs while preserving the disabled setting as explicit-string-only.
+        */
+        let paste_previewable_images_enabled =
+            shared_settings::shared_sidebar_settings_snapshot().terminal_paste_previewable_images();
+        let slot_ids = self
+            .agents_terminal_ghostty_surfaces
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        let mut runtime_osc_state_changed = false;
+        let mut bell_shell_session_ids = Vec::new();
+        let mut terminal_link_requests = Vec::new();
+        for slot_id in slot_ids {
+            let Some(surface) = self.agents_terminal_ghostty_surfaces.get(&slot_id) else {
+                continue;
+            };
+            // The feedback needs the app after both closures have let go of it.
+            let mut copied = false;
+            surface.drain_runtime_clipboard_requests(
+                true,
+                || {
+                    terminal_runtime_clipboard_read_text(
+                        || cx.read_from_clipboard(),
+                        paste_previewable_images_enabled,
+                    )
+                },
+                |text| {
+                    terminal_runtime_clipboard_write_standard_text(text, |item| {
+                        cx.write_to_clipboard(item);
+                        copied = true;
+                    });
+                },
+            );
+            if copied {
+                gpui_copy_feedback(cx);
+            }
+            let action_events = surface.drain_runtime_action_events();
+            if !action_events.is_empty() {
+                let runtime_session_id = surface.runtime_session_id();
+                terminal_link_requests.extend(action_events.iter().filter_map(|event| {
+                    let terminal_ghostty_surface::GhosttyRuntimeActionEvent::OpenUrl { url } =
+                        event
+                    else {
+                        return None;
+                    };
+                    Some((runtime_session_id, slot_id.session_id, url.clone()))
+                }));
+                if action_events.iter().any(|event| {
+                    matches!(
+                        event,
+                        terminal_ghostty_surface::GhosttyRuntimeActionEvent::RingBell
+                    )
+                }) {
+                    bell_shell_session_ids.push(slot_id.session_id);
+                }
+                if action_events.iter().any(|event| {
+                    matches!(
+                        event,
+                        terminal_ghostty_surface::GhosttyRuntimeActionEvent::StartSearch { .. }
+                    )
+                }) {
+                    self.terminal_search_focus_pending = Some(surface.runtime_session_id());
+                }
+                runtime_osc_state_changed |= apply_gpui_terminal_runtime_action_events(
+                    &mut self.agents_terminal_runtime_osc_states,
+                    runtime_session_id,
+                    action_events,
+                );
+            }
+        }
+        for (runtime_session_id, session_id, url) in terminal_link_requests {
+            let working_directory = self
+                .agents_terminal_runtime_osc_states
+                .get(&runtime_session_id)
+                .and_then(|state| state.pwd.clone());
+            self.open_gpui_engine_terminal_action_url(
+                &url,
+                working_directory.as_deref(),
+                GpuiEngineTerminalEventTarget::Agents(session_id),
+                cx,
+            );
+        }
+        for shell_session_id in bell_shell_session_ids {
+            self.dispatch_gpui_workspace_terminal_bell(shell_session_id, cx);
+        }
+        if !self.agents_terminal_runtime_osc_states.is_empty() {
+            let live_runtime_session_ids = self
+                .agents_terminal_ghostty_surfaces
+                .values()
+                .map(|surface| surface.runtime_session_id())
+                .chain(
+                    self.agents_gpui_engine_terminals
+                        .values()
+                        .map(|record| record.runtime_session_id),
+                )
+                .collect::<HashSet<_>>();
+            self.agents_terminal_runtime_osc_states
+                .retain(|runtime_session_id, _| {
+                    live_runtime_session_ids.contains(runtime_session_id)
+                });
+        }
+        if runtime_osc_state_changed {
+            cx.notify();
         }
     }
 }

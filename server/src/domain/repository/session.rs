@@ -28,7 +28,37 @@ impl<'a> DomainRepository<'a> {
             params.get("restoredFromSessionId").and_then(Value::as_str),
         ) {
             let source = self.get_session(project_id, source_id)?;
-            if let Some(source) = source.filter(|s| {
+            let box_source = source
+                .as_ref()
+                .filter(|s| crate::agentbox::is_agentbox_session(s))
+                .cloned();
+            if let Some(source) = box_source {
+                /*
+                CDXC:AgentBox 2026-10-01 WHY:
+                Reopening a closed box session from Previous Sessions creates a new row and then deletes the old one. Without the old row's box record the new row started a plain shell (or a local agent) and the delete stopped the box it should have reopened, so the new row takes the box record, agent and launch settings and reattaches to the same box.
+                */
+                restored_params = params.clone();
+                for key in ["agentId", "cwd", "kind", "launchSettings"] {
+                    if let Some(value) = source.get(key) {
+                        restored_params.insert(key.to_string(), value.clone());
+                    }
+                }
+                let mut runtime_settings = restored_params
+                    .get("runtimeSettings")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                for key in ["agentbox", "agentCommand", "agentName", "launchAgentId"] {
+                    if let Some(value) = source.pointer(&format!("/runtimeSettings/{key}")) {
+                        runtime_settings.insert(key.to_string(), value.clone());
+                    }
+                }
+                restored_params.insert(
+                    "runtimeSettings".to_string(),
+                    Value::Object(runtime_settings),
+                );
+                &restored_params
+            } else if let Some(source) = source.filter(|s| {
                 s.pointer("/runtimeSettings/externalSession")
                     .and_then(Value::as_bool)
                     == Some(true)
@@ -119,6 +149,7 @@ impl<'a> DomainRepository<'a> {
                 normalized_params.insert("cwd".to_string(), Value::String(project_path));
             }
         }
+        stamp_custom_agent_icon(project, &mut normalized_params);
         let session = normalize_session_input(
             &self.server_id,
             &project_id,
@@ -203,7 +234,24 @@ impl<'a> DomainRepository<'a> {
         self.update_session_inner(params, true)
     }
 
+    /// CDXC:Sessions 2026-09-26 WHY: The update reads the whole row and writes the whole row back, so two calls that overlap on separate connections lose one write: Park with a tag sends the tag and the park as two concurrent `/api/updateSession` calls, and when the tag call read before the park landed it wrote `isParked = 0` straight back, so the row popped back unparked. Take SQLite's writer reservation before the read so overlapping updates queue and each merges onto the other's result; a caller already inside a transaction owns its own atomicity.
     fn update_session_inner(
+        &self,
+        params: &Map<String, Value>,
+        allow_stopped_lifecycle_revive: bool,
+    ) -> DomainResult<Value> {
+        if !self.db.is_autocommit() {
+            return self.update_session_row(params, allow_stopped_lifecycle_revive);
+        }
+        let transaction = Transaction::new_unchecked(self.db, TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let session = DomainRepository::new(&transaction, self.server_id.as_str())
+            .update_session_row(params, allow_stopped_lifecycle_revive)?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(session)
+    }
+
+    fn update_session_row(
         &self,
         params: &Map<String, Value>,
         allow_stopped_lifecycle_revive: bool,
@@ -219,7 +267,17 @@ impl<'a> DomainRepository<'a> {
             reject_stopped_session_revive(&current, params, "update-session")?;
         }
         let updated_at = now_iso();
-        let session = merge_session_update(&self.server_id, current, &updated_at, params)?;
+        let was_pinned = current.get("isPinned").and_then(Value::as_bool) == Some(true);
+        let mut session = merge_session_update(&self.server_id, current, &updated_at, params)?;
+        if !was_pinned
+            && session.get("isPinned").and_then(Value::as_bool) == Some(true)
+            && !params.contains_key("sidebarOrder")
+        {
+            let order = self.next_pinned_sidebar_order(&project_id, &session_id)?;
+            if let Some(object) = session.as_object_mut() {
+                object.insert("sidebarOrder".to_string(), Value::from(order));
+            }
+        }
         self.db
             .execute(
                 r#"
@@ -259,6 +317,40 @@ impl<'a> DomainRepository<'a> {
             )
             .map_err(sql_error)?;
         Ok(session)
+    }
+
+    /// CDXC:Sessions 2026-09-29 DECISION: User: "when i pin a session in the sidebar of the gpui app make sure we pin it to the bottom of the pinned list not the top". Pinned rows keep the order `sidebarOrder` gives them, so a newly pinned session takes the slot after the last pinned one. A sibling without a saved order (any sort mode but Manual) sorts after every numbered one, so those siblings are numbered in their current order first; otherwise the new row would jump above them.
+    fn next_pinned_sidebar_order(&self, project_id: &str, session_id: &str) -> DomainResult<i64> {
+        let mut pinned: Vec<Value> = self
+            .list_sessions(Some(project_id))?
+            .into_iter()
+            .filter(|other| {
+                other.get("isPinned").and_then(Value::as_bool) == Some(true)
+                    && other.get("sessionId").and_then(Value::as_str) != Some(session_id)
+            })
+            .collect();
+        pinned.sort_by_cached_key(crate::presentation::session_attributes::session_sort_key);
+        let has_unordered = pinned
+            .iter()
+            .any(|other| other.get("sidebarOrder").and_then(Value::as_f64).is_none());
+        if !has_unordered {
+            let max = pinned
+                .iter()
+                .filter_map(|other| other.get("sidebarOrder").and_then(Value::as_f64))
+                .fold(0.0_f64, f64::max);
+            return Ok(max.floor() as i64 + 1000);
+        }
+        for (index, other) in pinned.iter().enumerate() {
+            if let Some(other_id) = other.get("sessionId").and_then(Value::as_str) {
+                self.db
+                    .execute(
+                        "UPDATE sessions SET sidebarOrder = ?3 WHERE projectId = ?1 AND sessionId = ?2",
+                        params![project_id, other_id, ((index + 1) * 1000) as i64],
+                    )
+                    .map_err(sql_error)?;
+            }
+        }
+        Ok(((pinned.len() + 1) * 1000) as i64)
     }
 
     pub fn update_session_order(&self, params: &Map<String, Value>) -> DomainResult<Vec<Value>> {
@@ -468,15 +560,16 @@ impl<'a> DomainRepository<'a> {
             .collect()
     }
 
-    /// The project's rows that can satisfy `identities_match` for an agent
-    /// identity: same agent session id or same agent session path. A superset
-    /// of the in-memory match (agent-family checks stay with the caller), read
-    /// without hydrating the rest of the project.
+    /// The project's rows that can satisfy `identities_match_strength` for an
+    /// agent identity: same agent session id or same agent session path. A
+    /// superset of the in-memory match (agent-family checks and the
+    /// shared-store carve-out stay with the caller), read without hydrating
+    /// the rest of the project.
     ///
     /// CDXC:SessionIdentity 2026-09-11 WHY:
     /// The live-process identity pass runs on every presentation poll and, while a session's title is still a placeholder, re-hunts a trusted title among the project's other rows each time.
     /// That hunt hydrated the whole project, 7,000 stopped rows included, for every such session on every poll; it was the largest CPU cost left in gxserver after the presentation reads were scoped.
-    /// SEE-ALSO: `select_trusted_title_for_identity` and `live_process_identity_update_is_noop` in agents/identity.rs.
+    /// SEE-ALSO: `select_trusted_title_for_identity` in agents/identity/trusted_titles.rs and `live_process_identity_update_is_noop` in agents/identity/state_update.rs.
     pub fn list_sessions_matching_identity(
         &self,
         project_id: &str,
@@ -627,6 +720,52 @@ impl<'a> DomainRepository<'a> {
             .map_err(sql_error)?;
         let rows = statement
             .query_map([lifecycle_state], session_row_from_sql)
+            .map_err(sql_error)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        rows.into_iter()
+            .map(|row| session_from_row(&self.server_id, row))
+            .collect()
+    }
+
+    /// Full session rows whose recorded agent conversation is `agent_session_id`, in `list_sessions` order.
+    ///
+    /// CDXC:PromptSearch 2026-09-21 WHY:
+    /// Opening a Find result only needs the rows that own one conversation, but it used to hydrate every row through `list_sessions`. On a registry with 9,000 stopped rows that was most of a second between Enter and the modal closing; the JSON filter runs in SQLite and hydrates the handful of rows that match.
+    pub fn list_sessions_with_agent_session_id(
+        &self,
+        agent_session_id: &str,
+    ) -> DomainResult<Vec<Value>> {
+        let mut statement = self
+            .db
+            .prepare(
+                "SELECT * FROM sessions WHERE json_extract(runtimeSettingsJson, '$.agentSessionId') = ?1 ORDER BY updatedAt DESC, projectId ASC, sessionId ASC",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([agent_session_id], session_row_from_sql)
+            .map_err(sql_error)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        rows.into_iter()
+            .map(|row| session_from_row(&self.server_id, row))
+            .collect()
+    }
+
+    /// Full session rows whose agent runs in an agentbox box (`runtimeSettings.agentbox.boxName`),
+    /// optionally only the running ones. The JSON filter runs in SQLite, so the activity poller's
+    /// tick hydrates only box sessions.
+    pub fn list_agentbox_sessions(&self, running_only: bool) -> DomainResult<Vec<Value>> {
+        let mut statement = self
+            .db
+            .prepare(if running_only {
+                "SELECT * FROM sessions WHERE lifecycleState = 'running' AND json_extract(runtimeSettingsJson, '$.agentbox.boxName') IS NOT NULL ORDER BY updatedAt DESC, projectId ASC, sessionId ASC"
+            } else {
+                "SELECT * FROM sessions WHERE json_extract(runtimeSettingsJson, '$.agentbox.boxName') IS NOT NULL ORDER BY updatedAt DESC, projectId ASC, sessionId ASC"
+            })
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], session_row_from_sql)
             .map_err(sql_error)?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(sql_error)?;
@@ -854,4 +993,31 @@ fn validate_project_path_for_session(project: &Value) -> DomainResult<()> {
         code: "projectPathUnavailable",
         message,
     })
+}
+
+/// CDXC:SessionChat 2026-09-21 WHY: A custom agent's id (`custom-claude-…`) names no transcript family; only `launchSettings.icon` does. A launch sends the icon, but restoring a previous session sends the agent id alone, so the restored row reached chat as "not running a recognized coding agent" until live-process detection rewrote its agent id. Every create that names a project custom agent without an icon takes the icon from that agent's definition, so the row is right from its first read.
+fn stamp_custom_agent_icon(project: &Value, params: &mut Map<String, Value>) {
+    let Some(agent_id) = read_optional_text(params.get("agentId")) else {
+        return;
+    };
+    if read_optional_text(
+        params
+            .get("launchSettings")
+            .and_then(|settings| settings.get("icon")),
+    )
+    .is_some()
+    {
+        return;
+    }
+    let Some(icon) = crate::presentation::util::project_custom_agent_icon(Some(project), &agent_id)
+    else {
+        return;
+    };
+    let mut launch_settings = params
+        .get("launchSettings")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    launch_settings.insert("icon".to_string(), Value::String(icon));
+    params.insert("launchSettings".to_string(), Value::Object(launch_settings));
 }

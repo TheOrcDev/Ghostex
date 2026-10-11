@@ -162,6 +162,10 @@ pub(crate) fn switchable_session_agents(
 }
 
 pub(crate) fn switchable_session_agents_value(project: &Value, session: &Value) -> Option<Value> {
+    // A box session signs in inside its box; there is no local account to resume it under.
+    if crate::agentbox::is_agentbox_session(session) {
+        return None;
+    }
     let rows = switchable_session_agents(project, session);
     (!rows.is_empty()).then(|| {
         Value::Array(
@@ -197,6 +201,7 @@ pub(crate) fn switch_session_agent(
     let lifecycle = read_lifecycle(params)?;
     let project = require_project(repository, &lifecycle.project_id)?;
     let session = require_session(repository, &lifecycle)?;
+    crate::agentbox::refuse_for_agentbox_session(&session, "Switching the account")?;
     let agent_id = read_required_text(params.get("agentId"), "agentId")?;
     let previous_agent_id = read_text_value(&session, "agentId");
     if previous_agent_id

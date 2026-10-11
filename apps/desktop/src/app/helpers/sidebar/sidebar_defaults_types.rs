@@ -81,6 +81,11 @@ pub(crate) enum GpuiSidebarAgentMetadataWrite {
         agent_ids: Vec<String>,
         request_id: String,
     },
+    /// Settings › Agents switches: turn agents on or off without deleting them.
+    SetEnabled {
+        agent_ids: Vec<String>,
+        enabled: bool,
+    },
 }
 
 impl GpuiSidebarAgentMetadataWrite {
@@ -129,6 +134,7 @@ pub(crate) enum GpuiSidebarCommandMetadataWrite {
         command: Option<String>,
         command_id: Option<String>,
         icon: Option<String>,
+        links: Vec<GpuiTitlebarActionLink>,
         name: String,
         play_completion_sound: bool,
         scope: GpuiSidebarCommandScope,
@@ -341,6 +347,21 @@ pub(crate) const GPUI_DEFAULT_SIDEBAR_AGENTS: &[GpuiDefaultSidebarAgent] = &[
         hidden_by_default: false,
         icon: "zcode",
         name: "ZCode",
+    },
+    GpuiDefaultSidebarAgent {
+        agent_id: "freebuff",
+        command: "freebuff",
+        hidden_by_default: false,
+        icon: "freebuff",
+        name: "Freebuff",
+    },
+    GpuiDefaultSidebarAgent {
+        agent_id: "empryo",
+        command: "empryo",
+        // CDXC:AgentProviders 2026-10-08 WHY: starts off like the server's list, so Empryo shows under More agents until turned on. SEE-ALSO: server/src/sidebar_hud/model.rs.
+        hidden_by_default: true,
+        icon: "empryo",
+        name: "Empryo",
     },
 ];
 

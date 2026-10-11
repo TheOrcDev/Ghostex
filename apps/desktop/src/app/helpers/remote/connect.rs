@@ -38,7 +38,7 @@ pub(crate) fn gpui_connect_remote_gxserver(
     gpui_connect_remote_gxserver_platform(config, install_approved, progress_tx)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_connect_remote_gxserver_platform(
     _config: GpuiRemoteMachineConfig,
     _install_approved: bool,
@@ -46,11 +46,11 @@ pub(crate) fn gpui_connect_remote_gxserver_platform(
 ) -> GpuiRemoteGxserverConnectResult {
     GpuiRemoteGxserverConnectResult::without_connection(
         GpuiRemoteGxserverConnectState::Unsupported,
-        "Remote gxserver connect from Settings is only available in the macOS GPUI build.",
+        "Remote gxserver connect from Settings is unavailable in this build.",
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_connect_remote_gxserver_platform(
     config: GpuiRemoteMachineConfig,
     install_approved: bool,
@@ -92,7 +92,7 @@ pub(crate) fn gpui_connect_remote_gxserver_platform(
     result
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
     config: GpuiRemoteMachineConfig,
     install_approved: bool,
@@ -121,6 +121,17 @@ pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
         gpui_remote_token_read_command(),
         GPUI_REMOTE_GXSERVER_CONNECT_TIMEOUT,
     );
+    if gpui_remote_process_failure_is_authentication(&token_result) {
+        // The login itself was refused: probing the platform would only be another failed login.
+        return GpuiRemoteGxserverConnectResult::without_connection(
+            GpuiRemoteGxserverConnectState::AuthFailed,
+            gpui_remote_sanitized_process_failure(
+                "Remote gxserver SSH setup failed.",
+                &token_result,
+            )
+            .as_str(),
+        );
+    }
     if token_result.exit_code != 0 {
         /*
         CDXC:RemoteMachines 2026-07-26:
@@ -145,7 +156,7 @@ pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
             Ok(GpuiRemoteExecutionTarget::PosixHost) => {}
             Err(GpuiRemoteExecutionTargetProbeError::Ssh(probe_result)) => {
                 return GpuiRemoteGxserverConnectResult::without_connection(
-                    GpuiRemoteGxserverConnectState::SshFailed,
+                    gpui_remote_ssh_failure_state(&probe_result),
                     gpui_remote_sanitized_process_failure(
                         "Remote gxserver SSH setup failed.",
                         &probe_result,
@@ -156,7 +167,7 @@ pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
             Err(GpuiRemoteExecutionTargetProbeError::Unsupported(message)) => {
                 if gpui_remote_process_failure_is_ssh_transport(&token_result) {
                     return GpuiRemoteGxserverConnectResult::without_connection(
-                        GpuiRemoteGxserverConnectState::SshFailed,
+                        gpui_remote_ssh_failure_state(&token_result),
                         gpui_remote_sanitized_process_failure(
                             "Remote gxserver SSH setup failed.",
                             &token_result,
@@ -209,6 +220,12 @@ pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
     if let Some(state) =
         gpui_remote_token_read_failure_state(token_result.exit_code, install_approved)
     {
+        let state = match state {
+            GpuiRemoteGxserverConnectState::SshFailed => {
+                gpui_remote_ssh_failure_state(&token_result)
+            }
+            state => state,
+        };
         return GpuiRemoteGxserverConnectResult::without_connection(
             state,
             gpui_remote_token_read_failure_message(state, &token_result).as_str(),
@@ -228,13 +245,13 @@ pub(crate) fn gpui_connect_remote_gxserver_platform_inner(
         GpuiRemoteTokenKeychainResult::Unsupported => {
             return GpuiRemoteGxserverConnectResult::without_connection(
                 GpuiRemoteGxserverConnectState::Unsupported,
-                "Remote gxserver token storage is only available on macOS.",
+                "Remote gxserver token storage is unavailable in this build.",
             );
         }
         GpuiRemoteTokenKeychainResult::Failed => {
             return GpuiRemoteGxserverConnectResult::without_connection(
                 GpuiRemoteGxserverConnectState::KeychainFailed,
-                "Could not store the remote gxserver token in Keychain.",
+                "Could not store the remote gxserver token in secure system storage.",
             );
         }
     }
@@ -271,10 +288,9 @@ pub(crate) fn gpui_remote_token_read_failure_message(
         GpuiRemoteGxserverConnectState::InstallFailed => {
             "Remote gxserver install failed.".to_string()
         }
-        GpuiRemoteGxserverConnectState::SshFailed => gpui_remote_sanitized_process_failure(
-            "Remote gxserver SSH setup failed.",
-            result,
-        ),
+        GpuiRemoteGxserverConnectState::SshFailed | GpuiRemoteGxserverConnectState::AuthFailed => {
+            gpui_remote_sanitized_process_failure("Remote gxserver SSH setup failed.", result)
+        }
         _ => "Remote gxserver connect failed.".to_string(),
     }
 }
@@ -284,8 +300,11 @@ pub(crate) fn gpui_remote_sanitized_process_failure(
     result: &GpuiRemoteProcessResult,
 ) -> String {
     let stderr = result.stderr.trim().to_ascii_lowercase();
+    if stderr.contains("netcat-openbsd") {
+        return "SSH password authentication on Linux requires netcat-openbsd. Install it on this computer, then reconnect.".to_string();
+    }
     if stderr.contains("saved ssh password") || stderr.contains("ssh password helper") {
-        return "Ghostex could not read the saved SSH password from Keychain. Open Remote settings and save the password again.".to_string();
+        return "Ghostex could not read the saved SSH password from secure system storage. Open Remote settings and save the password again.".to_string();
     }
     if stderr.is_empty() {
         if result.exit_code == 124 {
@@ -294,7 +313,7 @@ pub(crate) fn gpui_remote_sanitized_process_failure(
         return default_message.to_string();
     }
     if stderr.contains("permission denied") {
-        return "SSH authentication failed for the remote machine.".to_string();
+        return "The machine rejected the saved SSH username, password or key. On Windows, use the account password, not the Windows Hello PIN.".to_string();
     }
     if stderr.contains("could not resolve hostname") {
         return "SSH could not resolve the remote host.".to_string();
@@ -350,6 +369,30 @@ pub(crate) fn gpui_remote_process_stderr_category(
     "other"
 }
 
+/// SSH reached the machine and the login was refused (`user@host: Permission denied (publickey,
+/// password,…)`), as opposed to a remote command that hit a permission error after logging in.
+pub(crate) fn gpui_remote_process_failure_is_authentication(
+    result: &GpuiRemoteProcessResult,
+) -> bool {
+    result.exit_code == 255
+        && result
+            .stderr
+            .to_ascii_lowercase()
+            .contains("permission denied (")
+}
+
+/// The state of an SSH transport failure: a refused login is `authFailed`, which the reconnect
+/// ladder does not retry; everything else is `sshFailed`.
+pub(crate) fn gpui_remote_ssh_failure_state(
+    result: &GpuiRemoteProcessResult,
+) -> GpuiRemoteGxserverConnectState {
+    if gpui_remote_process_failure_is_authentication(result) {
+        GpuiRemoteGxserverConnectState::AuthFailed
+    } else {
+        GpuiRemoteGxserverConnectState::SshFailed
+    }
+}
+
 pub(crate) fn gpui_remote_process_failure_is_ssh_transport(
     result: &GpuiRemoteProcessResult,
 ) -> bool {
@@ -360,6 +403,7 @@ pub(crate) fn gpui_remote_process_failure_is_ssh_transport(
     [
         "saved ssh password",
         "ssh password helper",
+        "netcat-openbsd",
         "permission denied",
         "could not resolve hostname",
         "connection refused",
@@ -372,7 +416,7 @@ pub(crate) fn gpui_remote_process_failure_is_ssh_transport(
     .any(|needle| stderr.contains(needle))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_probe_remote_execution_target(
     config: &GpuiRemoteMachineConfig,
 ) -> Result<GpuiRemoteExecutionTarget, GpuiRemoteExecutionTargetProbeError> {
@@ -730,25 +774,24 @@ pub(crate) fn gpui_extract_remote_managed_gxserver_build_identity(stdout: &str) 
         + GPUI_REMOTE_GXSERVER_BUILD_IDENTITY_START_MARKER.len();
     let payload = &stdout[start..];
     let end = payload.find(GPUI_REMOTE_GXSERVER_BUILD_IDENTITY_END_MARKER)?;
-    serde_json::from_str::<serde_json::Value>(payload[..end].trim())
+    gpui_gxserver_build_identity_from_json(payload[..end].trim())
+}
+
+pub(crate) fn gpui_bundled_remote_gxserver_build_identity(package_dir: &Path) -> Option<String> {
+    gpui_gxserver_build_identity_from_json(
+        &fs::read_to_string(package_dir.join("build-identity.json")).ok()?,
+    )
+}
+
+/// The `buildIdentity` of a gxserver package's build-identity.json.
+pub(crate) fn gpui_gxserver_build_identity_from_json(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
         .ok()?
         .get("buildIdentity")?
         .as_str()
         .map(str::trim)
         .filter(|identity| !identity.is_empty())
         .map(str::to_string)
-}
-
-pub(crate) fn gpui_bundled_remote_gxserver_build_identity(package_dir: &Path) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(
-        &fs::read_to_string(package_dir.join("build-identity.json")).ok()?,
-    )
-    .ok()?
-    .get("buildIdentity")?
-    .as_str()
-    .map(str::trim)
-    .filter(|identity| !identity.is_empty())
-    .map(str::to_string)
 }
 
 pub(crate) fn gpui_remote_installed_gxserver_version_command() -> &'static str {

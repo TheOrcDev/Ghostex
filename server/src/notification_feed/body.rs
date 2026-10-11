@@ -10,6 +10,11 @@ const NOTIFICATION_BODY_SCAN_LIMIT: usize = 60;
 /// The text of the agent's newest assistant message, so a feed row says what the agent said instead of only that it stopped.
 /// Reads the provider transcript tail the same way the chat prompt scanner does; every miss (no agent, no transcript, no assistant text in the window) returns None and the caller falls back to a kind label.
 pub(crate) fn last_assistant_message_text(session: &Value) -> Option<String> {
+    last_assistant_message(session).map(|(text, _)| text)
+}
+
+/// [`last_assistant_message_text`] with the message's transcript timestamp in milliseconds.
+pub(crate) fn last_assistant_message(session: &Value) -> Option<(String, Option<i64>)> {
     let transcript_agent = crate::session_chat::resolve_session_chat_transcript_agent(
         session_chat_agent_for_session(session).as_deref(),
     )?;
@@ -44,6 +49,6 @@ pub(crate) fn last_assistant_message_text(session: &Value) -> Option<String> {
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
-            (!text.trim().is_empty()).then_some(text)
+            (!text.trim().is_empty()).then_some((text, message.timestamp))
         })
 }

@@ -452,13 +452,15 @@ const customerDownloads = renderCustomerDownloadNotes(
   version,
   manifests.flatMap((manifest) => manifest.artifacts.map((artifact) => artifact.name))
 );
-if (customerDownloads) releaseNotes.push(customerDownloads, '');
+if (customerDownloads) releaseNotes.unshift(customerDownloads, '');
 const notesPath = path.join(artifactsRoot, `release-notes-${version}.md`);
 writeFileSync(notesPath, `${releaseNotes.join('\n').trim()}\n`);
-const expectedAssets = new Map([
-  ...manifests.flatMap((manifest) => manifest.artifacts).map((artifact) => [artifact.name, artifact.sha256]),
-  [provenanceAssetName, provenanceAssetSha],
-]);
+const expectedAssets = new Map(
+  /** @type {Array<[string, string]>} */ ([
+    ...manifests.flatMap((manifest) => manifest.artifacts).map((artifact) => [artifact.name, artifact.sha256]),
+    [provenanceAssetName, provenanceAssetSha],
+  ])
+);
 if (expectedAssets.size !== uploadPaths.length) throw new Error('Release artifact names are not globally unique');
 
 /*

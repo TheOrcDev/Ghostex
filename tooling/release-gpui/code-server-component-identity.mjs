@@ -17,6 +17,24 @@ export const CODE_SERVER_NODE_PAYLOAD_INPUTS = [
   'tsconfig.json',
 ];
 
+/*
+ * CDXC:Release 2026-09-16 WHY:
+ * The native Windows editor (VS Code REH for win32, platform windows-native-<arch>)
+ * is produced by build-windows-code-server.ps1, so that script is part of the
+ * payload recipe the same way ci/build/build-code-server.sh is for every platform.
+ * It is folded into the one shared component identity rather than into a
+ * Windows-only identity: every platform asset of the component lives under the
+ * single immutable tag code-server-<componentVersion>, and a second tag would need
+ * a second manifest record and a second planner entry. A recipe change therefore
+ * re-keys the whole component (the Linux and Darwin assets rebuild once too, in
+ * parallel and off the critical path), and an unchanged recipe reuses every asset.
+ * The pinned Node version is already covered through .node-version above. The
+ * inputs are read from the Ghostex checkout's HEAD, like the code-server inputs.
+ */
+export const CODE_SERVER_RECIPE_INPUTS = ['apps/desktop/scripts/build-windows-code-server.ps1'];
+
+const ghostexRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
 async function payloadFiles(codeServerRoot) {
   const files = [];
 
@@ -42,21 +60,29 @@ async function payloadFiles(codeServerRoot) {
   return files.sort();
 }
 
-export async function codeServerNodePayloadFingerprint(codeServerRoot) {
+function canonicalInput(root, relativePath, label) {
+  const result = spawnSync('git', ['-C', root, 'show', `HEAD:${relativePath}`], {
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (result.status !== 0 || !Buffer.isBuffer(result.stdout)) {
+    const detail = Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf8').trim() : '';
+    throw new Error(`Could not read canonical ${label} ${relativePath} from HEAD${detail ? `: ${detail}` : ''}`);
+  }
+  return result.stdout;
+}
+
+export async function codeServerNodePayloadFingerprint(codeServerRoot, { recipeRoot = ghostexRepoRoot } = {}) {
   const root = path.resolve(codeServerRoot);
   const digest = createHash('sha256');
   for (const relativePath of await payloadFiles(root)) {
-    const result = spawnSync('git', ['-C', root, 'show', `HEAD:${relativePath}`], {
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    if (result.status !== 0 || !Buffer.isBuffer(result.stdout)) {
-      const detail = Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf8').trim() : '';
-      throw new Error(
-        `Could not read canonical code-server payload input ${relativePath} from HEAD${detail ? `: ${detail}` : ''}`
-      );
-    }
-    const contents = result.stdout;
+    const contents = canonicalInput(root, relativePath, 'code-server payload input');
     digest.update(`file\0${relativePath}\0${contents.byteLength}\0`);
+    digest.update(contents);
+    digest.update('\0');
+  }
+  for (const relativePath of CODE_SERVER_RECIPE_INPUTS) {
+    const contents = canonicalInput(path.resolve(recipeRoot), relativePath, 'code-server recipe input');
+    digest.update(`recipe\0${relativePath}\0${contents.byteLength}\0`);
     digest.update(contents);
     digest.update('\0');
   }
@@ -74,12 +100,13 @@ function resolveSourceRevision(codeServerRoot) {
   return revision;
 }
 
-export async function codeServerComponentIdentity({ codeServerRoot, sourceRevision }) {
+/** @param {{ codeServerRoot: string, recipeRoot?: string, sourceRevision?: string }} options */
+export async function codeServerComponentIdentity({ codeServerRoot, recipeRoot, sourceRevision }) {
   const revision = sourceRevision ?? resolveSourceRevision(codeServerRoot);
   if (!/^[0-9a-f]{12}$/.test(revision)) {
     throw new Error(`Invalid code-server source revision: ${revision}`);
   }
-  const payloadFingerprint = await codeServerNodePayloadFingerprint(codeServerRoot);
+  const payloadFingerprint = await codeServerNodePayloadFingerprint(codeServerRoot, { recipeRoot });
   return {
     componentVersion: `${revision}-${CODE_SERVER_COMPONENT_IDENTITY_REVISION}-${payloadFingerprint}`,
     payloadFingerprint,
@@ -91,7 +118,8 @@ export function codeServerComponentNames(componentVersion, platform) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(componentVersion)) {
     throw new Error(`Invalid code-server component version: ${componentVersion}`);
   }
-  if (!/^(darwin-arm64|linux-(x64|arm64)|windows-(x64|arm64))$/.test(platform)) {
+  /* windows-<arch> is the WSL wrapper around the Linux archive; windows-native-<arch> is the native editor. */
+  if (!/^(darwin-arm64|linux-(x64|arm64)|windows-(native-)?(x64|arm64))$/.test(platform)) {
     throw new Error(`Invalid code-server component platform: ${platform}`);
   }
   return {

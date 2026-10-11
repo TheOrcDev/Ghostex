@@ -144,7 +144,18 @@ fn antigravity_tool_output(content: &str) -> String {
         lines.next();
     }
     let rest: Vec<&str> = lines.collect();
-    let joined = rest.join("\n");
+    // Write and edit results end their first line with an instruction to the model that the
+    // TUI never shows.
+    let joined = rest
+        .join("\n")
+        .replace(
+            " If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.",
+            "",
+        )
+        .replace(
+            "\nIf relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.",
+            "",
+        );
     // The result body is indented with a run of tabs on some tools; fold
     // that indentation away without touching the text itself.
     joined

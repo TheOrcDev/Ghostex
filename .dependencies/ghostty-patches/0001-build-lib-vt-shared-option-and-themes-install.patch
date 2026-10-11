@@ -1,6 +1,6 @@
 --- a/build.zig
 +++ b/build.zig
-@@ -88,6 +88,11 @@
+@@ -89,6 +89,11 @@
  
      // Ghostty resources like terminfo, shell integration, themes, etc.
      const resources = try buildpkg.GhosttyResources.init(b, &config, &deps);
@@ -12,54 +12,26 @@
      const i18n = if (config.i18n) try buildpkg.GhosttyI18n.init(b, &config) else null;
  
      // Ghostty executable, the actual runnable Ghostty program.
-@@ -125,26 +130,31 @@
-     }
- 
-     // libghostty-vt
--    const libghostty_vt_shared = shared: {
--        if (config.target.result.cpu.arch.isWasm()) {
--            break :shared try buildpkg.GhosttyLibVt.initWasm(
-+    // Ghostex patch (2026-07-11): the shared dylib is skippable via
-+    // -Demit-lib-vt-shared=false for static-archive-only consumers; see the
-+    // option definition in src/build/Config.zig for why.
-+    if (config.emit_lib_vt_shared) {
-+        const libghostty_vt_shared = shared: {
-+            if (config.target.result.cpu.arch.isWasm()) {
-+                break :shared try buildpkg.GhosttyLibVt.initWasm(
-+                    b,
-+                    &mod,
-+                );
-+            }
-+
-+            break :shared try buildpkg.GhosttyLibVt.initShared(
+@@ -129,6 +134,10 @@
+     const native_freestanding = config.target.result.os.tag == .freestanding and
+         !config.target.result.cpu.arch.isWasm();
+     const libghostty_vt_shared: ?buildpkg.GhosttyLibVt = shared: {
++        // Ghostex patch (2026-07-11): the shared dylib is skippable via
++        // -Demit-lib-vt-shared=false for static-archive-only consumers; see the
++        // option definition in src/build/Config.zig for why.
++        if (!config.emit_lib_vt_shared) break :shared null;
+         if (config.target.result.cpu.arch.isWasm()) {
+             break :shared try buildpkg.GhosttyLibVt.initWasm(
                  b,
-                 &mod,
-             );
--        }
-+        };
-+        libghostty_vt_shared.install(b.getInstallStep());
- 
--        break :shared try buildpkg.GhosttyLibVt.initShared(
--            b,
--            &mod,
--        );
--    };
--    libghostty_vt_shared.install(b.getInstallStep());
--
--    const type_schema_test = b.addSystemCommand(&.{"python3"});
--    type_schema_test.addFileArg(b.path("src/terminal/c/types-schema-verify.py"));
--    type_schema_test.addFileArg(b.path("src/terminal/c/types.schema.json"));
--    type_schema_test.addFileArg(libghostty_vt_shared.output);
--    test_lib_vt_schema_step.dependOn(&type_schema_test.step);
-+        const type_schema_test = b.addSystemCommand(&.{"python3"});
-+        type_schema_test.addFileArg(b.path("src/terminal/c/types-schema-verify.py"));
-+        type_schema_test.addFileArg(b.path("src/terminal/c/types.schema.json"));
-+        type_schema_test.addFileArg(libghostty_vt_shared.output);
-+        test_lib_vt_schema_step.dependOn(&type_schema_test.step);
-+    }
- 
-     // libghostty-vt static lib
-     const libghostty_vt_static = try buildpkg.GhosttyLibVt.initStatic(
+@@ -150,7 +159,7 @@
+         type_schema_test.addFileArg(b.path("src/terminal/c/types.schema.json"));
+         type_schema_test.addFileArg(shared.output);
+         test_lib_vt_schema_step.dependOn(&type_schema_test.step);
+-    } else {
++    } else if (native_freestanding) {
+         try test_lib_vt_schema_step.addError(
+             "cannot execute the ABI manifest for a native freestanding target",
+             .{},
 --- a/src/build/Config.zig
 +++ b/src/build/Config.zig
 @@ -53,6 +53,7 @@
@@ -89,7 +61,7 @@
  
      // Grab the environment from build state
      const env = &b.graph.environ_map;
-@@ -449,6 +454,18 @@
+@@ -450,6 +455,18 @@
          };
      };
  
@@ -108,7 +80,7 @@
      config.emit_exe = b.option(
          bool,
          "emit-exe",
-@@ -722,6 +739,11 @@
+@@ -723,6 +740,11 @@
              .ghostty => self.version,
              .lib => self.lib_version,
          },

@@ -7,8 +7,13 @@ use serde_json::Value;
 
 use crate::{domain::DomainRepository, session_chat_notice::SessionChatTerminalNotice};
 
-fn cleared() -> &'static Mutex<HashMap<String, String>> {
-    static CLEARED: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+struct ClearedNotice {
+    instance: String,
+    response_at: i64,
+}
+
+fn cleared() -> &'static Mutex<HashMap<String, ClearedNotice>> {
+    static CLEARED: OnceLock<Mutex<HashMap<String, ClearedNotice>>> = OnceLock::new();
     CLEARED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -45,7 +50,11 @@ pub(crate) fn visible(project: &str, session: &str, notice: &SessionChatTerminal
     cleared()
         .lock()
         .ok()
-        .and_then(|entries| entries.get(&key(project, session)).cloned())
+        .and_then(|entries| {
+            entries
+                .get(&key(project, session))
+                .map(|entry| entry.instance.clone())
+        })
         .as_deref()
         != Some(instance(notice).as_str())
 }
@@ -60,7 +69,10 @@ pub(crate) fn refresh(
     agent: Option<&str>,
     notice: &SessionChatTerminalNotice,
 ) {
-    if !crate::accounts::recovery::retryable(notice) || notice.is_answerable() {
+    if !crate::accounts::recovery::retryable(notice)
+        || (notice.is_answerable()
+            && notice.kind != crate::session_chat_notice::SESSION_CHAT_NOTICE_USAGE_LIMIT)
+    {
         return;
     }
     let Some(transcript_agent) = crate::session_chat::resolve_session_chat_transcript_agent(agent)
@@ -91,6 +103,7 @@ pub(crate) fn refresh(
     let mut response_at = None;
     let mut error_at = None;
     let mut usage_limit_error_at = None;
+    let mut account_disabled_error_at = None;
     for line in text.lines() {
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -106,6 +119,10 @@ pub(crate) fn refresh(
             && matches!(payload["type"].as_str(), Some("error" | "stream_error"))
         {
             payload["message"].as_str().map(str::to_owned)
+        } else if record["type"] == "event_msg" && payload["type"] == "task_complete" {
+            // CDXC:AgentProviders 2026-09-17 WHY:
+            // Codex also records usage limits in task_complete.error, without a separate error event. Missing that record leaves a fresh limit hidden by the previous account switch or mistaken for an error the agent already recovered from.
+            payload["error"]["message"].as_str().map(str::to_owned)
         } else if record["isApiErrorMessage"] == true {
             record["message"]["content"].as_array().map(|blocks| {
                 blocks
@@ -117,6 +134,9 @@ pub(crate) fn refresh(
         } else {
             None
         };
+        if crate::accounts::disabled::transcript_record_disabled(&record) {
+            account_disabled_error_at = Some(timestamp);
+        }
         if let Some(message) = error_message {
             if notice
                 .detail
@@ -164,12 +184,46 @@ pub(crate) fn refresh(
             }
         }
     }
-    let recovered = response_at.is_some_and(|response| response > error_at.unwrap_or(observed_at));
+    // A disabled account's error repainted after a switch is the previous login's; one the transcript records after the switch is the new login refusing too, so it lifts the suppression the same way a new usage limit does and the recovery pass can move on to the next account.
+    if notice.account_disabled() {
+        if let Some(since) =
+            crate::session_chat_notice::account_usage_notice_suppression(project, session)
+        {
+            if account_disabled_error_at.is_some_and(|error| error > since.timestamp_millis()) {
+                crate::session_chat_notice::lift_account_usage_notice_suppression(project, session);
+                let mut runtime = row["runtimeSettings"]
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                runtime.remove("accountSuppressedUsageNotice");
+                runtime.remove("accountSuppressedUsageNoticeAt");
+                let _ = crate::accounts::endpoint::update_session(repository, &row, runtime);
+            }
+        }
+        error_at = account_disabled_error_at.or(error_at);
+    }
+    // The limit chooser's body contains options, not the transcript's error
+    // text. Its quota error still anchors progress and lifts switch suppression.
+    if notice.kind == crate::session_chat_notice::SESSION_CHAT_NOTICE_USAGE_LIMIT {
+        error_at = usage_limit_error_at.or(error_at);
+    }
+    let recovered = response_at.filter(|response| *response > error_at.unwrap_or(observed_at));
     if let Ok(mut entries) = cleared().lock() {
-        if recovered {
-            entries.insert(key(project, session), instance(notice));
-        } else if error_at.is_some_and(|error| error > observed_at) {
-            // The same wording can describe a new failed attempt after progress.
+        if let Some(response_at) = recovered {
+            entries.insert(
+                key(project, session),
+                ClearedNotice {
+                    instance: instance(notice),
+                    response_at,
+                },
+            );
+        } else if error_at.is_some_and(|error| {
+            entries
+                .get(&key(project, session))
+                .is_some_and(|entry| error > entry.response_at)
+        }) {
+            // CDXC:AgentProviders 2026-09-22 WHY:
+            // The screen can report a new limit before its transcript record arrives. Comparing the later record with screen-detection time kept that limit hidden forever; compare it with the response that actually cleared the old error instead.
             entries.remove(&key(project, session));
         }
     }

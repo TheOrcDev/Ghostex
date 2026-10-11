@@ -325,9 +325,9 @@ pub fn run_interactive_process(
     let mut child = Command::new(command);
     #[cfg(windows)]
     {
-        use std::{io::IsTerminal, os::windows::process::CommandExt};
+        use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() && !std::io::stdout().is_terminal() {
-            child.creation_flags(0x0800_0000);
+            crate::platform::process::NoConsoleWindow::no_console_window(&mut child);
         }
     }
     child.args(args);
@@ -428,9 +428,19 @@ $programFiles = $env:ProgramW6432
 if (-not $programFiles) {
     $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
 }
-$executable = Join-Path (Join-Path $programFiles 'Ghostex') 'Ghostex.exe'
-if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "Ghostex desktop app is not installed at $executable."
+$candidates = @()
+$data = Join-Path $env:LOCALAPPDATA 'Ghostex/Data'
+if ($env:GHOSTEX_HOME -and [IO.Path]::IsPathRooted($env:GHOSTEX_HOME)) { $data = $env:GHOSTEX_HOME }
+$appDirFile = Join-Path $data 'gxserver/windows-app-dir'
+if (Test-Path -LiteralPath $appDirFile -PathType Leaf) {
+    $appDir = (Get-Content -LiteralPath $appDirFile -Raw).Trim()
+    if ($appDir) { $candidates += Join-Path $appDir 'Ghostex.exe' }
+}
+$candidates += Join-Path $env:LOCALAPPDATA 'Ghostex/current/Ghostex.exe'
+$candidates += Join-Path (Join-Path $programFiles 'Ghostex') 'Ghostex.exe'
+$executable = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $executable) {
+    throw "Ghostex desktop app is not installed at $($candidates -join ' or ')."
 }
 Start-Process -FilePath $executable -WorkingDirectory (Split-Path -Parent $executable)
 "#;

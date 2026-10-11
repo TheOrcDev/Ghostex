@@ -21,7 +21,7 @@ export type BuiltinSidebarSessionTag = (typeof SIDEBAR_SESSION_TAGS)[number];
  * User: users can define their own session tags (a name, an icon from the shared icon allowlist, and a color from a preset list) and sort them, without editing the built-in tags.
  * A custom tag is one more value of the same single session marker: its id is `custom-` plus a random token, gxserver owns the catalog per daemon (name, icon, color, order) exactly like Spaces, and the persisted `sessionTag` stores the id.
  * The phone renders custom tags from the hex color and icon id shipped in the catalog, so it needs no palette mirror.
- * SEE-ALSO: server/src/custom_session_tags.rs, packages/core-ui/session-tag-ui.tsx, apps/mobile/app/src/contract/sessionTags.ts.
+ * SEE-ALSO: server/src/custom_session_tags.rs, packages/core-ui/session-tag-ui.tsx (deleted 2026-10-01), apps/mobile/app/src/contract/sessionTags.ts.
  */
 export const CUSTOM_SESSION_TAG_ID_PREFIX = 'custom-';
 

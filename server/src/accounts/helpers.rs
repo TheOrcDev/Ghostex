@@ -3,15 +3,29 @@ use serde_json::Value;
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 
+/// CDXC:AgentProviders 2026-09-18 WHY:
+/// Windows reported cswap, xswap, claude and codex as missing while they were installed and on PATH.
+/// Two causes: the lookup joined the bare name, so it never matched `xswap.exe`; and a long-running gxserver keeps the PATH it started with, so an installer that appends to the user PATH (codex-swap's install.ps1) stays invisible until the app restarts.
+/// `platform::live_path` resolves PATHEXT spellings over the live registry PATH; this adds the helpers' own install directories.
+/// SEE-ALSO: server/src/accounts/launch.rs, server/src/agent_hooks/windows.rs.
 pub(crate) fn executable(home: &Path, name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
-    dirs.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
+    crate::platform::live_path::find(name, &install_dirs(home))
+}
+
+/// Where the account helpers and the tools that install them (brew, uv, cargo) are looked for, in order.
+pub(crate) fn search_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = crate::platform::live_path::directories();
+    dirs.extend(install_dirs(home));
+    dirs
+}
+
+/// The helpers' own install directories, searched after the live PATH.
+fn install_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![home.join(".local/bin"), home.join(".cargo/bin")];
     // CDXC:AgentProviders 2026-09-06 WHY:
     // A GUI or systemd launch may omit Homebrew from PATH even after the account helper is installed.
     #[cfg(target_os = "macos")]
@@ -24,26 +38,25 @@ pub(crate) fn executable(home: &Path, name: &str) -> Option<PathBuf> {
         home.join(".linuxbrew/bin"),
         PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
     ]);
-    dirs.into_iter().map(|dir| dir.join(name)).find(|p| {
-        p.metadata().is_ok_and(|m| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                m.is_file() && m.permissions().mode() & 0o111 != 0
-            }
-            #[cfg(not(unix))]
-            {
-                m.is_file()
-            }
-        })
-    })
+    // codex-swap's Windows installer owns this directory and adds it to the user PATH.
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        dirs.push(local.join("Programs").join("codex-swap"));
+    }
+    // uv installed by Ghostex, which installs and manages Claude Swap.
+    dirs.extend(crate::managed_tools::paths::path_dirs());
+    dirs
 }
+
 pub(crate) fn json_command(home: &Path, name: &str, args: &[&str]) -> Result<Value, String> {
     let binary =
         executable(home, name).ok_or_else(|| format!("Install {name} on this computer first."))?;
-    let mut child = Command::new(binary)
-        .args(args)
-        .env("HOME", home)
+    let mut command = crate::platform::process::background_command(binary);
+    command.args(args).env("HOME", home);
+    // The Windows helpers resolve their registry from USERPROFILE, so both variables must name the same home.
+    #[cfg(windows)]
+    command.env("USERPROFILE", home);
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
@@ -121,6 +134,57 @@ fn window(
         model,
     })
 }
+/// The user-facing line for a cswap `usageStatus` other than `ok`. `has_last_good` says whether the row still carries an older reading to show, and `last_good_age` is that reading's age in seconds when cswap reports it.
+fn claude_usage_notice(
+    status: &str,
+    has_last_good: bool,
+    last_good_age: Option<f64>,
+) -> Option<String> {
+    Some(match status {
+        "ok" => return None,
+        "unavailable" => match (has_last_good, last_good_age) {
+            (true, Some(age)) => format!(
+                "Usage is from {} ago. Refreshing has failed since then; Ghostex keeps trying.",
+                age_text(age)
+            ),
+            (true, None) => {
+                "Usage could not be refreshed. Showing the last reading; Ghostex keeps trying."
+                    .into()
+            }
+            (false, _) => "Usage could not be read yet. Ghostex keeps trying.".into(),
+        },
+        "token_expired" => "The saved login expired. Reconnect this account.".into(),
+        "relogin_required" => "This account needs to sign in again. Reconnect it.".into(),
+        "no_credentials" => "No saved login was found for this account. Reconnect it.".into(),
+        "foreign_credential" => {
+            "The saved login belongs to a different account. Reconnect this account.".into()
+        }
+        "api_key" => "This login uses an API key, so it has no subscription usage limits.".into(),
+        "keychain_unavailable" => {
+            "The saved login could not be read from the Keychain. Unlock it and refresh.".into()
+        }
+        other => format!("Usage could not be read (helper status: {other}). Ghostex keeps trying."),
+    })
+}
+fn age_text(seconds: f64) -> String {
+    let unit = |count: i64, name: &str| {
+        if count == 1 {
+            format!("1 {name}")
+        } else {
+            format!("{count} {name}s")
+        }
+    };
+    let minutes = (seconds.max(0.) / 60.).round() as i64;
+    if minutes < 1 {
+        "under a minute".into()
+    } else if minutes < 60 {
+        unit(minutes, "minute")
+    } else if minutes < 24 * 60 {
+        unit(minutes / 60, "hour")
+    } else {
+        unit(minutes / (24 * 60), "day")
+    }
+}
 /// CDXC:AgentProviders 2026-09-05 DECISION:
 /// cswap owns Claude credentials and selected-account launches; gxserver schedules usage reads and decides when sessions switch. xswap supplies Codex account homes and launches.
 pub(crate) fn discover(home: &Path, provider: Provider) -> Result<Vec<DiscoveredAccount>, String> {
@@ -129,117 +193,169 @@ pub(crate) fn discover(home: &Path, provider: Provider) -> Result<Vec<Discovered
         .get("accounts")
         .and_then(Value::as_array)
         .ok_or("The helper account list is missing.")?;
-    let mut accounts = Vec::new();
-    for row in rows {
-        let Some(number) = row.get("number").and_then(Value::as_u64) else {
-            continue;
-        };
-        let email = text(row, "email");
-        let alias = text(row, "alias");
-        let mut account = DiscoveredAccount {
-            provider,
-            selector: number.to_string(),
-            identity: String::new(),
-            name: if alias.is_empty() {
-                email.clone()
-            } else {
-                alias
-            },
-            email: email.clone(),
-            status: "ready".into(),
-            shared_history: false,
-            usage: vec![],
-            reset_credits: None,
-            reset_credit_details: None,
-            reset_credits_error: None,
-            usage_updated_at: None,
-            usage_error: None,
-        };
-        if provider == Provider::Claude {
-            account.identity =
-                format!("{}:{}", email.to_lowercase(), text(row, "organizationUuid"));
-            if email.is_empty() {
-                account.status = "loginRequired".into();
-            }
-            let status = text(row, "usageStatus");
-            if matches!(
-                status.as_str(),
-                "relogin_required" | "no_credentials" | "token_expired"
-            ) {
-                account.status = "loginRequired".into();
-            }
-            if status == "foreign_credential" {
-                account.status = "identityChanged".into();
-            }
-            if status != "ok" {
-                account.usage_error = Some(format!("Usage unavailable ({status})."));
-            }
-            let usage = &row["usage"];
-            if let Some(w) = window(
-                "fiveHour",
-                "Five-hour limit",
-                &usage["fiveHour"],
-                "pct",
-                None,
-            ) {
-                account.usage.push(w);
-            }
-            if let Some(w) = window("sevenDay", "Weekly limit", &usage["sevenDay"], "pct", None) {
-                account.usage.push(w);
-            }
-            if let Some(scoped) = usage.get("scoped").and_then(Value::as_array) {
-                for item in scoped {
-                    let model = text(item, "name");
-                    if let Some(w) = window(
-                        &model,
-                        &format!("{model} weekly"),
-                        item,
-                        "pct",
-                        Some(model.clone()),
-                    ) {
-                        account.usage.push(w);
-                    }
-                }
-            }
-            if let Some(w) = window("spend", "Extra usage", &usage["spend"], "pct", None) {
-                account.usage.push(w);
-            }
-            account.usage_updated_at = row
-                .get("usageFetchedAt")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+    // CDXC:AgentProviders 2026-10-01 WHY:
+    // Each Codex account reads its usage and reset credits from chatgpt.com, and each Claude account may read its reset credits, so reading the accounts one after another made a forced refresh (Settings > Accounts on open) take about 5 seconds with eight accounts. Every account is read at the same time instead.
+    Ok(std::thread::scope(|scope| {
+        let tasks: Vec<_> = rows
+            .iter()
+            .map(|row| scope.spawn(move || discover_row(home, provider, row)))
+            .collect();
+        tasks
+            .into_iter()
+            .filter_map(|task| task.join().ok().flatten())
+            .collect()
+    }))
+}
+fn discover_row(home: &Path, provider: Provider, row: &Value) -> Option<DiscoveredAccount> {
+    let number = row.get("number").and_then(Value::as_u64)?;
+    let email = text(row, "email");
+    let alias = text(row, "alias");
+    let mut account = DiscoveredAccount {
+        provider,
+        selector: number.to_string(),
+        identity: String::new(),
+        name: if alias.is_empty() {
+            email.clone()
         } else {
-            account.identity = text(row, "accountId");
-            account.status = match text(row, "loginStatus").as_str() {
-                "present" => "ready",
-                "identity_changed" => "identityChanged",
-                _ => "loginRequired",
-            }
-            .into();
-            account.shared_history = row.get("shareHistory").and_then(Value::as_bool) == Some(true);
-            if account.status == "ready" {
-                match codex_usage(row) {
-                    Ok((usage, reset_credits)) => {
-                        account.usage = usage;
-                        account.reset_credits = reset_credits;
-                        account.usage_updated_at = Some(chrono::Utc::now().to_rfc3339());
-                        match super::reset_credits::read(row) {
-                            Ok(credits) => {
-                                account.reset_credits = Some(credits.len() as u64);
-                                account.reset_credit_details = Some(credits);
-                            }
-                            Err(error) => account.reset_credits_error = Some(error),
-                        }
-                    }
-                    Err(e) => account.usage_error = Some(e),
+            alias
+        },
+        email: email.clone(),
+        status: "ready".into(),
+        shared_history: false,
+        usage: vec![],
+        reset_credits: None,
+        reset_credit_details: None,
+        reset_credits_error: None,
+        usage_updated_at: None,
+        usage_error: None,
+    };
+    if provider == Provider::Claude {
+        account.identity = format!("{}:{}", email.to_lowercase(), text(row, "organizationUuid"));
+        if email.is_empty() {
+            account.status = "loginRequired".into();
+        }
+        let status = text(row, "usageStatus");
+        if matches!(
+            status.as_str(),
+            "relogin_required" | "no_credentials" | "token_expired"
+        ) {
+            account.status = "loginRequired".into();
+        }
+        if status == "foreign_credential" {
+            account.status = "identityChanged".into();
+        }
+        // CDXC:AgentProviders 2026-09-18 WHY:
+        // cswap reports `unavailable` with a null `usage` once its last reading is too old to drive a switch, usually because the Anthropic usage endpoint answers 429 with a one-hour retry. Its documented `lastGoodUsage` fields keep that reading for display, so Ghostex shows those bars with their age instead of the bare status code. `usage_error` stays set, and every switch decision (`default_account.rs`, `has_room` in `recovery.rs`) requires it to be absent, so a stale reading never counts as headroom.
+        let (usage, fetched_at, last_good_age) = if row["usage"].is_object() {
+            (&row["usage"], &row["usageFetchedAt"], None)
+        } else {
+            (
+                &row["lastGoodUsage"],
+                &row["lastGoodFetchedAt"],
+                row.get("lastGoodAgeSeconds").and_then(Value::as_f64),
+            )
+        };
+        account.usage_error = claude_usage_notice(&status, usage.is_object(), last_good_age);
+        if let Some(w) = window(
+            "fiveHour",
+            "Five-hour limit",
+            &usage["fiveHour"],
+            "pct",
+            None,
+        ) {
+            account.usage.push(w);
+        }
+        if let Some(w) = window("sevenDay", "Weekly limit", &usage["sevenDay"], "pct", None) {
+            account.usage.push(w);
+        }
+        if let Some(scoped) = usage.get("scoped").and_then(Value::as_array) {
+            for item in scoped {
+                let model = text(item, "name");
+                if let Some(w) = window(
+                    &model,
+                    &format!("{model} weekly"),
+                    item,
+                    "pct",
+                    Some(model.clone()),
+                ) {
+                    account.usage.push(w);
                 }
             }
         }
-        accounts.push(account);
+        if let Some(w) = window("spend", "Extra usage", &usage["spend"], "pct", None) {
+            account.usage.push(w);
+        }
+        account.usage_updated_at = fetched_at.as_str().map(str::to_string);
+        if account.status == "ready" {
+            match super::claude_resets::cached(home, &account.selector) {
+                Ok(Some(credits)) => {
+                    account.reset_credits = Some(credits.len() as u64);
+                    account.reset_credit_details = Some(credits);
+                }
+                Ok(None) => {}
+                Err(error) => account.reset_credits_error = Some(error),
+            }
+        }
+    } else {
+        account.identity = text(row, "accountId");
+        account.status = match text(row, "loginStatus").as_str() {
+            "present" => "ready",
+            "identity_changed" => "identityChanged",
+            _ => "loginRequired",
+        }
+        .into();
+        account.shared_history = row.get("shareHistory").and_then(Value::as_bool) == Some(true);
+        if account.status == "ready" {
+            // The reset credits are read alongside the usage, and kept only when the usage answered.
+            let (usage, credits) = std::thread::scope(|scope| {
+                let credits = scope.spawn(|| super::reset_credits::read(row));
+                (
+                    codex_usage(row),
+                    credits
+                        .join()
+                        .unwrap_or_else(|_| Err("Reset expiry details are unavailable.".into())),
+                )
+            });
+            match usage {
+                Ok((usage, reset_credits)) => {
+                    account.usage = usage;
+                    account.reset_credits = reset_credits;
+                    account.usage_updated_at = Some(chrono::Utc::now().to_rfc3339());
+                    match credits {
+                        Ok(credits) => {
+                            account.reset_credits = Some(credits.len() as u64);
+                            account.reset_credit_details = Some(credits);
+                        }
+                        Err(error) => account.reset_credits_error = Some(error),
+                    }
+                }
+                Err(e) => account.usage_error = Some(e),
+            }
+        }
     }
-    Ok(accounts)
+    Some(account)
 }
 pub(crate) fn codex_get(row: &Value, path: &str) -> Result<Value, String> {
+    let response = match codex_request(row, "GET", path)?.call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(401, _)) => {
+            return Err("Sign in again to refresh account usage.".into());
+        }
+        Err(ureq::Error::Status(429, _)) => {
+            return Err("Usage requests are temporarily limited. Ghostex will try again.".into());
+        }
+        Err(_) => return Err("Usage could not be refreshed. Ghostex will try again.".into()),
+    };
+    response
+        .into_json()
+        .map_err(|_| "The usage service returned an invalid response.".to_string())
+}
+/// A ChatGPT backend request authorized as the xswap account in `row`, after checking its saved login still belongs to that account.
+pub(crate) fn codex_request(
+    row: &Value,
+    method: &str,
+    path: &str,
+) -> Result<ureq::Request, String> {
     let home = PathBuf::from(text(row, "home"));
     if !home.is_absolute() {
         return Err("Invalid Codex account home.".into());
@@ -255,29 +371,18 @@ pub(crate) fn codex_get(row: &Value, path: &str) -> Result<Value, String> {
         .pointer("/tokens/access_token")
         .and_then(Value::as_str)
         .ok_or("Sign in again to read usage.")?;
-    let response = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(12))
+    Ok(ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(15))
         .build()
-        .get(&format!("https://chatgpt.com/backend-api/wham/{path}"))
+        .request(
+            method,
+            &format!("https://chatgpt.com/backend-api/wham/{path}"),
+        )
         .set("Authorization", &format!("Bearer {token}"))
         .set("ChatGPT-Account-Id", &expected)
         .set("Accept", "application/json")
         .set("OpenAI-Beta", "codex-1")
-        .set("originator", "Codex Desktop")
-        .call();
-    let response = match response {
-        Ok(r) => r,
-        Err(ureq::Error::Status(401, _)) => {
-            return Err("Sign in again to refresh account usage.".into())
-        }
-        Err(ureq::Error::Status(429, _)) => {
-            return Err("Usage requests are temporarily limited. Ghostex will try again.".into())
-        }
-        Err(_) => return Err("Usage could not be refreshed. Ghostex will try again.".into()),
-    };
-    response
-        .into_json()
-        .map_err(|_| "The usage service returned an invalid response.".to_string())
+        .set("originator", "Codex Desktop"))
 }
 fn codex_usage(row: &Value) -> Result<(Vec<UsageWindow>, Option<u64>), String> {
     let value = codex_get(row, "usage")?;

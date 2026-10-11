@@ -1,0 +1,205 @@
+//! The About page (packages/core-ui/settings-modal/tabs/about.tsx (deleted 2026-10-01)): the Ghostex mark, the version,
+//! and the Discord, GitHub and Sponsor links, which open in the system browser.
+use super::super::super::native_modal_kit::*;
+use super::super::fields::{FieldStates, SettingsPage, settings_icon};
+use super::super::model::SettingsTabId;
+use super::super::page::{PageBlock, settings_page};
+use super::super::rail::{rail_pages, render_no_matches};
+use super::super::store::{SettingsStore, post_store_message};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyView, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, img, px,
+};
+use gpui_component::{h_flex, v_flex};
+use serde_json::json;
+
+/// `GHOSTEX_DISCORD_URL` (packages/shared/sidebar-commands.ts (deleted 2026-10-01)).
+const GHOSTEX_DISCORD_URL: &str = "https://discord.gg/df7b3G92CS";
+/// `GHOSTEX_GITHUB_URL`.
+const GHOSTEX_GITHUB_URL: &str = "https://github.com/maddada/Ghostex";
+/// `GHOSTEX_SPONSOR_URL`.
+const GHOSTEX_SPONSOR_URL: &str = "https://github.com/sponsors/maddada";
+
+/// The app version the About page names, baked in by apps/desktop/build.rs (`package.json`).
+const APP_VERSION: &str = env!("GHOSTEX_BUILD_MARKETING_VERSION");
+
+const LINKS: [(&str, &str, &str); 3] = [
+    (
+        "Join Discord",
+        "Chat with the community and get help.",
+        GHOSTEX_DISCORD_URL,
+    ),
+    (
+        "View on GitHub",
+        "View the source, releases, and report issues.",
+        GHOSTEX_GITHUB_URL,
+    ),
+    (
+        "Sponsor Ghostex",
+        "Support the continued development of Ghostex.",
+        GHOSTEX_SPONSOR_URL,
+    ),
+];
+
+pub(crate) fn about_tab_view(store: &Entity<SettingsStore>, cx: &mut App) -> AnyView {
+    cx.new(|cx| AboutTab::new(store.clone(), cx)).into()
+}
+
+pub(crate) struct AboutTab {
+    store: Entity<SettingsStore>,
+    fields: FieldStates,
+}
+
+impl AboutTab {
+    fn new(store: Entity<SettingsStore>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&store, |_, _, cx| cx.notify()).detach();
+        Self {
+            store,
+            fields: FieldStates::default(),
+        }
+    }
+}
+
+impl SettingsPage for AboutTab {
+    fn settings_store(&self) -> &Entity<SettingsStore> {
+        &self.store
+    }
+
+    fn field_states(&mut self) -> &mut FieldStates {
+        &mut self.fields
+    }
+}
+
+impl Render for AboutTab {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (p, search, matching) = {
+            let store = self.store.read(cx);
+            let search = store.tab_search(SettingsTabId::About);
+            let matching: Vec<SettingsTabId> = if store.is_searching() {
+                rail_pages(store).into_iter().map(|page| page.tab).collect()
+            } else {
+                Vec::new()
+            };
+            (store.palette(), search, matching)
+        };
+        let mut blocks = Vec::new();
+        if search.tab.is_searching && !search.tab.has_visible() {
+            let store = self.store.clone();
+            // `searchEmptyState` inside `settings-page-width px-5 py-5`.
+            blocks.push(PageBlock::plain(div().pt(px(20.0)).child(
+                render_no_matches(
+                    &p,
+                    SettingsTabId::About,
+                    &matching,
+                    move |tab, _window, cx| {
+                        store.update(cx, |store, cx| store.set_active_tab(tab, cx))
+                    },
+                ),
+            )));
+            return settings_page(&self.store, SettingsTabId::About, &p, blocks, cx);
+        }
+        let hover = p.raised_hover;
+        let links = LINKS
+            .iter()
+            .enumerate()
+            .map(|(index, (label, description, url))| {
+                let store = self.store.clone();
+                let url = url.to_string();
+                h_flex()
+                    .id(SharedString::from(format!("settings-about-link-{index}")))
+                    .w_full()
+                    .min_h(px(64.0))
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .gap(px(16.0))
+                    .items_center()
+                    .justify_between()
+                    .when(index > 0, |this| {
+                        this.border_t_1().border_color(hsla(p.hairline))
+                    })
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(hsla(hover)))
+                    .on_click(move |_: &ClickEvent, _window, cx| {
+                        post_store_message(
+                            &store,
+                            json!({ "type": "openExternalUrl", "url": url }),
+                            cx,
+                        );
+                    })
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .line_height(px(20.0))
+                                    .text_color(hsla(p.foreground))
+                                    .child(*label),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .line_height(px(18.2))
+                                    .text_color(hsla(p.muted))
+                                    .child(*description),
+                            ),
+                    )
+                    .child(settings_icon(
+                        "modals/settings/external-link.svg",
+                        16.0,
+                        p.foreground,
+                    ))
+            });
+        let page = v_flex()
+            .w_full()
+            .pt(px(32.0))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(px(14.0))
+                    .child(img("app-icon.png").flex_shrink_0().size(px(52.0)))
+                    .child(
+                        v_flex()
+                            .child(
+                                div()
+                                    .text_size(px(18.0))
+                                    .line_height(px(21.6))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(hsla(p.foreground))
+                                    .child("Ghostex"),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(4.0))
+                                    .text_size(px(13.0))
+                                    .line_height(px(20.0))
+                                    .text_color(hsla(p.muted))
+                                    .child(format!("Version {APP_VERSION}")),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .mt(px(20.0))
+                    .mb(px(24.0))
+                    .text_size(px(14.0))
+                    .line_height(px(21.0))
+                    .text_color(hsla(p.muted))
+                    .child("A workspace for building with coding agents."),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .rounded(px(MODAL_RADIUS_SECTION))
+                    .border_1()
+                    .border_color(hsla(p.hairline))
+                    .overflow_hidden()
+                    .children(links),
+            );
+        blocks.push(PageBlock::plain(page));
+        settings_page(&self.store, SettingsTabId::About, &p, blocks, cx)
+    }
+}

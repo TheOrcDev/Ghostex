@@ -13,7 +13,7 @@ pub(crate) fn focused_command_pane_create_split_hotkey_source(
     CDXC:FocusMode 2026-06-26-06:47:
     Cmd+T/Cmd+D command-placeholder creation is a native responder path only while the Commands panel is visibly expanded. Require expanded command-pane focus plus a live focused source session before allocating command tabs or splits, so stale/collapsed command focus no-ops instead of creating hidden command sessions; clicked command-panel creation keeps its explicit hidden-open route.
     */
-    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.is_expanded() {
+    if shell_focus != ShellFocusTarget::CommandPane || !command_pane.focused_group_dock_visible() {
         return None;
     }
 
@@ -71,33 +71,54 @@ pub(crate) fn gpui_command_palette_tab_cycle_hotkey_action(
     action_id: &str,
 ) -> Option<GpuiCommandPaletteTabCycleHotkeyAction> {
     /*
-    CDXC:CommandPalette 2026-06-26-07:32:
-    Shared command-palette tab-cycle rows post `focusPreviousSession` and `focusNextSession` through `runGhostexHotkeyAction`. GPUI maps only those exact ids to the `cycle_focused_tab(reverse)` direction so command, Agents, and Browser focus keep Ctrl-Shift-Tab/Ctrl-Tab parity; numbered session-slot rows are intentionally excluded because SidebarApp owns rendered slot order.
+    CDXC:CommandPalette 2026-09-19 WHY:
+    Previous/Next Tab in Pane (`focusPreviousPaneTab`/`focusNextPaneTab`) are the only ids that map to `cycle_focused_tab(reverse)`, so command, Agents, and Browser focus cycle their pane tabs from both the hotkey and the palette row. `focusPreviousSession`/`focusNextSession` walk sidebar rows instead (`gpui_sidebar_session_walk_hotkey_reverse`).
     */
     match action_id {
-        "focusPreviousSession" => Some(GpuiCommandPaletteTabCycleHotkeyAction::Previous),
-        "focusNextSession" => Some(GpuiCommandPaletteTabCycleHotkeyAction::Next),
+        "focusPreviousPaneTab" => Some(GpuiCommandPaletteTabCycleHotkeyAction::Previous),
+        "focusNextPaneTab" => Some(GpuiCommandPaletteTabCycleHotkeyAction::Next),
         _ => None,
     }
 }
 
-pub(crate) fn gpui_command_palette_sidebar_slot_hotkey_action_id(action_id: &str) -> Option<&str> {
-    /*
-    CDXC:CommandPalette 2026-06-26-23:20:
-    Numbered `focusSessionSlot1` through `focusSessionSlot9` rows are rendered-sidebar slot commands, not Rust tab-cycle commands. Delegate only those exact action ids to SidebarApp so its DOM slot ownership resolves focus, while `focusPreviousSession`/`focusNextSession` stay on GPUI tab-cycle routing and jump-to-project ids cannot loop back through native.
-    */
+/// Whether the action is Previous Session (`Some(true)`) or Next Session (`Some(false)`).
+///
+/// CDXC:Hotkeys 2026-09-19 DECISION:
+/// User: holding the previous or next session hotkey must fly through sessions.
+/// These two walk the rendered sidebar rows in Rust, from the native sidebar's own snapshot (gx_store/session_walk.rs), and repeat while held (helpers/os_cli/keyboard_router.rs). This supersedes their delegation to SidebarApp as `nativeHotkey` messages (2026-06-26-23:20), which cost one round trip through the sidebar runtime per step.
+pub(crate) fn gpui_sidebar_session_walk_hotkey_reverse(action_id: &str) -> Option<bool> {
     match action_id {
-        "focusSessionSlot1" | "focusSessionSlot2" | "focusSessionSlot3" | "focusSessionSlot4"
-        | "focusSessionSlot5" | "focusSessionSlot6" | "focusSessionSlot7" | "focusSessionSlot8"
-        | "focusSessionSlot9" => Some(action_id),
+        "focusPreviousSession" => Some(true),
+        "focusNextSession" => Some(false),
         _ => None,
     }
+}
+
+/// The slot number, 1 to 9, of a session slot hotkey.
+pub(crate) fn gpui_command_palette_session_slot_hotkey_number(action_id: &str) -> Option<u8> {
+    /*
+    CDXC:CommandPalette 2026-09-21 WHY:
+    Numbered `focusSessionSlot1` through `focusSessionSlot9` are rendered-sidebar row commands, not Rust tab-cycle commands, and single presses. The store resolves the Nth drawn row itself (gx_store/sidebar_session_slot.rs) and nothing is delegated: the `nativeHotkey` message used to reach the sidebar page, whose rendered row order resolved the slot, and that page is deleted. Previous/Next Session left this list for `gpui_sidebar_session_walk_hotkey_reverse`. Supersedes the 2026-09-19 note that SidebarApp always resolved them.
+    */
+    let slot = match action_id {
+        "focusSessionSlot1" => 1,
+        "focusSessionSlot2" => 2,
+        "focusSessionSlot3" => 3,
+        "focusSessionSlot4" => 4,
+        "focusSessionSlot5" => 5,
+        "focusSessionSlot6" => 6,
+        "focusSessionSlot7" => 7,
+        "focusSessionSlot8" => 8,
+        "focusSessionSlot9" => 9,
+        _ => return None,
+    };
+    Some(slot)
 }
 
 pub(crate) fn gpui_command_palette_project_slot_hotkey_number(action_id: &str) -> Option<u8> {
     /*
-    CDXC:Hotkeys 2026-06-26-23:42:
-    Project slot hotkeys are rendered-sidebar project commands. GPUI must delegate `jumpToProject1` through `jumpToProject9` to SidebarApp because Rust does not own the rendered project row order and must avoid the `nativeHotkey` bounce path that SidebarApp forwards back to native.
+    CDXC:Hotkeys 2026-09-21 WHY:
+    Project slot hotkeys are rendered-sidebar project commands. The store owns the rendered project order and performs `jumpToProject1` through `jumpToProject9` itself (gx_store/sidebar_slot_jump.rs); nothing is delegated, because the `gpuiProjectSlotHotkey` message reached the deleted sidebar page. Supersedes the 2026-06-26-23:42 note that Rust did not own that order.
     */
     match action_id {
         "jumpToProject1" => Some(1),
@@ -111,6 +132,17 @@ pub(crate) fn gpui_command_palette_project_slot_hotkey_number(action_id: &str) -
         "jumpToProject9" => Some(9),
         _ => None,
     }
+}
+
+/// The position, 1 to 9, of a Go to Space hotkey (`go_to_native_space` in native_sidebar/space_gesture.rs).
+pub(crate) fn gpui_space_slot_hotkey_number(action_id: &str) -> Option<usize> {
+    let slot = action_id.strip_prefix("goToSpace")?;
+    if slot.len() != 1 {
+        return None;
+    }
+    slot.parse::<usize>()
+        .ok()
+        .filter(|slot| (1..=9).contains(slot))
 }
 
 pub(crate) fn gpui_command_pane_focused_session_hotkey_action(
@@ -162,7 +194,9 @@ pub(crate) fn gpui_focused_pane_hotkey_action(
     */
     match action_id {
         "createSession" => Some(GpuiFocusedPaneHotkeyAction::CreateSession),
-        "openCommandsPanel" => Some(GpuiFocusedPaneHotkeyAction::OpenCommandsPanel),
+        "openCommandsPanel" | "openCommandsPanelSecondKey" => {
+            Some(GpuiFocusedPaneHotkeyAction::OpenCommandsPanel)
+        }
         "openBrowserPane" => Some(GpuiFocusedPaneHotkeyAction::OpenBrowserPane),
         "splitSessionRight" => Some(GpuiFocusedPaneHotkeyAction::SplitSessionRight),
         "splitMore" => Some(GpuiFocusedPaneHotkeyAction::SplitRight),
@@ -197,6 +231,7 @@ pub(crate) fn gpui_command_palette_switch_workarea_hotkey_mode(
         "switchKanbanView" => Some(TitlebarMode::Kanban),
         "switchManageView" => Some(TitlebarMode::Manage),
         "switchAutomateView" => Some(TitlebarMode::Automate),
+        "switchTerminalView" => Some(TitlebarMode::Terminal),
         _ => None,
     }
 }
@@ -212,8 +247,9 @@ pub(crate) fn gpui_source_workarea_allowed_configured_hotkey_action_id(action_id
                 | "navigateHistoryBack"
                 | "navigateHistoryForward"
                 | "openCommandsPanel"
+                | "openCommandsPanelSecondKey"
                 | "openNotifications"
-                | "toggleCompanionPane"
+                | "toggleViewPanel"
         )
 }
 
@@ -259,16 +295,6 @@ pub(crate) fn gpui_command_palette_adjacent_group_focus_source_allowed(
     )
 }
 
-pub(crate) fn gpui_focused_pane_open_browser_hotkey_should_open(
-    shell_focus: ShellFocusTarget,
-) -> bool {
-    /*
-    CDXC:CommandPalette 2026-06-26-06:47:
-    Native `runFocusedPaneHotkeyAction("openBrowserPane")` dispatches through `handleNativeTerminalTitleBarAction`; a live command terminal hits the command-panel branch and default-returns. GPUI should preserve that no-op for CommandPane focus while keeping Browser creation for Agents, Browser, and project-editor focus.
-    */
-    !matches!(shell_focus, ShellFocusTarget::CommandPane)
-}
-
 pub(crate) fn gpui_focused_pane_rotate_agents_hotkey_target(
     active_mode: TitlebarMode,
     shell_focus: ShellFocusTarget,
@@ -277,16 +303,13 @@ pub(crate) fn gpui_focused_pane_rotate_agents_hotkey_target(
     CDXC:FocusMode 2026-06-26-06:56:
     Native focused-pane rotation runs only for the active workspace pane group. GPUI must preserve command-terminal default-return behavior and keep Browser/project-editor focus inert, so only `active_mode == Agents` plus `ShellFocusTarget::AgentsPane(_)` may reach the future workspace rotation mutation.
     */
+    let _ = active_mode;
     match shell_focus {
-        ShellFocusTarget::AgentsPane(pane_id) if active_mode == TitlebarMode::Agents => {
-            Some(pane_id)
-        }
+        ShellFocusTarget::AgentsPane(pane_id) => Some(pane_id),
         ShellFocusTarget::CommandPane
         | ShellFocusTarget::BrowserSurface
         | ShellFocusTarget::BrowserPane(_)
-        | ShellFocusTarget::ProjectEditorSurface(_)
-        | ShellFocusTarget::ProjectEditorCompanion(_)
-        | ShellFocusTarget::AgentsPane(_) => None,
+        | ShellFocusTarget::ProjectEditorSurface(_) => None,
     }
 }
 

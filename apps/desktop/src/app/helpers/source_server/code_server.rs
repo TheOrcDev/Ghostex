@@ -120,6 +120,19 @@ pub(crate) fn on_demand_component_store() -> Result<Option<component_store::Comp
     component_store::ComponentStore::from_manifest(manifest).map(Some)
 }
 
+/// CDXC:CodeEditor 2026-09-23 WHY:
+/// Windows seals the Linux editor inside its WSL component archive; remote Linux uses that same verified archive so POSIX modes and links never pass through NTFS extraction.
+pub(crate) fn source_code_server_component_store_platform(
+    target: &SourceCodeServerRuntimeTarget,
+) -> Option<String> {
+    let platform = target.component_platform()?;
+    #[cfg(target_os = "windows")]
+    if let Some(architecture) = platform.strip_prefix("linux-") {
+        return Some(format!("windows-{architecture}"));
+    }
+    Some(platform.to_string())
+}
+
 pub(crate) fn source_code_server_runtime_availability(
     target: &SourceCodeServerRuntimeTarget,
 ) -> SourceCodeServerRuntimeAvailability {
@@ -133,8 +146,9 @@ pub(crate) fn source_code_server_runtime_availability(
         return SourceCodeServerRuntimeAvailability::Available;
     }
     #[cfg(windows)]
-    if windows_terminal_backend::current_preference()
-        == windows_terminal_backend::WindowsTerminalBackendPreference::PowerShell
+    if matches!(&target.endpoint, SourceCodeServerRuntimeEndpoint::Local)
+        && windows_terminal_backend::current_preference()
+            == windows_terminal_backend::WindowsTerminalBackendPreference::PowerShell
     {
         return if source_code_server_resolve_repo_root().is_ok() {
             SourceCodeServerRuntimeAvailability::Available
@@ -152,7 +166,7 @@ pub(crate) fn source_code_server_runtime_availability(
         Ok(Some(store)) => store,
         Ok(None) => {
             return SourceCodeServerRuntimeAvailability::Failed(
-                SourceCodeServerRuntimeFailure::Launch,
+                SourceCodeServerRuntimeFailure::EditorMissing,
             );
         }
         Err(_) => {
@@ -161,7 +175,8 @@ pub(crate) fn source_code_server_runtime_availability(
             );
         }
     };
-    let installed = match target.component_platform() {
+    let component_platform = source_code_server_component_store_platform(target);
+    let installed = match component_platform.as_deref() {
         Some(platform) => {
             store.query_current_for_platform(SOURCE_CODE_SERVER_COMPONENT_NAME, platform)
         }
@@ -185,8 +200,8 @@ pub(crate) fn source_code_server_install_component(
     let mut report_progress = |progress: component_store::ComponentStoreProgress| {
         let _ = progress_tx.unbounded_send(progress.phase);
     };
-    let component_platform = target.and_then(SourceCodeServerRuntimeTarget::component_platform);
-    let installed = match component_platform {
+    let component_platform = target.and_then(source_code_server_component_store_platform);
+    let installed = match component_platform.as_deref() {
         Some(platform) => store.install_for_platform(
             SOURCE_CODE_SERVER_COMPONENT_NAME,
             platform,
@@ -280,6 +295,20 @@ pub(crate) fn source_code_server_repo_root_candidates() -> Vec<PathBuf> {
             let resources_dir = bundle_root.join("Contents/Resources");
             append(resources_dir.join("Web/code-server"));
             append(resources_dir.join("code-server"));
+            /*
+            CDXC:CodeEditor 2026-09-23 DECISION:
+            User chose to keep code-server out of `cargo xtask start` bundles: re-sealing, verifying, syncing and malware-scanning its 5.5k files cost every start even when it had not changed.
+            The local start copies each code-server build once into its own content-named folder outside the bundle and records that folder in this file; only lib/node stays in the bundle. Release and `cargo xtask build` bundles never carry the file.
+            SEE-ALSO: stage_local_start_code_server in apps/desktop/scripts/build-macos-app.sh.
+            */
+            if let Ok(local_start_root) =
+                fs::read_to_string(resources_dir.join("Web/local-start-code-server-root"))
+            {
+                let local_start_root = local_start_root.trim();
+                if !local_start_root.is_empty() {
+                    append(PathBuf::from(local_start_root));
+                }
+            }
         }
         // Non-macOS staged layouts are flat: bundled payloads sit beside the
         // executable (same contract as the staged gxserver package).
@@ -511,12 +540,7 @@ pub(crate) fn source_code_server_node_major(node_path: &Path) -> Option<u64> {
     if !node_path.is_file() {
         return None;
     }
-    let mut command = Command::new(node_path);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    let mut command = crate::app::helpers::gpui_background_command(node_path);
     let output = command
         .arg("-v")
         .stdin(Stdio::null())
@@ -794,12 +818,7 @@ fn source_code_server_open_file_on_host(
     let session_socket = user_data_dir.join("code-server-ipc.sock");
     #[cfg(windows)]
     let session_socket = source_code_server_native_session_socket(&user_data_dir);
-    let mut command = Command::new(&node_path);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    let mut command = crate::app::helpers::gpui_background_command(&node_path);
     command
         .arg(&entrypoint_path)
         .arg("--user-data-dir")

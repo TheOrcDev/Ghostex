@@ -1,4 +1,6 @@
-use std::process::{Command, Stdio};
+#[cfg(not(target_os = "windows"))]
+use std::process::Command;
+use std::process::Stdio;
 use std::time::Duration;
 
 use crate::*;
@@ -290,7 +292,7 @@ fn terminal_extension_binary_available(binary: &str) -> Result<bool, String> {
         )),
         None,
     );
-    Command::new(program)
+    crate::app::helpers::gpui_background_command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

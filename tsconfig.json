@@ -22,13 +22,12 @@
     "types": ["node"]
   },
   "include": [
+    "packages/client-storage/**/*",
     "packages/shared/**/*",
     "packages/core-ui/**/*",
     "packages/components/**/*",
     "apps/desktop/views/**/*",
-    "apps/editor/web/**/*",
-    "apps/mobile/views/chat/**/*",
-    "apps/mobile/views/find/**/*"
+    "apps/editor/web/**/*"
   ],
   "exclude": ["node_modules", "build", "dist", "out", "**/*.test.ts", "**/*.test.tsx"]
 }

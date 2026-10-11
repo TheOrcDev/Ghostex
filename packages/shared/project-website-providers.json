@@ -1,0 +1,92 @@
+[
+  {
+    "id": "linear",
+    "title": "Linear",
+    "hiddenSettingsKey": "linearViewTabHidden",
+    "workspaceKind": "linear",
+    "placeholder": "https://linear.app/your-workspace",
+    "description": "Open your team's issues and projects. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": false
+  },
+  {
+    "id": "jira",
+    "title": "Jira",
+    "hiddenSettingsKey": "jiraViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://your-team.atlassian.net/jira/…",
+    "description": "Keep your team's board beside your work. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": false
+  },
+  {
+    "id": "github",
+    "title": "GitHub",
+    "hiddenSettingsKey": "githubViewTabHidden",
+    "workspaceKind": "repository",
+    "placeholder": "",
+    "description": "Open this project's GitHub repository automatically from its origin remote.",
+    "hiddenByDefault": false
+  },
+  {
+    "id": "sentry",
+    "title": "Sentry",
+    "hiddenSettingsKey": "sentryViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://your-team.sentry.io/issues/",
+    "description": "Investigate errors and stack traces beside your code. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "figma",
+    "title": "Figma",
+    "hiddenSettingsKey": "figmaViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://www.figma.com/design/…",
+    "description": "Keep designs and component specs beside your implementation. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "vercel",
+    "title": "Vercel",
+    "hiddenSettingsKey": "vercelViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://vercel.com/your-team/your-project",
+    "description": "Check deployments and preview your changes. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "supabase",
+    "title": "Supabase",
+    "hiddenSettingsKey": "supabaseViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://supabase.com/dashboard/project/…",
+    "description": "Browse your database, authentication, and project logs. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "github-actions",
+    "title": "GitHub Actions",
+    "hiddenSettingsKey": "githubActionsViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://github.com/your-team/your-repo/actions",
+    "description": "Follow workflow runs, build results, and job logs. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "posthog",
+    "title": "PostHog",
+    "hiddenSettingsKey": "posthogViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://us.posthog.com/project/…",
+    "description": "Explore product analytics and session replays. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  },
+  {
+    "id": "custom-website",
+    "title": "Custom Website",
+    "hiddenSettingsKey": "customWebsiteViewTabHidden",
+    "workspaceKind": "site",
+    "placeholder": "https://your-tool.example.com/",
+    "description": "Keep any website beside your work. Choose a home URL for each project or worktree.",
+    "hiddenByDefault": true
+  }
+]

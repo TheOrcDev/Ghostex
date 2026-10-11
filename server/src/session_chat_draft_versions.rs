@@ -17,7 +17,8 @@ pub struct DraftVersion {
 }
 
 pub fn parse(params: &Map<String, Value>) -> Result<Option<DraftVersion>, DomainStateError> {
-    let Some(value) = params.get("draftVersion") else {
+    // The chat core serializes a send with no draft (`/compact`, option commands) as `null`.
+    let Some(value) = params.get("draftVersion").filter(|value| !value.is_null()) else {
         return Ok(None);
     };
     let version: DraftVersion = serde_json::from_value(value.clone())
@@ -143,6 +144,8 @@ pub fn read(
     Ok(draft)
 }
 
+/// CDXC:Drafts 2026-09-19 WHY:
+/// Draft writes read the current revision before writing. In a deferred transaction that read pins a WAL snapshot, and if any other connection commits before the first write SQLite fails at once with "database is locked" without consulting the busy timeout (all 220 logged failures ended in under 51 ms). The composer showed that text above the input. Every draft write transaction (here, handoffs, the queue, and prompt app data) therefore starts Immediate, which takes the write lock first and waits for it.
 pub fn save(
     db: &Connection,
     project: &str,
@@ -156,7 +159,9 @@ pub fn save(
             "Draft exceeds the message size limit.",
         ));
     }
-    let transaction = db.unchecked_transaction().map_err(sql_error)?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
     let current: Option<(i64, String, i64)> = transaction.query_row(
         "SELECT revision, content, consumed FROM session_chat_draft_versions WHERE projectId=?1 AND sessionId=?2 AND draftId=?3",
         params![project, session, version.draft_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -256,7 +261,9 @@ pub fn consume(
     session: &str,
     version: &DraftVersion,
 ) -> Result<(), DomainStateError> {
-    let transaction = db.unchecked_transaction().map_err(sql_error)?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
     consume_in(&transaction, project, session, version)?;
     transaction.commit().map_err(sql_error)?;
     Ok(())
@@ -271,6 +278,11 @@ pub fn consume_in(
     transaction.execute("UPDATE session_chat_draft_handoffs SET state='consumed' WHERE projectId=?1 AND sessionId=?2 AND draftId=?3 AND revision<=?4",params![project,session,version.draft_id,version.revision]).map_err(sql_error)?;
     transaction.execute(
         "UPDATE session_chat_draft_versions SET consumed=MAX(consumed,?4),content=CASE WHEN revision<=?4 THEN '' ELSE content END WHERE projectId=?1 AND sessionId=?2 AND draftId=?3",
+        params![project, session, version.draft_id, version.revision],
+    ).map_err(sql_error)?;
+    // Consumed revisions can never be offered for recovery again, so retire their records here instead of leaving them to accumulate.
+    transaction.execute(
+        "DELETE FROM session_chat_draft_recovery WHERE projectId=?1 AND sessionId=?2 AND draftId=?3 AND revision<=?4",
         params![project, session, version.draft_id, version.revision],
     ).map_err(sql_error)?;
     transaction.execute(

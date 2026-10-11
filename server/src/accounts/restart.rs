@@ -9,9 +9,7 @@ use crate::{
 use serde_json::{json, Map, Value};
 use std::{sync::Arc, time::Instant};
 
-/// The slash command both Claude Code and Codex accept to leave the terminal.
-const EXIT_COMMAND: &str = "/exit";
-/// How long the switch waits for the CLI to hand the terminal back to its shell after `/exit`.
+/// How long the switch drives the CLI back to its shell.
 const EXIT_TO_SHELL_TIMEOUT_MS: u64 = 15_000;
 const SOURCE: &str = "account-switch-restart";
 const ACCOUNT_SETTINGS: &[&str] = &[
@@ -44,21 +42,20 @@ fn apply_account_settings(runtime: &mut Map<String, Value>, settings: &Value) {
     }
 }
 
-/// CDXC:AgentProviders 2026-09-11 DECISION:
-/// User: an account switch on a running Claude or Codex session must not sleep and wake the daemon: "we don't need to close the terminal, we just do /exit on the claude/codex session in the terminal and then write the resume command".
-/// The daemon and every attached terminal stay alive. The CLI is told to exit from its own composer, its process is confirmed gone from the daemon's process tree, and one exact account-specific resume command is typed into that same shell.
+/// CDXC:AgentProviders 2026-09-22 DECISION:
+/// User: exit regardless of what the CLI shows, repeating Escape and Ctrl+C until back at the shell, then resume the conversation on the other account. This supersedes the 2026-09-11 /exit-only rule and its composer requirement.
+/// User also approved stopping the exact Claude background conversation with `claude stop <id>`, preserving history while stopping its remaining jobs; exiting its attached client alone only detaches.
+/// The daemon and every attached terminal stay alive. The old agent is stopped, its terminal client is confirmed gone, and one exact account-specific resume command captured before stopping is typed into that same shell.
 /// Nothing closes on the desktop or the web, so the chat page and the terminal tab survive the switch, and the cycle that took a minute on a session with running subagents is gone.
 /// The sleep-and-wake cycle remains for a running session whose daemon is already gone: there is no CLI to exit there.
-/// SEE-ALSO: server/src/accounts/endpoint.rs (select), server/src/accounts/continuation.rs (the dot after automatic switches), server/src/agents/drafts.rs (the draft variant of the same in-place switch), server/src/session_chat_send.rs (WaitForAgentExit).
+/// SEE-ALSO: server/src/accounts/endpoint.rs (select), server/src/accounts/continuation.rs (the dot after automatic switches), server/src/agents/drafts.rs (the draft variant of the same in-place switch), server/src/session_chat_send/steps.rs (WaitForAgentExit).
 pub(crate) struct RestartPlan {
     agent: String,
     resume_command: String,
-    /// False when the daemon is at its shell already (the CLI exited earlier, or a previous restart stopped after `/exit`): the resume command is typed without an exit.
-    cli_running: bool,
-    dismiss_claude_settings: bool,
     account_settings: Value,
     expected_identity: String,
     previous_process_id: Option<i64>,
+    background: Option<super::claude_background::BackgroundSession>,
 }
 
 /// Whether the session's zmx daemon is alive, so the CLI inside it can be exited and resumed in place.
@@ -112,8 +109,18 @@ pub(crate) fn plan(
         )
     })?;
     let current_process = identities.get(&zmx_name);
-    let cli_running = current_process.is_some();
     let previous_process_id = current_process.and_then(|identity| identity.process_id);
+    let background = if agent == "claude" {
+        previous_process_id.and_then(|pid| {
+            super::claude_background::resolve(
+                &state.paths.home_dir,
+                pid,
+                session["runtimeSettings"]["agentSessionId"].as_str()?,
+            )
+        })
+    } else {
+        None
+    };
     let registry = super::store::read(repository.db)?;
     let expected_identity = registry
         .accounts
@@ -123,26 +130,15 @@ pub(crate) fn plan(
         })
         .map(|account| account.identity.clone())
         .ok_or_else(|| DomainStateError::bad_request("Choose a saved account before switching."))?;
-    let dismiss_claude_settings = cli_running
-        && crate::session_chat_options::SessionChatOptionDetector::new(state)
-            .detect_blocking(
-                session["projectId"].as_str().unwrap_or_default(),
-                session["sessionId"].as_str().unwrap_or_default(),
-                Some(&agent),
-                true,
-            )
-            .composer
-            .should_dismiss_with_escape();
     let mut account_settings = Map::new();
     apply_account_settings(&mut account_settings, &session["runtimeSettings"]);
     Ok(RestartPlan {
         agent,
         resume_command,
-        cli_running,
-        dismiss_claude_settings,
         account_settings: Value::Object(account_settings),
         expected_identity,
         previous_process_id,
+        background,
     })
 }
 
@@ -184,21 +180,18 @@ pub(crate) fn start(
     endpoint::update_session(repository, session, runtime)?;
     // Pending sends belong to the CLI that is about to exit; the new generation also makes this sequence the only writer until it finishes.
     crate::session_chat_send::cancel_session_chat_sends(&project_id, &session_id);
-    let mut steps = if plan.cli_running {
-        let mut steps = crate::session_chat_send::build_session_chat_message_steps(
-            Some(plan.agent.as_str()),
-            EXIT_COMMAND,
-            &[],
-            plan.dismiss_claude_settings,
-        );
-        steps.push(SessionChatSendStep::WaitForAgentExit {
+    let mut steps = if let Some(background) = plan.background {
+        vec![SessionChatSendStep::StopClaudeBackground {
+            background,
             home_dir: state.paths.home_dir.clone(),
-            timeout_ms: EXIT_TO_SHELL_TIMEOUT_MS,
-        });
-        steps
+        }]
     } else {
         Vec::new()
     };
+    steps.push(SessionChatSendStep::InterruptAgentForAccountSwitch {
+        home_dir: state.paths.home_dir.clone(),
+        timeout_ms: EXIT_TO_SHELL_TIMEOUT_MS,
+    });
     steps.push(SessionChatSendStep::Write(format!(
         " {}",
         plan.resume_command

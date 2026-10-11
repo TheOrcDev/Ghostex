@@ -1,0 +1,32 @@
+//! gxserver SQLite storage, split by concern. Every submodule is glob re-exported here,
+//! so `crate::storage::*` paths are unchanged.
+
+use std::{fs, path::Path, time::Duration};
+
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
+
+use crate::{
+    config::write_default_config_if_missing,
+    constants::GXSERVER_MIGRATION_IDS,
+    paths::GxserverPaths,
+    protocol::{
+        LegacyMacosLogsImportStatus, LegacyMacosStateImportStatus, MigrationStateImports,
+        MigrationStatus,
+    },
+};
+
+mod maintenance;
+
+pub use maintenance::hold_gxserver_database_open;
+
+mod legacy_backfill;
+mod schema_migrations;
+mod setup;
+#[cfg(test)]
+mod tests;
+
+use legacy_backfill::*;
+pub use schema_migrations::*;
+pub use setup::*;

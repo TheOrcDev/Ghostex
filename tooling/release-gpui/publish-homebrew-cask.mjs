@@ -2,9 +2,10 @@
 /*
  * Homebrew distribution of a published macOS release.
  *
- * Bumps `version` and `sha256` in two casks, touching nothing else:
- *   1. the official cask `Casks/g/ghostex.rb` in Homebrew/homebrew-cask, through a
- *      version-bump pull request opened from a fork under the token's account;
+ * Bumps `version` and `sha256` in up to two casks, touching nothing else:
+ *   1. only with `--official`: the official cask `Casks/g/ghostex.rb` in
+ *      Homebrew/homebrew-cask, through a version-bump pull request opened from a fork
+ *      under the token's account (off by default, see the 2026-10-04 DECISION);
  *   2. the legacy personal tap `Casks/ghostex.rb` in maddada/homebrew-tap, pushed
  *      directly to `main` so existing `maddada/tap/ghostex` installs keep updating.
  *
@@ -13,22 +14,24 @@
  * publish runner. The local, brew-driven equivalent for the tap alone is
  * tooling/release-gpui-homebrew.mjs.
  *
- * CDXC:Release 2026-09-15 DECISION:
- * User: now that the `ghostex` cask is accepted into Homebrew/homebrew-cask, every
- * release must update the official cask automatically from CI, in the macOS publish
- * stage, and `brew install ghostex` is the advertised macOS Homebrew install path.
- * The personal tap is kept in sync as a courtesy for installs that predate the
- * official cask; it is no longer the primary path.
+ * CDXC:Release 2026-10-04 DECISION:
+ * User: Homebrew's autobump bot (BrewTestBot) updates the official `ghostex` cask on
+ * every release, so our own pull request is opt-in (`--official`) and the release
+ * workflow no longer runs it. Supersedes the 2026-09-15 decision that CI must open the
+ * official-cask PR on every release. `brew install ghostex` stays the advertised macOS
+ * path; the personal tap is still pushed on every release for installs that predate
+ * the official cask.
  *
  * CDXC:Release 2026-09-15 WHY:
  * `brew bump-cask-pr` was considered and rejected for CI: it needs the whole
  * homebrew-cask tap as a git clone (~620 MB), runs `brew audit`/`brew style` for a
  * cask on Linux, and decides fork and branch handling itself. The bump is two lines
  * of Ruby with a checksum the release already recorded, so the PR is opened with the
- * contents API instead and the maintainers' own CI performs the audit. The cask has
- * no `no_autobump!`, so BrewTestBot may also open a bump PR from the appcast
- * livecheck; whichever PR exists first wins and the other side skips, which is why
- * an existing open PR for the version is a success here, not a failure.
+ * contents API instead and the maintainers' own CI performs the audit. An existing
+ * open PR for the version (the bot's, or a manual rerun) is a success here.
+ * From 10.0.1 on this path failed with HTTP 404 on `POST <fork>/git/refs` (the
+ * token has no write access to the fork) while BrewTestBot opened every bump PR
+ * itself, which is why it is now opt-in.
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -40,13 +43,13 @@ import { releaseProvenanceAssetName, validateReleaseProvenance } from './provena
 import { withRetryProfile } from './retry.mjs';
 
 const defaultRepo = 'maddada/Ghostex';
-const officialCask = Object.freeze({
+export const officialCask = Object.freeze({
   label: 'Homebrew/homebrew-cask',
   repo: 'Homebrew/homebrew-cask',
   base: 'main',
   path: 'Casks/g/ghostex.rb',
 });
-const personalTap = Object.freeze({
+export const personalTap = Object.freeze({
   label: 'maddada/homebrew-tap',
   repo: 'maddada/homebrew-tap',
   base: 'main',
@@ -95,6 +98,7 @@ export function pullRequestTitle(version) {
  * release workflow does so on a macOS runner), and the AI box carries a
  * disclosure that the change comes from this deterministic automation.
  */
+/** @param {{ version: string, repo?: string, checks?: { audited?: boolean, styled?: boolean } }} options */
 export function pullRequestBody({ version, repo = defaultRepo, checks = {} }) {
   const box = (done) => (done ? '[x]' : '[ ]');
   const script = `https://github.com/${repo}/blob/main/tooling/release-gpui/publish-homebrew-cask.mjs`;
@@ -208,6 +212,10 @@ function gh(args, options = {}) {
   return result;
 }
 
+/**
+ * @param {string} endpoint
+ * @param {{ allowNotFound?: boolean, body?: unknown, method?: string, token?: string }} [options]
+ */
 function ghApi(endpoint, { allowNotFound = false, body, method = 'GET', token } = {}) {
   const args = ['api', '--method', method, endpoint];
   if (body !== undefined) args.push('--input', '-');
@@ -237,6 +245,7 @@ function decodeContent(entry) {
   return Buffer.from(entry.content.replace(/\n/gu, ''), 'base64').toString('utf8');
 }
 
+/** @param {{ repo: string, path: string, ref: string, token?: string, allowNotFound?: boolean }} options */
 async function readFile({ repo, path: filePath, ref, token, allowNotFound = false }) {
   const entry = await ghApi(`repos/${repo}/contents/${filePath}?ref=${encodeURIComponent(ref)}`, {
     allowNotFound,
@@ -366,7 +375,10 @@ export async function waitForLivecheckAppcast({ version, timeoutMs = 8 * 60 * 10
   }
 }
 
-async function findOpenPullRequest({ version, token }) {
+// Shared with tooling/release-final-verify.mjs, which treats an open bump pull
+// request as the official cask being on its way rather than missing.
+/** @param {{ version: string, token?: string }} options */
+export async function findOpenPullRequest({ version, token }) {
   const query = `repo:${officialCask.repo} is:pr is:open ghostex in:title`;
   const search = await ghApi(`search/issues?q=${encodeURIComponent(query)}&per_page=50`, { token });
   const pattern = new RegExp(`\\bghostex\\b.*\\b${version.replaceAll('.', '\\.')}\\b`, 'iu');
@@ -399,46 +411,68 @@ async function ensureFork({ owner, token }) {
   throw new Error(`${fork} is still not visible a minute after forking; rerun once GitHub finishes the fork`);
 }
 
-async function syncFork({ fork, token }) {
-  const result = await ghApi(`repos/${fork}/merge-upstream`, {
-    body: { branch: officialCask.base },
-    method: 'POST',
-    token,
-  });
-  process.stdout.write(`${fork} ${officialCask.base}: ${result?.message ?? 'synced with upstream'}\n`);
+async function upstreamHead({ token }) {
+  const repository = await ghApi(`repos/${officialCask.repo}`, { token });
+  const branch = repository?.default_branch;
+  if (!branch) throw new Error(`${officialCask.repo} reports no default branch`);
+  const ref = await ghApi(`repos/${officialCask.repo}/git/ref/heads/${branch}`, { token });
+  const sha = ref?.object?.sha;
+  if (!/^[0-9a-f]{40}$/u.test(sha ?? '')) {
+    throw new Error(`${officialCask.repo} ${branch} resolves to no commit: ${JSON.stringify(ref)}`);
+  }
+  return { branch, sha };
 }
 
-async function ensureBranch({ fork, branch, token }) {
+/*
+ * CDXC:Release 2026-09-16 WHY:
+ * The bump branch is created at upstream's own head commit, never from the fork's
+ * `main`, and the fork is never synced. Release 9.7.0 failed one step earlier, in
+ * `POST repos/maddada/homebrew-cask/merge-upstream`, with HTTP 422 "refusing to
+ * allow a Personal Access Token to create or update workflow
+ * `.github/workflows/check-issues.yml` without `workflow` scope": the sync writes
+ * every upstream commit into the fork, Homebrew edits its workflow files often, and
+ * a token limited to contents and pull requests may not write those. Widening
+ * HOMEBREW_GITHUB_API_TOKEN to the `workflow` scope just to fast-forward a branch
+ * nobody reads was rejected. A fork shares upstream's object network, so a ref in
+ * the fork can point straight at an upstream commit; the fork's `main` may stay
+ * arbitrarily far behind and the PR never depends on it. An existing branch is
+ * force-reset to the same commit so a retry always rebases the bump on current
+ * upstream instead of failing on a stale base.
+ */
+async function ensureBranch({ fork, branch, sha, token }) {
   const existing = await ghApi(`repos/${fork}/git/ref/heads/${branch}`, { allowNotFound: true, token });
-  if (existing) {
-    process.stdout.write(`Reusing existing branch ${fork}:${branch}.\n`);
+  if (existing?.object?.sha === sha) {
+    process.stdout.write(`${fork}:${branch} is already at upstream ${sha.slice(0, 12)}.\n`);
     return;
   }
-  const base = await ghApi(`repos/${fork}/git/ref/heads/${officialCask.base}`, { token });
-  await ghApi(`repos/${fork}/git/refs`, {
-    body: { ref: `refs/heads/${branch}`, sha: base.object.sha },
-    method: 'POST',
-    token,
-  });
-  process.stdout.write(`Created branch ${fork}:${branch} from ${base.object.sha.slice(0, 12)}.\n`);
+  if (existing) {
+    await ghApi(`repos/${fork}/git/refs/heads/${branch}`, { body: { force: true, sha }, method: 'PATCH', token });
+    process.stdout.write(`Reset ${fork}:${branch} to upstream ${sha.slice(0, 12)}.\n`);
+    return;
+  }
+  await ghApi(`repos/${fork}/git/refs`, { body: { ref: `refs/heads/${branch}`, sha }, method: 'POST', token });
+  process.stdout.write(`Created ${fork}:${branch} at upstream ${sha.slice(0, 12)}.\n`);
+}
+
+function alreadyShips({ content, sha256, version, where }) {
+  if (caskVersion(content) !== version) return false;
+  const same = content.includes(`sha256 "${sha256}"`);
+  process.stdout.write(
+    `${where} already ships ghostex ${version}${same ? '' : ' with a different sha256'}; nothing to do.\n`
+  );
+  if (!same) {
+    throw new Error(
+      `${where} ghostex ${version} carries a different sha256 than ${releaseAssetName(version)}; ` +
+        'a release must never republish the same version with different bytes'
+    );
+  }
+  return true;
 }
 
 async function publishOfficialCask({ checks, dryRun, render, sha256, token, version }) {
   const live = await readFile({ path: officialCask.path, ref: officialCask.base, repo: officialCask.repo });
   const liveVersion = caskVersion(live.content);
-  if (liveVersion === version) {
-    const same = live.content.includes(`sha256 "${sha256}"`);
-    process.stdout.write(
-      `${officialCask.label} already ships ghostex ${version}${same ? '' : ' with a different sha256'}; nothing to do.\n`
-    );
-    if (!same) {
-      throw new Error(
-        `${officialCask.label} ghostex ${version} carries a different sha256 than ${releaseAssetName(version)}; ` +
-          'a release must never republish the same version with different bytes'
-      );
-    }
-    return;
-  }
+  if (alreadyShips({ content: live.content, sha256, version, where: officialCask.label })) return;
   const bumped = bumpCask(live.content, { sha256, version });
   const diff = unifiedDiff(live.content, bumped, officialCask.path);
   process.stdout.write(`${officialCask.label}: ${liveVersion} -> ${version}\n${diff}`);
@@ -462,33 +496,33 @@ async function publishOfficialCask({ checks, dryRun, render, sha256, token, vers
   await waitForLivecheckAppcast({ version });
   const owner = await tokenLogin(token);
   const fork = await ensureFork({ owner, token });
-  await syncFork({ fork, token });
-  const branch = branchName(version);
-  await ensureBranch({ fork, branch, token });
-  const onBranch = await readFile({ path: officialCask.path, ref: branch, repo: fork, token });
-  if (onBranch.content === bumped) {
-    process.stdout.write(`${fork}:${branch} already carries the bump.\n`);
-  } else {
-    if (caskVersion(onBranch.content) !== liveVersion) {
-      throw new Error(
-        `${fork}:${branch} is at ghostex ${caskVersion(onBranch.content)}, not ${liveVersion}; ` +
-          'delete the stale branch and rerun'
-      );
-    }
-    await writeFile({
-      branch,
-      content: bumped,
-      message: pullRequestTitle(version),
-      path: officialCask.path,
-      repo: fork,
-      sha: onBranch.sha,
-      token,
-    });
-    process.stdout.write(`Committed the bump to ${fork}:${branch}.\n`);
+  // The livecheck wait can last minutes, so the cask is re-read at the exact
+  // upstream commit the branch is based on: the contents API needs that blob's
+  // sha, and a maintainer edit to another stanza in between must not be lost.
+  const head = await upstreamHead({ token });
+  const base = await readFile({ path: officialCask.path, ref: head.sha, repo: officialCask.repo, token });
+  const where = `${officialCask.label} ${head.branch} at ${head.sha.slice(0, 12)}`;
+  if (alreadyShips({ content: base.content, sha256, version, where })) return;
+  const commit = bumpCask(base.content, { sha256, version });
+  if (base.content !== live.content) {
+    process.stdout.write(`Upstream moved during the wait; the bump below is rebased on ${head.sha.slice(0, 12)}.\n`);
+    process.stdout.write(unifiedDiff(base.content, commit, officialCask.path));
   }
+  const branch = branchName(version);
+  await ensureBranch({ fork, branch, sha: head.sha, token });
+  await writeFile({
+    branch,
+    content: commit,
+    message: pullRequestTitle(version),
+    path: officialCask.path,
+    repo: fork,
+    sha: base.sha,
+    token,
+  });
+  process.stdout.write(`Committed the bump to ${fork}:${branch} on top of upstream ${head.sha.slice(0, 12)}.\n`);
   const pull = await ghApi(`repos/${officialCask.repo}/pulls`, {
     body: {
-      base: officialCask.base,
+      base: head.branch,
       body: pullRequestBody({ checks, version }),
       head: `${owner}:${branch}`,
       maintainer_can_modify: true,
@@ -545,7 +579,7 @@ export function parseArguments(argv) {
       options.dryRun = true;
       continue;
     }
-    if (argument === '--audited' || argument === '--styled') {
+    if (argument === '--audited' || argument === '--styled' || argument === '--official') {
       options[argument.slice(2)] = true;
       continue;
     }
@@ -567,28 +601,54 @@ async function main() {
   verifyProvenance({ repo: options.repo, sha256, version });
 
   const caskToken = process.env.HOMEBREW_GITHUB_API_TOKEN || '';
-  if (!dryRun && !options.render && !caskToken) {
+  if (!dryRun && !options.render && options.official && !caskToken) {
     throw new Error(
       'HOMEBREW_GITHUB_API_TOKEN is not set. It must be a GitHub token for the account that owns the homebrew-cask ' +
         'fork, with contents and pull-request write access. See tooling/release-gpui/homebrew-cask-setup.md.'
     );
   }
-  await publishOfficialCask({
+  /*
+   * CDXC:Release 2026-10-03 WHY:
+   * With `--official`, the personal tap is still pushed when the official-cask pull
+   * request fails, and the failure is rethrown afterwards. The failure used to throw
+   * before the tap push, so CI never advanced the tap and it only moved when someone ran
+   * tooling/release-gpui-homebrew.mjs by hand.
+   */
+  const officialRequest = {
     checks: { audited: Boolean(options.audited), styled: Boolean(options.styled) },
     dryRun,
     render: options.render,
     sha256,
     token: caskToken,
     version,
-  });
-  if (options.render) return;
+  };
+  if (options.render) {
+    await publishOfficialCask(officialRequest);
+    return;
+  }
+  let officialFailure = null;
+  if (options.official) {
+    try {
+      await publishOfficialCask(officialRequest);
+    } catch (error) {
+      officialFailure = error;
+      process.stderr.write(
+        `The official cask update failed; still updating the personal tap: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+  } else {
+    process.stdout.write(
+      'Skipping the Homebrew/homebrew-cask pull request: its autobump bot updates the official cask (pass --official to open one).\n'
+    );
+  }
   await publishPersonalTap({
     dryRun,
     sha256,
     token: process.env.HOMEBREW_TAP_TOKEN || caskToken,
     version,
   });
-  if (dryRun && !options.publish) process.stdout.write('Pass --publish to open the pull request and push the tap.\n');
+  if (dryRun && !options.publish) process.stdout.write('Pass --publish to push the tap (and, with --official, open the pull request).\n');
+  if (officialFailure) throw officialFailure;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

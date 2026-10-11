@@ -8,7 +8,20 @@ import * as esbuild from 'esbuild';
  * Split its editor graph into classic-script modules because CEF file origins cannot load external ES modules; a single module registry preserves shared React and editor contexts.
  */
 export async function writeDocsClassicAssets(outDir: string, options: esbuild.BuildOptions): Promise<string> {
-  const runtimeDir = path.join(outDir, 'docs-runtime');
+  return writeClassicModuleAssets(outDir, options, { label: 'Docs', runtimeDirName: 'docs-runtime' });
+}
+
+/**
+ * CDXC:CefRuntime 2026-09-21 WHY:
+ * The app-modal page carried every modal's code (first-run onboarding and its fonts, Agents Hub, the Git modals) in the script Settings has to parse before its first paint.
+ * The Docs split is the only way a file:// CEF page can load code on demand, so it is shared here instead of being copied; each page gets its own runtime directory and its own registry, because a page is its own document.
+ */
+export async function writeClassicModuleAssets(
+  outDir: string,
+  options: esbuild.BuildOptions,
+  target: { label: string; runtimeDirName: string }
+): Promise<string> {
+  const runtimeDir = path.join(outDir, target.runtimeDirName);
   const result = await esbuild.build({
     ...options,
     outdir: runtimeDir,
@@ -25,7 +38,7 @@ export async function writeDocsClassicAssets(outDir: string, options: esbuild.Bu
   for (const output of result.outputFiles ?? []) {
     if (!output.path.endsWith('.js')) continue;
     const metadata = result.metafile!.outputs[path.relative(root, output.path).replaceAll('\\', '/')];
-    if (!metadata) throw new Error(`Missing Docs module metadata: ${output.path}`);
+    if (!metadata) throw new Error(`Missing ${target.label} module metadata: ${output.path}`);
     const id = path.relative(outDir, output.path).replaceAll('\\', '/');
     if (metadata.entryPoint && path.resolve(root, metadata.entryPoint) === entryPoint) entryId = id;
     const dependencies = metadata.imports
@@ -41,11 +54,11 @@ export async function writeDocsClassicAssets(outDir: string, options: esbuild.Bu
     await fs.mkdir(path.dirname(output.path), { recursive: true });
     await fs.writeFile(output.path, script);
   }
-  if (!entryId) throw new Error('Docs did not emit its entry module.');
-  return `(${installDocsModuleLoader.toString()})();globalThis.__ghostexDocsModules.import(${JSON.stringify(entryId)}).catch(error=>{document.getElementById('root').textContent='Could not load Docs: '+error.message;});`;
+  if (!entryId) throw new Error(`${target.label} did not emit its entry module.`);
+  return `(${installDocsModuleLoader.toString()})(${JSON.stringify(target.label)});globalThis.__ghostexDocsModules.import(${JSON.stringify(entryId)}).catch(error=>{document.getElementById('root').textContent=${JSON.stringify(`Could not load ${target.label}: `)}+error.message;});`;
 }
 
-function installDocsModuleLoader() {
+function installDocsModuleLoader(label: string) {
   const definitions = new Map<string, { dependencies: string[]; factory: Function }>();
   const modules = new Map<string, { exports: unknown }>();
   const scripts = new Map<string, Promise<void>>();
@@ -62,13 +75,13 @@ function installDocsModuleLoader() {
         if (definitions.has(id)) done();
         else {
           scripts.delete(id);
-          reject(new Error('Docs module did not register.'));
+          reject(new Error(`${label} module did not register.`));
         }
       };
       script.onerror = () => {
         script.remove();
         scripts.delete(id);
-        reject(new Error('Could not load a Docs editor module.'));
+        reject(new Error(`Could not load a ${label} module.`));
       };
       document.head.append(script);
     });
@@ -85,7 +98,7 @@ function installDocsModuleLoader() {
     const cached = modules.get(id);
     if (cached) return cached.exports;
     const definition = definitions.get(id);
-    if (!definition) throw new Error('Docs module is unavailable.');
+    if (!definition) throw new Error(`${label} module is unavailable.`);
     const module = { exports: {} as unknown };
     modules.set(id, module);
     try {

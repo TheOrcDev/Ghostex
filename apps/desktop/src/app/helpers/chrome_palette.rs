@@ -19,14 +19,25 @@ pub(crate) fn chrome_ink() -> Rgba {
     chrome_color(0xffffff, 0x000000)
 }
 
+/// True while the app's chrome is on its light appearance. For a colour, prefer `chrome_color`;
+/// this is for the places where light mode needs a different alpha, shadow or nothing at all rather
+/// than a different hue.
+pub(crate) fn chrome_uses_light_appearance() -> bool {
+    CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed)
+}
+
 /// CDXC:Theming 2026-09-13 SEE-ALSO:
 /// apps/desktop/views/workarea-theme.ts consumes this appearance-only event in Docs, Kanban and Automate.
-pub(crate) fn workarea_theme_script(light: bool) -> &'static str {
-    if light {
-        "window.ghostexGpui = window.ghostexGpui || {}; window.ghostexGpui.workareaTheme = 'light'; window.dispatchEvent(new CustomEvent('ghostex-workarea-theme-changed', {detail: 'light'}));"
-    } else {
-        "window.ghostexGpui = window.ghostexGpui || {}; window.ghostexGpui.workareaTheme = 'dark'; window.dispatchEvent(new CustomEvent('ghostex-workarea-theme-changed', {detail: 'dark'}));"
-    }
+/// CDXC:Theming 2026-09-22 DECISION:
+/// User: the theme also colours the Docs, Kanban and Automate views. The event now carries the
+/// resolved chrome colour and the content colour (the chat's step off it) next to the appearance,
+/// and the pages publish them as `--app-chrome-background` / `--app-background`. `glass` says
+/// whether the page is a card on window glass, which the pages publish as `data-window-glass`.
+pub(crate) fn workarea_theme_script(light: bool, chrome: u32, content: u32, glass: bool) -> String {
+    let theme = if light { "light" } else { "dark" };
+    format!(
+        "window.ghostexGpui = window.ghostexGpui || {{}}; window.ghostexGpui.workareaTheme = '{theme}'; window.ghostexGpui.workareaChrome = '#{chrome:06x}'; window.ghostexGpui.workareaContent = '#{content:06x}'; window.ghostexGpui.workareaGlass = {glass}; window.dispatchEvent(new CustomEvent('ghostex-workarea-theme-changed', {{detail: {{theme: '{theme}', chrome: '#{chrome:06x}', content: '#{content:06x}', glass: {glass}}}}}));"
+    )
 }
 
 /// CDXC:Theming 2026-09-13 DECISION:

@@ -1,5 +1,6 @@
 pub mod endpoint;
 pub mod env;
+mod fish_startup;
 mod grok_startup;
 pub mod launch;
 #[cfg(test)]
@@ -8,6 +9,7 @@ pub mod probe_cache;
 mod process_context;
 pub mod process_identity;
 pub mod provider;
+mod read_text_suggestion;
 pub mod screen_capture;
 pub mod scripts;
 #[cfg(windows)]

@@ -9,20 +9,20 @@ impl GhostexGpuiApp {
         content: &str,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(surface) = self.agents_chat_surfaces.get(&session_id).cloned() else {
+        let Some(view) = self.native_chat_views.get(&session_id).cloned() else {
             return false;
         };
-        if !self
-            .session_chat_composer_ready_sessions
-            .contains(&session_id)
-        {
+        if !view.read(cx).composer_ready {
             return false;
         }
-        let literal = serde_json::json!({"content":content,"append":true})
-            .to_string()
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029");
-        surface.update(cx, |surface, _| surface.execute_app_owned_script(&format!("(function(){{var ns=window.ghostexGpui;if(ns&&typeof ns.onSessionChatInsertPromptRequested==='function'){{ns.onSessionChatInsertPromptRequested({literal});}}}})(); undefined;")));
+        view.update(cx, |view, cx| {
+            let text = if view.draft.is_empty() {
+                content.to_owned()
+            } else {
+                format!("{}\n\n{content}", view.draft)
+            };
+            view.insert_prompt(&text, cx);
+        });
         true
     }
 
@@ -120,16 +120,16 @@ impl GhostexGpuiApp {
         let Some(payload) = self.pending_session_chat_received_drafts.get(&session_id) else {
             return;
         };
-        let Some(surface) = self.agents_chat_surfaces.get(&session_id).cloned() else {
+        let Some(view) = self.native_chat_views.get(&session_id).cloned() else {
             return;
         };
-        let literal = payload
-            .to_string()
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029");
-        surface.update(cx, |surface, _| {
-            surface.execute_app_owned_script(&format!("(function(){{var ns=window.ghostexGpui;if(ns&&typeof ns.onSessionChatInsertPromptRequested==='function'){{ns.onSessionChatInsertPromptRequested({literal});}}}})(); undefined;"));
-        });
+        if !view.read(cx).composer_ready {
+            return;
+        }
+        let mut command = payload.clone();
+        command["type"] = "receiveHandoff".into();
+        command["current"] = view.read(cx).draft.clone().into();
+        view.update(cx, |view, cx| view.invoke(command, cx));
     }
 
     pub(crate) fn schedule_session_chat_received_draft_delivery(

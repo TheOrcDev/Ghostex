@@ -19,6 +19,10 @@ static SHOW_ACTIVE_PANE_OUTLINE: std::sync::atomic::AtomicBool =
 static ACTIVE_PANE_OUTLINE_RGB: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0x3b82f6);
 
+/// CDXC:Theming 2026-09-16 DECISION:
+/// User: the stacked companion separator and resize drag-area backgrounds are #F3F4F6 in light mode, superseding the earlier #C9C9C9 choice.
+pub(crate) const LIGHT_RESIZE_HANDLE_RGB: u32 = 0xf3f4f6;
+
 pub(crate) fn show_active_pane_outline() -> bool {
     SHOW_ACTIVE_PANE_OUTLINE.load(Ordering::Relaxed)
 }
@@ -91,29 +95,32 @@ pub(crate) fn refresh_gpui_visual_settings(
         gpui_settings_hex_rgb(object.get("workspaceActivePaneBorderColor")).unwrap_or(0x3b82f6),
         Ordering::Relaxed,
     );
-    let configured_workspace = object
-        .get("workspaceBackgroundColor")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .and_then(|_| gpui_settings_hex_rgb(object.get("workspaceBackgroundColor")))
-        .map(|rgb| if rgb == 0 { 0x010101 } else { rgb });
     let terminal_settings = settings.gpui_terminal_engine_settings();
     let terminal_is_light = terminal_settings.uses_light_theme(gpui_system_uses_light_appearance());
-    let workspace = if terminal_is_light {
-        let color =
-            crate::terminal_gpui_engine::light_theme_background(&terminal_settings.light_theme);
-        (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b)
-    } else {
-        configured_workspace
-            .unwrap_or_else(|| GPUI_GHOSTTY_WORKSPACE_BACKGROUND_RGB.load(Ordering::Relaxed) as u32)
-    };
+    /*
+    CDXC:Theming 2026-09-23 DECISION:
+    User: the terminal background and the active tab follow the theme like the chat does, then
+    "wtf does terminal color have to do with workarea theme??? pls make this more intuitive pls".
+    The work area always paints the theme's content colour for the terminal's own appearance (the
+    chrome in light mode, one step off it in dark), so the theme's tint and Background contrast
+    always reach it, superseding the Ghostty config background and the light palette's background.
+    The Terminal background setting never touches the work area; it only chooses the colour behind
+    terminal cells (`GpuiTerminalEngineConfig::apply_color_scheme`, which holds the 2026-09-28
+    Black / white default decision). Supersedes the 2026-09-22 rule that an explicit Terminal
+    Background won for the whole dark work area.
+    */
+    let workspace = gpui_terminal_theme_background_rgb(object, terminal_is_light);
     GPUI_WORKSPACE_BACKGROUND_RGB.store(u64::from(workspace), Ordering::Relaxed);
+    let [red, green, blue] = terminal_settings.grid_background_rgb(
+        terminal_is_light,
+        [
+            (workspace >> 16) as u8,
+            (workspace >> 8) as u8,
+            workspace as u8,
+        ],
+    );
     GPUI_TERMINAL_PADDING_BACKGROUND_RGB.store(
-        if terminal_is_light {
-            u64::from(workspace)
-        } else {
-            0
-        },
+        u64::from(u32::from_be_bytes([0, red, green, blue])),
         Ordering::Relaxed,
     );
 
@@ -123,11 +130,15 @@ pub(crate) fn refresh_gpui_visual_settings(
     seed only — since the contrast-slider redesign the sidebar resolves the
     effective chrome background from `customSidebarTitlebarBackgroundDarkness-
     Percent` plus the tint (getSidebarTitlebarBackgroundForDarkness in
-    packages/shared/ghostex-settings.ts). Reading the stale saved hex here made the
+    packages/shared/ghostex-settings.ts (deleted 2026-10-01)). Reading the stale saved hex here made the
     Rust titlebar derive its color (and gradient stops) from a darker base
     than the sidebar actually renders. Mirror the TS resolution instead.
     */
     let titlebar_background = resolved_custom_sidebar_titlebar_background(object);
+    GPUI_MENU_BACKGROUND_RGB.store(
+        sidebar_titlebar_menu_background_for_chrome(titlebar_background),
+        Ordering::Relaxed,
+    );
     let titlebar_foreground = if sidebar_uses_light_theme(object) {
         0x262626
     } else {
@@ -139,7 +150,7 @@ pub(crate) fn refresh_gpui_visual_settings(
     CDXC:Theming 2026-07-22:
     The shared sidebar renders custom chrome as a fixed-strength gradient
     derived from the resolved titlebar background
-    (getSidebarTitlebarGradientColors in packages/shared/ghostex-settings.ts), and the
+    (getSidebarTitlebarGradientColors in packages/shared/ghostex-settings.ts (deleted 2026-10-01)), and the
     titlebar shares those exact stops horizontally: left = the sidebar's top
     stop (darker), right = the sidebar's bottom stop. A flat Rust titlebar
     therefore never matched the gradient sidebar. Mirror the TS derivation
@@ -154,10 +165,31 @@ pub(crate) fn refresh_gpui_visual_settings(
     GPUI_TITLEBAR_GRADIENT_LEFT_RGB.store(u64::from(gradient_left), Ordering::Relaxed);
     GPUI_TITLEBAR_GRADIENT_RIGHT_RGB.store(u64::from(gradient_right), Ordering::Relaxed);
     GPUI_TITLEBAR_FOREGROUND_RGB.store(u64::from(titlebar_foreground), Ordering::Relaxed);
+    refresh_window_glass(object);
+    crate::app::panel_motion::refresh_panel_motion_speed(object);
+}
+
+/// The theme's content colour for terminals of one appearance: the same rule the chat uses, so a
+/// terminal, the chat next to it and the header over both sit on one surface.
+pub(crate) fn gpui_terminal_theme_background_rgb(
+    object: &serde_json::Map<String, serde_json::Value>,
+    light: bool,
+) -> u32 {
+    work_area_background_for_variant(object, light)
+}
+
+/// The background a terminal engine paints for the current settings and system appearance.
+pub(crate) fn gpui_terminal_theme_background(
+    settings: &shared_settings::SharedGpuiTerminalEngineSettings,
+) -> [u8; 3] {
+    let snapshot = shared_settings::shared_sidebar_settings_snapshot();
+    let light = settings.uses_light_theme(gpui_system_uses_light_appearance());
+    let rgb = gpui_terminal_theme_background_rgb(snapshot.object(), light);
+    [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]
 }
 
 pub(crate) fn workspace_tab_drag_preview_color() -> Hsla {
-    rgb(0x242424).opacity(0.94).into()
+    chrome_color(0x242424, 0xf4f4f5).opacity(0.94).into()
 }
 
 pub(crate) fn workspace_drop_feedback_border_color() -> Hsla {
@@ -186,258 +218,8 @@ pub(crate) fn workspace_drop_feedback_text_color() -> Hsla {
     rgb(0xe7f3ff).into()
 }
 
-pub(crate) fn workspace_tab_bar_color() -> Hsla {
-    chrome_color(0x050608, 0xf4f4f5).opacity(0.96).into()
-}
-
-pub(crate) fn workspace_tab_background_color(visual_tone: WorkspaceTabLifecycleVisualTone) -> Hsla {
-    let white_overlay_alpha = if visual_tone.uses_selected_treatment() {
-        WORKSPACE_TAB_SELECTED_WHITE_OVERLAY_ALPHA
-    } else {
-        WORKSPACE_TAB_INACTIVE_WHITE_OVERLAY_ALPHA
-    };
-    workspace_tab_white_overlay_over_bar_color(white_overlay_alpha)
-}
-
-pub(crate) fn workspace_tab_white_overlay_over_bar_color(alpha: f32) -> Hsla {
-    if CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed) {
-        let channel = |base: u32| -> u32 { (base as f32 * (1.0 - alpha)).round() as u32 };
-        return rgb((channel(0xf4) << 16) | (channel(0xf4) << 8) | channel(0xf5)).into();
-    }
-    let channel =
-        |base: u8| -> u32 { (base as f32 + (255.0 - base as f32) * alpha).round() as u32 };
-    let red = channel(0x05);
-    let green = channel(0x06);
-    let blue = channel(0x08);
-    rgb((red << 16) | (green << 8) | blue).into()
-}
-
-pub(crate) fn workspace_tab_reorder_insertion_marker_color() -> Hsla {
-    rgb(0x70adff).opacity(0.95).into()
-}
-
-pub(crate) fn workspace_tab_action_cluster_color() -> Hsla {
-    workspace_tab_action_button_color()
-}
-
-pub(crate) fn workspace_tab_action_button_color() -> Hsla {
-    chrome_color(0x0e0e0e, 0xfafafa).into()
-}
-
-pub(crate) fn workspace_tab_action_left_border_color() -> Hsla {
-    chrome_color(0x252525, 0xd4d4d4).into()
-}
-
-pub(crate) fn workspace_tab_action_icon_color() -> Hsla {
-    chrome_color(0xcfcfcf, 0x404040).into()
-}
-
-pub(crate) fn workspace_tab_border_color() -> Hsla {
-    chrome_color(0x252525, 0xd4d4d4).into()
-}
-
-pub(crate) fn workspace_tab_text_color(visual_tone: WorkspaceTabLifecycleVisualTone) -> Hsla {
-    if visual_tone.uses_selected_treatment() {
-        workspace_tab_active_text_color()
-    } else {
-        workspace_tab_inactive_text_color()
-    }
-}
-
-pub(crate) fn workspace_tab_active_text_color() -> Hsla {
-    chrome_color(0xf5f5f5, 0x262626).opacity(0.98).into()
-}
-
-pub(crate) fn workspace_tab_inactive_text_color() -> Hsla {
-    chrome_color(0xc7c7c7, 0x525252).opacity(0.82).into()
-}
-
-pub(crate) fn workspace_tab_terminal_icon_active_background(
-    presentation_state: TerminalSessionPresentationState,
-) -> Hsla {
-    match presentation_state {
-        TerminalSessionPresentationState::Running => {
-            chrome_color(0xffffff, 0x000000).opacity(0.12).into()
-        }
-        TerminalSessionPresentationState::Sleeping => rgb(0x6bb7ff).opacity(0.18).into(),
-        TerminalSessionPresentationState::Mounting => rgb(0xffc14d).opacity(0.18).into(),
-        TerminalSessionPresentationState::StartupFailed => rgb(0xff6b6b).opacity(0.18).into(),
-        TerminalSessionPresentationState::RestoredUnmounted => rgb(0x75d69a).opacity(0.17).into(),
-        TerminalSessionPresentationState::PoppedOutPlaceholder => {
-            rgb(0xff7ca8).opacity(0.18).into()
-        }
-    }
-}
-
-pub(crate) fn workspace_tab_terminal_icon_inactive_background(
-    presentation_state: TerminalSessionPresentationState,
-) -> Hsla {
-    if presentation_state.is_running() {
-        chrome_color(0xffffff, 0x000000).opacity(0.06).into()
-    } else {
-        chrome_color(0xffffff, 0x000000).opacity(0.035).into()
-    }
-}
-
-pub(crate) fn workspace_tab_terminal_icon_active_color(
-    presentation_state: TerminalSessionPresentationState,
-) -> Hsla {
-    match presentation_state {
-        TerminalSessionPresentationState::Running => {
-            chrome_color(0xffffff, 0x000000).opacity(0.42).into()
-        }
-        TerminalSessionPresentationState::Sleeping => rgb(0x6bb7ff).opacity(0.72).into(),
-        TerminalSessionPresentationState::Mounting => rgb(0xffc14d).opacity(0.74).into(),
-        TerminalSessionPresentationState::StartupFailed => rgb(0xff6b6b).opacity(0.74).into(),
-        TerminalSessionPresentationState::RestoredUnmounted => rgb(0x75d69a).opacity(0.72).into(),
-        TerminalSessionPresentationState::PoppedOutPlaceholder => {
-            rgb(0xff7ca8).opacity(0.72).into()
-        }
-    }
-}
-
-pub(crate) fn workspace_tab_terminal_icon_inactive_color(
-    presentation_state: TerminalSessionPresentationState,
-) -> Hsla {
-    if presentation_state.is_running() {
-        chrome_color(0xffffff, 0x000000).opacity(0.24).into()
-    } else {
-        chrome_color(0xffffff, 0x000000).opacity(0.16).into()
-    }
-}
-
-pub(crate) fn workspace_tab_terminal_icon_glyph_color(
-    visual_tone: WorkspaceTabLifecycleVisualTone,
-) -> Hsla {
-    if visual_tone.uses_selected_treatment() {
-        match visual_tone.presentation_state {
-            TerminalSessionPresentationState::Running => {
-                chrome_color(0xffffff, 0x000000).opacity(0.76).into()
-            }
-            TerminalSessionPresentationState::Sleeping => rgb(0xc7e4ff).opacity(0.86).into(),
-            TerminalSessionPresentationState::Mounting => rgb(0xffe2a2).opacity(0.86).into(),
-            TerminalSessionPresentationState::StartupFailed => rgb(0xffc2c2).opacity(0.86).into(),
-            TerminalSessionPresentationState::RestoredUnmounted => {
-                rgb(0xc4f2d2).opacity(0.84).into()
-            }
-            TerminalSessionPresentationState::PoppedOutPlaceholder => {
-                rgb(0xffd0df).opacity(0.86).into()
-            }
-        }
-    } else {
-        chrome_color(0xffffff, 0x000000)
-            .opacity(if visual_tone.uses_inactive_running_treatment() {
-                0.42
-            } else {
-                debug_assert!(visual_tone.uses_subdued_non_running_treatment());
-                0.24
-            })
-            .into()
-    }
-}
-
-pub(crate) fn workspace_tab_status_dot_color(
-    visual_tone: WorkspaceTabLifecycleVisualTone,
-    tab_status: AgentTerminalTabStatus,
-) -> Hsla {
-    let is_active = visual_tone.uses_selected_treatment();
-    match visual_tone.presentation_state {
-        TerminalSessionPresentationState::Running => {
-            workspace_tab_running_status_dot_color(tab_status, is_active)
-        }
-        TerminalSessionPresentationState::Sleeping => rgb(0x6bb7ff)
-            .opacity(if is_active { 0.88 } else { 0.34 })
-            .into(),
-        TerminalSessionPresentationState::Mounting => rgb(0xffc14d)
-            .opacity(if is_active { 0.90 } else { 0.36 })
-            .into(),
-        TerminalSessionPresentationState::StartupFailed => rgb(0xff6b6b)
-            .opacity(if is_active { 0.90 } else { 0.36 })
-            .into(),
-        TerminalSessionPresentationState::RestoredUnmounted => rgb(0x75d69a)
-            .opacity(if is_active { 0.88 } else { 0.34 })
-            .into(),
-        TerminalSessionPresentationState::PoppedOutPlaceholder => rgb(0xff7ca8)
-            .opacity(if is_active { 0.88 } else { 0.34 })
-            .into(),
-    }
-}
-
-pub(crate) fn workspace_tab_running_status_dot_color(
-    tab_status: AgentTerminalTabStatus,
-    is_active: bool,
-) -> Hsla {
-    let color = rgb(agent_terminal_tab_status_color(tab_status));
-    if is_active {
-        color.into()
-    } else {
-        color
-            .opacity(agent_terminal_tab_status_inactive_opacity(tab_status))
-            .into()
-    }
-}
-
-pub(crate) fn workspace_tab_state_badge_background(
-    visual_tone: WorkspaceTabLifecycleVisualTone,
-) -> Hsla {
-    let is_active = visual_tone.uses_selected_treatment();
-    match visual_tone.presentation_state {
-        TerminalSessionPresentationState::Running => {
-            chrome_color(0xffffff, 0x000000).opacity(0.0).into()
-        }
-        TerminalSessionPresentationState::Sleeping => rgb(0x6bb7ff)
-            .opacity(if is_active { 0.18 } else { 0.07 })
-            .into(),
-        TerminalSessionPresentationState::Mounting => rgb(0xffc14d)
-            .opacity(if is_active { 0.18 } else { 0.07 })
-            .into(),
-        TerminalSessionPresentationState::StartupFailed => rgb(0xff6b6b)
-            .opacity(if is_active { 0.18 } else { 0.07 })
-            .into(),
-        TerminalSessionPresentationState::RestoredUnmounted => rgb(0x75d69a)
-            .opacity(if is_active { 0.16 } else { 0.065 })
-            .into(),
-        TerminalSessionPresentationState::PoppedOutPlaceholder => rgb(0xff7ca8)
-            .opacity(if is_active { 0.17 } else { 0.07 })
-            .into(),
-    }
-}
-
-pub(crate) fn workspace_tab_state_badge_text_color(
-    visual_tone: WorkspaceTabLifecycleVisualTone,
-) -> Hsla {
-    let is_active = visual_tone.uses_selected_treatment();
-    match visual_tone.presentation_state {
-        TerminalSessionPresentationState::Running => workspace_tab_text_color(visual_tone),
-        TerminalSessionPresentationState::Sleeping => rgb(0xc9e6ff)
-            .opacity(if is_active { 0.92 } else { 0.44 })
-            .into(),
-        TerminalSessionPresentationState::Mounting => rgb(0xffdf9a)
-            .opacity(if is_active { 0.92 } else { 0.44 })
-            .into(),
-        TerminalSessionPresentationState::StartupFailed => rgb(0xffc6c6)
-            .opacity(if is_active { 0.92 } else { 0.44 })
-            .into(),
-        TerminalSessionPresentationState::RestoredUnmounted => rgb(0xc6f1d2)
-            .opacity(if is_active { 0.90 } else { 0.42 })
-            .into(),
-        TerminalSessionPresentationState::PoppedOutPlaceholder => rgb(0xffccdc)
-            .opacity(if is_active { 0.92 } else { 0.44 })
-            .into(),
-    }
-}
-
-pub(crate) fn workspace_tab_close_active_color() -> Hsla {
-    chrome_color(0xffffff, 0x000000).opacity(0.76).into()
-}
-
-pub(crate) fn workspace_tab_close_hover_color() -> Hsla {
-    tab_bar_button_hover_color()
-}
-
-/// CDXC:Theming 2026-09-13 WHY:
-/// The terminal grid excludes its padding and width gutters, so the parent must paint the selected light terminal palette there too.
-/// Cache this separately from app chrome so terminal overrides work, preserving the existing black padding in dark mode.
+/// CDXC:Theming 2026-09-28 DECISION:
+/// User: "it's hard to match the color of the padding to the color of the terminal's bg". The terminal grid excludes its padding and width gutters, so the pane body paints exactly the colour behind the terminal's cells there (`SharedGpuiTerminalEngineSettings::grid_background_rgb`, which `apply_color_scheme` also uses), in dark mode as well as light. Supersedes the 2026-09-13 black padding in dark mode, which mismatched whenever the dark grid was not pure black (Follow theme, or a Custom colour).
 pub(crate) fn workspace_terminal_placeholder_color() -> Hsla {
     rgb(GPUI_TERMINAL_PADDING_BACKGROUND_RGB.load(Ordering::Relaxed) as u32).into()
 }
@@ -528,16 +310,20 @@ pub(crate) fn workspace_terminal_body_color(
     presentation_state: Option<TerminalSessionPresentationState>,
 ) -> Hsla {
     match presentation_state {
-        Some(TerminalSessionPresentationState::Running) => workspace_terminal_placeholder_color(),
+        // Under window glass the grid paints no default background either, so the pane shows the
+        // frosted column all the way to its padding.
         Some(
-            TerminalSessionPresentationState::Sleeping | TerminalSessionPresentationState::Mounting,
-        ) => {
-            if CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed) {
-                rgb(0xffffff).into()
-            } else {
-                workspace_terminal_placeholder_color()
-            }
-        }
+            TerminalSessionPresentationState::Running
+            | TerminalSessionPresentationState::Sleeping
+            | TerminalSessionPresentationState::Mounting,
+        ) if window_glass_active() => gpui::transparent_black(),
+        // A sleeping or starting terminal shows the colour it will paint once running, in light
+        // and dark alike, so waking it does not flash.
+        Some(
+            TerminalSessionPresentationState::Running
+            | TerminalSessionPresentationState::Sleeping
+            | TerminalSessionPresentationState::Mounting,
+        ) => workspace_terminal_placeholder_color(),
         Some(TerminalSessionPresentationState::StartupFailed) => {
             chrome_color(0x140908, 0xffffff).into()
         }
@@ -551,10 +337,12 @@ pub(crate) fn workspace_terminal_body_color(
     }
 }
 
+/// CDXC:Theming 2026-09-27 DECISION:
+/// User: "yes pls make all those that could be glass glass". Under window glass the terminal's state and missing-session cards are the paused view card's flat ink wash (`glass_card`) on the pane's glass, keeping their state-coloured border, badge and button, instead of a solid tinted slab.
 pub(crate) fn workspace_terminal_placeholder_card_color(
     presentation_state: TerminalSessionPresentationState,
 ) -> Hsla {
-    match presentation_state {
+    let solid: Hsla = match presentation_state {
         TerminalSessionPresentationState::Running => chrome_color(0x000000, 0xffffff).into(),
         TerminalSessionPresentationState::Sleeping => chrome_color(0x101923, 0xf0f6fc).into(),
         TerminalSessionPresentationState::Mounting => chrome_color(0x1c160b, 0xfff9ed).into(),
@@ -565,14 +353,15 @@ pub(crate) fn workspace_terminal_placeholder_card_color(
         TerminalSessionPresentationState::PoppedOutPlaceholder => {
             chrome_color(0x1d1118, 0xfcf1f6).into()
         }
-    }
+    };
+    glass_card(solid, 1.0)
 }
 
 pub(crate) fn workspace_terminal_placeholder_border_color(
     presentation_state: TerminalSessionPresentationState,
 ) -> Hsla {
     match presentation_state {
-        TerminalSessionPresentationState::Running => rgb(0x242424).into(),
+        TerminalSessionPresentationState::Running => glass_divider(rgb(0x242424).into()),
         TerminalSessionPresentationState::Sleeping => rgb(0x6bb7ff).opacity(0.22).into(),
         TerminalSessionPresentationState::Mounting => rgb(0xffc14d).opacity(0.22).into(),
         TerminalSessionPresentationState::StartupFailed => rgb(0xff6b6b).opacity(0.24).into(),
@@ -678,7 +467,7 @@ pub(crate) fn workspace_terminal_placeholder_action_text_color(
 }
 
 pub(crate) fn workspace_pane_border_color() -> Hsla {
-    chrome_color(0x202020, 0xe5e5e5).into()
+    glass_divider(chrome_color(0x202020, 0xe5e5e5).into())
 }
 
 pub(crate) fn workspace_pane_focused_border_color() -> Hsla {
@@ -701,14 +490,14 @@ pub(crate) fn workspace_pane_border_color_for_state(state: WorkspacePaneBorderSt
     }
 }
 
-/// CDXC:Theming 2026-09-14 DECISION:
-/// User: restore the one-pixel Browser pane border to #d4d4d4 in light mode, including the left edge and top edge above the address bar; keep dark mode unchanged.
-/// This supersedes the 2026-09-13 decision to blend the frame into the white surround; explicit focus/attention indicators remain.
+/// CDXC:Theming 2026-09-21 DECISION:
+/// User: remove the border line around the Browser pane from its left and top; the view panel's own left border line, which runs from the top of the tab strip to the bottom of the panel, is the edge there, and nothing is drawn between the tab strip and the address bar.
+/// This supersedes the 2026-09-14 decision that restored the left and top edges. The remaining right and bottom edges keep #d4d4d4 in light mode with dark mode unchanged, and still carry the focus/attention colours.
 pub(crate) fn browser_pane_border_color_for_state(state: WorkspacePaneBorderState) -> Hsla {
     match state {
-        WorkspacePaneBorderState::Neutral => chrome_color(0x202020, 0xd4d4d4).into(),
+        WorkspacePaneBorderState::Neutral => glass_divider(chrome_color(0x202020, 0xd4d4d4).into()),
         WorkspacePaneBorderState::Focused if !show_active_pane_outline() => {
-            chrome_color(0x202020, 0xd4d4d4).into()
+            glass_divider(chrome_color(0x202020, 0xd4d4d4).into())
         }
         _ => workspace_pane_border_color_for_state(state),
     }
@@ -722,38 +511,45 @@ pub(crate) fn project_editor_companion_border_color_for_state(
             workspace_pane_focused_border_color()
         }
         WorkspacePaneBorderState::Neutral | WorkspacePaneBorderState::Focused => {
-            chrome_color(0x252525, 0xd4d4d4).into()
+            glass_divider(chrome_color(0x252525, 0xd4d4d4).into())
         }
         WorkspacePaneBorderState::Attention => workspace_pane_attention_border_color(),
     }
 }
 
+/// Rails rest in the neutral pane border colour so the two pane borders and the rail between them read as one line (see the Workarea decision on `SIDEBAR_DIVIDER_WIDTH`).
 pub(crate) fn workspace_split_handle_color() -> Hsla {
-    chrome_color(0x0c0c0c, 0xffffff).into()
+    workspace_pane_border_color()
 }
 
-pub(crate) fn workspace_split_separator_color() -> Hsla {
-    rgb(0x333333).opacity(0.0).into()
-}
-
+/// CDXC:Theming 2026-09-22 DECISION:
+/// User: the top of the side panel (the view panel's tab strip and shell backing) follows the theme
+/// and matches the Docs title bar, so it is the resolved chrome colour itself. This supersedes the
+/// same-day step off the chrome (half as bright dark, 60% toward white light), which washed the
+/// tint out in light mode. The command pane chrome and the terminal tab bar share it.
 pub(crate) fn project_editor_shell_background_color() -> Hsla {
-    chrome_color(0x050505, 0xfafafa).into()
+    titlebar_background()
 }
 
 pub(crate) fn project_editor_companion_divider_background_color() -> Hsla {
-    rgb(0x000000).opacity(0.0).into()
+    project_editor_companion_border_color_for_state(WorkspacePaneBorderState::Neutral)
 }
 
-pub(crate) fn project_editor_companion_divider_line_color() -> Hsla {
-    rgb(0x000000).opacity(0.0).into()
+pub(crate) fn maximized_view_panel_top_line_color() -> Hsla {
+    glass_divider(chrome_color(0x252525, 0xe5e5e5).into())
 }
 
 pub(crate) fn command_pane_chrome_color() -> Hsla {
     /*
     CDXC:CommandPane 2026-06-25-13:19:
     Native command-panel chrome and command titlebars use an opaque black background. Keep GPUI command chrome on black instead of the generic dark titlebar gray so tabs, tab-add, and panel actions sit on the same base as macOS.
+
+    CDXC:Theming 2026-09-22 DECISION:
+    User: the command pane's tabs bar follows the theme too. It shares the side panel shell's step off
+    the resolved chrome (half as bright on dark chrome, 60% toward white on light), superseding the fixed
+    black / white above so a tinted preset carries its hue into the command chrome.
     */
-    chrome_color(0x000000, 0xffffff).into()
+    project_editor_shell_background_color()
 }
 
 pub(crate) fn command_pane_strip_color() -> Hsla {
@@ -769,7 +565,7 @@ pub(crate) fn command_pane_panel_separator_color() -> Hsla {
     CDXC:CommandPane 2026-06-25-13:19:
     Native command-panel boundaries use the workspace separator line #1e1e1e for the panel edge, separate from focused pane outlines and titlebar command separators.
     */
-    chrome_color(0x1e1e1e, 0xd4d4d4).into()
+    glass_divider(chrome_color(0x1e1e1e, 0xd4d4d4).into())
 }
 
 pub(crate) fn command_pane_border_color() -> Hsla {
@@ -777,11 +573,11 @@ pub(crate) fn command_pane_border_color() -> Hsla {
     CDXC:CommandPane 2026-06-25-13:19:
     Native inactive command terminal pane outlines use #111111, not the translucent command titlebar separator. Keep the inactive command group outline distinct from titlebar chrome.
     */
-    chrome_color(0x111111, 0xe5e5e5).into()
+    glass_divider(chrome_color(0x111111, 0xe5e5e5).into())
 }
 
 pub(crate) fn command_pane_side_edge_color() -> Hsla {
-    chrome_color(0x252525, 0xd4d4d4).into()
+    glass_divider(chrome_color(0x252525, 0xd4d4d4).into())
 }
 
 pub(crate) fn command_pane_hidden_border_color() -> Hsla {
@@ -823,16 +619,33 @@ pub(crate) fn command_pane_tab_hover_background_color(is_active: bool, is_sleepi
 }
 
 pub(crate) fn command_pane_native_composited_tab_color(overlay_alpha: f32) -> Hsla {
-    if CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed) {
-        let channel = (255.0 * (1.0 - overlay_alpha)).round() as u32;
-        return rgb((channel << 16) | (channel << 8) | channel).into();
+    let light = CHROME_LIGHT_APPEARANCE.load(Ordering::Relaxed);
+    /*
+    CDXC:Theming 2026-09-23 DECISION:
+    User: the command pane's active tab and its + button must "fit better with the bar behind them". Under window glass the bar paints nothing, so a tab is only its overlay (a wash of the ink) and the icon buttons are clear with a wash on hover, instead of opaque fills baked over the chrome colour.
+    */
+    if window_glass_active() {
+        return rgb(if light { 0x000000 } else { 0xffffff })
+            .opacity(overlay_alpha)
+            .into();
     }
-    let channel =
-        |base: u8| -> u32 { (base as f32 + (255.0 - base as f32) * overlay_alpha).round() as u32 };
-    let red = channel(COMMAND_PANE_TAB_BACKGROUND_BASE_RED);
-    let green = channel(COMMAND_PANE_TAB_BACKGROUND_BASE_GREEN);
-    let blue = channel(COMMAND_PANE_TAB_BACKGROUND_BASE_BLUE);
-    rgb((red << 16) | (green << 8) | blue).into()
+    // The tab overlays composite over the themed command chrome (see command_pane_chrome_color)
+    // rather than the fixed AppKit base, so the tabs carry the same tint as their bar.
+    let base: gpui::Rgba = project_editor_shell_background_color().into();
+    let channel = |value: f32| -> f32 {
+        let value = value * 255.0;
+        if light {
+            value * (1.0 - overlay_alpha)
+        } else {
+            value + (255.0 - value) * overlay_alpha
+        }
+    };
+    rgb(sidebar_titlebar_pack_rgb([
+        channel(base.r),
+        channel(base.g),
+        channel(base.b),
+    ]))
+    .into()
 }
 
 pub(crate) fn command_pane_tab_title_text_color(is_active: bool, is_sleeping: bool) -> Hsla {
@@ -951,12 +764,14 @@ pub(crate) fn command_terminal_tab_status_indicator_opacity(
     }
 }
 
+/// CDXC:CommandPane 2026-09-23 DECISION:
+/// User: the command pane's panel buttons (Keep open, Minimize) "need to match the look of the + button in the command pane tabs bar". Their cluster takes the + button's own fill, so under window glass it is clear like the + button instead of a solid block behind them.
 pub(crate) fn command_pane_control_cluster_color() -> Hsla {
-    chrome_color(0x0e0e0e, 0xfafafa).into()
+    command_pane_control_button_color()
 }
 
 pub(crate) fn command_pane_control_button_color() -> Hsla {
-    chrome_color(0x0e0e0e, 0xfafafa).into()
+    glass_clear(chrome_color(0x0e0e0e, 0xfafafa).into())
 }
 
 pub(crate) fn command_pane_control_text_color() -> Hsla {
@@ -964,6 +779,9 @@ pub(crate) fn command_pane_control_text_color() -> Hsla {
 }
 
 pub(crate) fn command_pane_control_hover_color() -> Hsla {
+    if window_glass_active() {
+        return chrome_ink().opacity(0.08).into();
+    }
     tab_bar_button_hover_color()
 }
 
@@ -985,30 +803,14 @@ pub(crate) fn command_pane_sticky_active_tab_border_color() -> Hsla {
 
 pub(crate) fn command_pane_split_handle_color() -> Hsla {
     /*
-    CDXC:CommandPane 2026-06-25-13:19:
-    Native pane split rails are transparent five-pixel hit regions; pane borders provide visible separation until hover feedback appears.
+    CDXC:CommandPane 2026-09-19 WHY:
+    Inactive command pane borders are hidden, so the 2px split rail is the one visible line between command panes and rests in the panel separator colour. This replaces the transparent five-pixel rails that relied on pane borders for separation.
     */
-    rgb(0x000000).opacity(0.0).into()
-}
-
-pub(crate) fn command_pane_split_separator_color() -> Hsla {
-    /*
-    CDXC:CommandPane 2026-06-25-13:19:
-    Command split handles should not draw a persistent center separator because native resize rails are transparent in their normal state.
-    */
-    rgb(0x000000).opacity(0.0).into()
+    command_pane_panel_separator_color()
 }
 
 pub(crate) fn command_terminal_placeholder_color() -> Hsla {
-    workspace_terminal_placeholder_color()
-}
-
-pub(crate) fn command_pane_sleeping_placeholder_wake_label_color() -> Hsla {
-    /*
-    CDXC:SessionSleep 2026-06-25-14:49:
-    Native AppKit uses calibrated white 0.55 for the sleeping placeholder wake label; keep the GPUI label on the equivalent neutral gray instead of reusing brighter tab or state-placeholder text colors.
-    */
-    rgb(0x8c8c8c).into()
+    glass_clear(workspace_terminal_placeholder_color())
 }
 
 pub(crate) fn command_pane_delayed_send_badge_background_color() -> Hsla {
@@ -1021,10 +823,6 @@ pub(crate) fn command_pane_delayed_send_badge_border_color() -> Hsla {
 
 pub(crate) fn command_pane_delayed_send_badge_text_color() -> Hsla {
     rgb(0xf6c945).into()
-}
-
-pub(crate) fn gpui_combined_presentation_project_group_id(project_id: &str) -> String {
-    format!("combined-project:{}", gpui_encode_uri_component(project_id))
 }
 
 pub(crate) fn gpui_combined_presentation_session_id(project_id: &str, session_id: &str) -> String {

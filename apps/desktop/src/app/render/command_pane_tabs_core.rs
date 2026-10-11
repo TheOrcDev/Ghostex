@@ -38,8 +38,13 @@ impl GhostexGpuiApp {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let group_id = leaf.group_id;
+        let in_view = self.command_pane.dock_for_group(group_id) == Some(CommandPaneDock::View);
         let border_color = command_pane_group_border_color(
-            self.command_pane.mode,
+            if in_view {
+                CommandPaneMode::Pinned
+            } else {
+                self.command_pane.mode
+            },
             self.shell_focus,
             self.command_pane.focused_group,
             leaf.group_id,
@@ -87,7 +92,7 @@ impl GhostexGpuiApp {
 
         let group = group
             .border_color(border_color)
-            .bg(command_pane_chrome_color())
+            .bg(glass_clear(command_pane_chrome_color()))
             .child(self.render_command_pane_titlebar(leaf, estimated_chrome_width, cx))
             .when_some(
                 self.render_command_terminal_search_bar(leaf, cx),
@@ -127,12 +132,17 @@ impl GhostexGpuiApp {
             .get(&group_id)
             .map(|bounds| bounds.size.width.as_f32())
             .unwrap_or(estimated_chrome_width);
-        let keep_open_visible = self.command_pane_keep_open_control_visible(true);
-        let show_tab_add_button = command_pane_inline_tab_add_visible_for_chrome_width(
-            chrome_width,
-            true,
-            keep_open_visible,
-        );
+        let in_view = self.command_pane.dock_for_group(group_id) == Some(CommandPaneDock::View);
+        let keep_open_visible = !in_view && self.command_pane_keep_open_control_visible(true);
+        let show_tab_add_button = if in_view {
+            CommandPaneModel::view_leaf_tab_add_visible_for_chrome_width(chrome_width)
+        } else {
+            command_pane_inline_tab_add_visible_for_chrome_width(
+                chrome_width,
+                true,
+                keep_open_visible,
+            )
+        };
         let scroll_handle = self.command_tab_scroll_handle(group_id);
         let wheel_scroll_handle = scroll_handle.clone();
         let tab_count = leaf.tab_group.tabs.len();
@@ -143,11 +153,15 @@ impl GhostexGpuiApp {
                 command_pane_sticky_active_tab_edge_for_scroll_handle(&scroll_handle, active_index)
                     .map(|edge| (edge, active_index))
             });
-        let sticky_trailing_inset = command_pane_sticky_active_tab_trailing_inset(
-            true,
-            show_tab_add_button,
-            keep_open_visible,
-        );
+        let sticky_trailing_inset = if in_view {
+            CommandPaneModel::view_leaf_sticky_active_tab_trailing_inset(show_tab_add_button)
+        } else {
+            command_pane_sticky_active_tab_trailing_inset(
+                true,
+                show_tab_add_button,
+                keep_open_visible,
+            )
+        };
 
         h_flex()
             .id(format!("ghostex-gpui-command-pane-titlebar-{}", group_id.0))
@@ -159,7 +173,7 @@ impl GhostexGpuiApp {
             .overflow_hidden()
             .border_b_1()
             .border_color(command_pane_titlebar_separator_color())
-            .bg(command_pane_chrome_color())
+            .bg(glass_clear(command_pane_chrome_color()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
@@ -231,6 +245,16 @@ impl GhostexGpuiApp {
                         MouseButton::Right,
                         cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
                             this.handle_command_pane_empty_titlebar_right_mouse_down(
+                                Some(group_id),
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _event: &MouseUpEvent, window, cx| {
+                            this.handle_command_pane_empty_titlebar_middle_mouse_up(
                                 Some(group_id),
                                 window,
                                 cx,
@@ -316,7 +340,7 @@ impl GhostexGpuiApp {
             .flex_shrink_0()
             .h(px(height))
             .w_full()
-            .bg(command_pane_strip_color())
+            .bg(glass_clear(command_pane_strip_color()))
             .into_any_element()
     }
 
@@ -326,7 +350,7 @@ impl GhostexGpuiApp {
         height: f32,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let flat_tabs = self.command_pane.flat_tab_ids();
+        let flat_tabs = self.command_pane.panel_flat_tab_ids();
         let flat_tab_count = flat_tabs.len();
         let strip_chrome_width = (workspace_width
             - COMMAND_PANE_COLLAPSED_STRIP_LEFT_MARGIN
@@ -336,16 +360,17 @@ impl GhostexGpuiApp {
             command_pane_inline_tab_add_visible_for_chrome_width(strip_chrome_width, false, false);
         let scroll_handle = self.command_collapsed_tab_scroll_handle.clone();
         let wheel_scroll_handle = scroll_handle.clone();
-        let active_flat_tab = self.command_pane.active_group_and_session_id().and_then(
-            |(active_group_id, active_session_id)| {
+        let active_flat_tab = self
+            .command_pane
+            .active_group_and_session_id_in_dock(CommandPaneDock::Panel)
+            .and_then(|(active_group_id, active_session_id)| {
                 flat_tabs
                     .iter()
                     .position(|(group_id, session_id)| {
                         *group_id == active_group_id && *session_id == active_session_id
                     })
                     .map(|active_index| (active_group_id, active_index))
-            },
-        );
+            });
         let sticky_active_tab = active_flat_tab.and_then(|(active_group_id, active_index)| {
             command_pane_sticky_active_tab_edge_for_scroll_handle(&scroll_handle, active_index)
                 .map(|edge| (edge, active_group_id, active_index))
@@ -369,7 +394,7 @@ impl GhostexGpuiApp {
             .overflow_hidden()
             .border_t_1()
             .border_color(command_pane_panel_separator_color())
-            .bg(command_pane_strip_color())
+            .bg(glass_clear(command_pane_strip_color()))
             .child(
                 h_flex()
                     .id("ghostex-gpui-command-pane-collapsed-strip")
@@ -381,7 +406,7 @@ impl GhostexGpuiApp {
                     .overflow_hidden()
                     .border_l_1()
                     .border_color(command_pane_side_edge_color())
-                    .bg(command_pane_strip_color())
+                    .bg(glass_clear(command_pane_strip_color()))
                     .pl(px(COMMAND_PANE_COLLAPSED_STRIP_LEFT_MARGIN
                         - COMMAND_PANE_COLLAPSED_STRIP_LEFT_EDGE_WIDTH))
                     .mr(px(COMMAND_PANE_COLLAPSED_STRIP_RIGHT_MARGIN))
@@ -423,6 +448,14 @@ impl GhostexGpuiApp {
                                     );
                                 }),
                             )
+                            .on_mouse_up(
+                                MouseButton::Middle,
+                                cx.listener(move |this, _event: &MouseUpEvent, window, cx| {
+                                    this.handle_command_pane_empty_titlebar_middle_mouse_up(
+                                        None, window, cx,
+                                    );
+                                }),
+                            )
                             .children(flat_tabs.into_iter().enumerate().map(
                                 |(tab_index, (group_id, session_id))| {
                                     self.render_command_pane_tab(
@@ -440,9 +473,11 @@ impl GhostexGpuiApp {
                                     == CommandPaneNewCommandControlPlacement::InlineTabRun,
                                 |this| {
                                     this.when(show_tab_add_button, |this| {
-                                        this.child(
-                                            self.render_command_pane_tab_add_button(None, true, cx),
-                                        )
+                                        this.child(self.render_command_pane_tab_add_button(
+                                            self.command_pane.bottom_dock_target_group(),
+                                            true,
+                                            cx,
+                                        ))
                                     })
                                 },
                             ),

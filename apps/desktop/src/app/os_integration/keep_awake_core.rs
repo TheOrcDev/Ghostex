@@ -17,67 +17,16 @@ use std::time::Instant;
 // RefCell backs cross-platform runtime state (window frame persistence), not
 // just the macOS-only shims that first introduced the import.
 
-use crate::app::context_menu::GpuiContextMenu;
 use anyhow::Result;
-use gpui::Pixels;
 use gpui::Window;
 use gpui_component::WindowExt;
 use gpui_component::notification::Notification;
 
-use crate::app::actions::*;
 use crate::app::helpers::*;
 use crate::app::model::*;
 use crate::*;
 
 impl GhostexGpuiApp {
-    pub(crate) fn show_gpui_keep_awake_menu(
-        &mut self,
-        position: gpui::Point<Pixels>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        /*
-        CDXC:KeepAwake 2026-06-24-13:16:
-        The GPUI Keep Awake titlebar control is a menu launcher on both left-click and right-click, matching macOS titlebar semantics. The owned GPUI popup window exposes only the shared duration choices, the running-only stop action, and Power Settings; it must not become a direct toggle, React overlay, hidden hit region, persistent runtime store, or broad process killer.
-        */
-        let settings =
-            shared_settings::shared_sidebar_settings_snapshot().keep_awake_titlebar_settings();
-        if !settings.titlebar_control_visible() {
-            window.push_notification(
-                Notification::warning("Keep Awake is hidden by current Settings."),
-                cx,
-            );
-            cx.notify();
-            return;
-        }
-
-        self.refresh_gpui_keep_awake_runtime();
-        let active_duration = self
-            .keep_awake_runtime
-            .as_ref()
-            .map(|runtime| runtime.duration_minutes);
-        let mut menu = GpuiContextMenu::new().menu_with_disabled(
-            "Keep awake period",
-            true,
-            Box::new(GpuiKeepAwakeMenuLabel),
-        );
-        for duration in shared_settings::KEEP_AWAKE_DURATION_OPTIONS {
-            menu = menu.menu_with_check(
-                duration.menu_label(),
-                active_duration == Some(*duration),
-                Box::new(StartGpuiKeepAwakePeriod {
-                    duration_minutes: duration.minutes(),
-                }),
-            );
-        }
-        if self.keep_awake_runtime.is_some() {
-            menu = menu.menu("Don't keep awake", Box::new(StopGpuiKeepAwake));
-        }
-        menu.separator()
-            .menu("Power Settings...", Box::new(OpenGpuiPowerSettingsModal))
-            .show(position, window, cx);
-    }
-
     pub(crate) fn open_gpui_power_settings_modal_from_titlebar(
         &mut self,
         window: &mut Window,
@@ -110,6 +59,17 @@ impl GhostexGpuiApp {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // One Keep Awake for the app, held by the lead window (app/workspace_windows/).
+        if let Some((handle, lead)) = self.app_keep_awake_owner(cx) {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, cx| {
+                    let _ = lead.update(cx, |app, cx| {
+                        app.start_gpui_keep_awake_period(duration_minutes, window, cx);
+                    });
+                });
+            });
+            return;
+        }
         /*
         CDXC:KeepAwake 2026-06-24-13:16:
         Manual Keep Awake starts from the titlebar menu with the same duration choices and allow-display-sleep flag as macOS. The runtime owner below still starts only fixed `/usr/bin/caffeinate` argv and never accepts shell text, command output, paths, or private Settings payloads from React.
@@ -143,9 +103,7 @@ impl GhostexGpuiApp {
             let _ = duration_minutes;
             let _ = settings;
             window.push_notification(
-                Notification::warning(
-                    "Keep Awake requires macOS caffeinate and is not supported on this platform.",
-                ),
+                Notification::warning("Keep Awake is not supported on this platform."),
                 cx,
             );
             cx.notify();
@@ -170,9 +128,27 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn stop_gpui_keep_awake_from_titlebar(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some((_, lead)) = self.app_keep_awake_owner(cx) {
+            cx.defer(move |cx| {
+                let _ = lead.update(cx, |app, cx| app.stop_gpui_keep_awake_from_titlebar(cx));
+            });
+            return;
+        }
         if self.stop_gpui_keep_awake_runtime_with_options(true) {
             cx.notify();
         }
+    }
+
+    /// The lead window, when this window is not it: Keep Awake is the app's, so a start or stop
+    /// here goes there.
+    fn app_keep_awake_owner(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<(gpui::AnyWindowHandle, gpui::WeakEntity<Self>)> {
+        if self.is_lead_window() {
+            return None;
+        }
+        crate::app::workspace_windows::lead_workspace_window(cx)
     }
 
     pub(crate) fn stop_gpui_keep_awake_runtime(&mut self) -> bool {
@@ -191,6 +167,7 @@ impl GhostexGpuiApp {
             let Some(mut runtime) = self.keep_awake_runtime.take() else {
                 return false;
             };
+            self.publish_app_keep_awake();
             /*
             CDXC:KeepAwake 2026-07-11:
             Teardown must not run on the main thread: the lid-sleep disable
@@ -215,7 +192,9 @@ impl GhostexGpuiApp {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            self.keep_awake_runtime.take().is_some()
+            let stopped = self.keep_awake_runtime.take().is_some();
+            self.publish_app_keep_awake();
+            stopped
         }
     }
 
@@ -236,7 +215,9 @@ impl GhostexGpuiApp {
                 .as_mut()
                 .is_some_and(|runtime| !matches!(runtime.child.try_wait(), Ok(None)));
             if child_finished {
-                if let Some(mut runtime) = self.keep_awake_runtime.take() {
+                let finished_runtime = self.keep_awake_runtime.take();
+                self.publish_app_keep_awake();
+                if let Some(mut runtime) = finished_runtime {
                     // The child already exited (try_wait above), so this wait
                     // only reaps. The lid-sleep disable is the 20s-capable
                     // XPC call and runs detached — see
@@ -309,6 +290,7 @@ impl GhostexGpuiApp {
                 lid_sleep_prevention_warning_sent: false,
                 lid_sleep_prevention_last_refresh_at: None,
             });
+            self.publish_app_keep_awake();
             self.keep_awake_auto_start_suppressed = false;
             self.sync_gpui_keep_awake_lid_sleep_prevention(settings, cx);
             Ok(())

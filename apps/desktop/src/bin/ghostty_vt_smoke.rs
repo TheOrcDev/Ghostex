@@ -15,7 +15,7 @@ not a test harness; keep it a single small file. Run with:
 // this demo crate root so the real app binary keeps full dead-code coverage.
 #![allow(dead_code)]
 
-#[path = "../ghostty_vt.rs"]
+#[path = "../ghostty_vt/mod.rs"]
 mod ghostty_vt;
 
 use ghostty_vt::{VtDirty, VtRenderState, VtTerminal};

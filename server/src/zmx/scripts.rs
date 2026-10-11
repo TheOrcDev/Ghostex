@@ -308,19 +308,23 @@ exec "$zmx_bin" send "$zmx_session"
 pub(crate) fn build_zmx_run_command(input: ZmxRunCommandInput) -> String {
     let startup_command =
         with_atuin_ignored_shell_history_prefix(input.startup_text.trim_end_matches(['\r', '\n']));
-    let startup = format!(
-        "{}\n{}",
-        zmx_provider_prompt_editor_setup_shell_command(input.prompt_editor.as_deref()),
-        startup_command
-    );
+    let prompt_editor_setup =
+        zmx_provider_prompt_editor_setup_shell_command(input.prompt_editor.as_deref());
+    let startup = format!("{}\n{}", prompt_editor_setup, startup_command);
     let login_shell = user_login_shell_path();
-    let is_zsh = std::path::Path::new(&login_shell)
+    let login_shell_name = std::path::Path::new(&login_shell)
         .file_name()
-        .is_some_and(|name| name == "zsh");
-    let provider_shell_command = if is_zsh {
-        super::zsh_startup::agent_shell_command(&login_shell, &startup)
-    } else {
-        format!("{}\n{}", startup, user_login_shell_exec_command())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let provider_shell_command = match login_shell_name {
+        "zsh" => super::zsh_startup::agent_shell_command(&login_shell, &startup),
+        "fish" => super::fish_startup::agent_shell_command(
+            &login_shell,
+            &command_shell(),
+            &prompt_editor_setup,
+            &startup,
+        ),
+        _ => format!("{}\n{}", startup, user_login_shell_exec_command()),
     };
     format_zmx_provider_run_script(
         &input.session_name,
@@ -472,6 +476,9 @@ fn zmx_provider_prompt_editor_setup_shell_command(prompt_editor: Option<&str>) -
     remote shell's own editor instead of gte. Capture VISUAL/EDITOR before
     installing the wrapper, and export Monaco only for attach clients that
     explicitly advertised it.
+    A second run in the same environment (the fish launch runs it before
+    `exec fish` and again in the agent's script shell) sees the wrapper in
+    VISUAL/EDITOR and keeps the machine editor captured by the first run.
     */
     let mut script = r#"
 case "${GHOSTEX_HOME:-}" in
@@ -484,6 +491,8 @@ esac
 ghostex_prompt_editor_wrapper="$ghostex_prompt_editor_state_dir/prompt-editor"
 ghostex_prompt_editor_machine_visual="${VISUAL:-}"
 ghostex_prompt_editor_machine_editor="${EDITOR:-}"
+[ "$ghostex_prompt_editor_machine_visual" != "$ghostex_prompt_editor_wrapper" ] || ghostex_prompt_editor_machine_visual="${GHOSTEX_PROMPT_EDITOR_MACHINE_VISUAL:-}"
+[ "$ghostex_prompt_editor_machine_editor" != "$ghostex_prompt_editor_wrapper" ] || ghostex_prompt_editor_machine_editor="${GHOSTEX_PROMPT_EDITOR_MACHINE_EDITOR:-}"
 mkdir -p "$(dirname "$ghostex_prompt_editor_wrapper")" 2>/dev/null || true
 cat > "$ghostex_prompt_editor_wrapper" <<'__GHOSTEX_PROMPT_EDITOR_WRAPPER__'
 #!/bin/sh
@@ -496,7 +505,8 @@ fi
 if command -v ghostex >/dev/null 2>&1; then
   exec ghostex prompt-editor "$@"
 fi
-exec /bin/sh -lc 'exec ${GHOSTEX_PROMPT_EDITOR_MACHINE_VISUAL:-${GHOSTEX_PROMPT_EDITOR_MACHINE_EDITOR:-vi}} "$@"' ghostex-prompt-editor "$@"
+printf '%s\n' 'Ghostex could not find its ghostex command, so the prompt editor did not open. Restart this session from Ghostex.' >&2
+exit 127
 __GHOSTEX_PROMPT_EDITOR_WRAPPER__
 chmod 755 "$ghostex_prompt_editor_wrapper" 2>/dev/null || true
 export GHOSTEX_PROMPT_EDITOR_MACHINE_VISUAL="$ghostex_prompt_editor_machine_visual"
@@ -506,11 +516,28 @@ export VISUAL="$ghostex_prompt_editor_wrapper"
 "#
     .trim()
     .to_string();
+    if let Some(cli) = session_ghostex_cli_executable() {
+        script.push_str(&format!(
+            "\nexport GHOSTEX_CLI_EXECUTABLE={}",
+            shell_quote(&cli)
+        ));
+    }
     if prompt_editor == Some("monaco") {
         script.push_str("\nexport GHOSTEX_PROMPT_EDITOR_BACKEND=monaco");
     }
     script.push_str("\nexport GHOSTEX_PROMPT_EDITING_ENABLED=1");
     script
+}
+
+/// CDXC:PromptEditor 2026-09-24 WHY:
+/// Chat sends reach the agent through its external editor (Ctrl+G), and the `$EDITOR` wrapper can only answer that handshake by running `ghostex prompt-editor`. The wrapper used to find the CLI through `GHOSTEX_CLI_EXECUTABLE`, which nothing had exported since the Swift host was retired, then through `ghostex` on PATH, then fell back to `vi`; on a computer without the CLI on PATH every chat send opened `vi`, the handshake never completed, and the agent stayed wedged in the editor. Every session is now pinned to the `ghostex` binary shipped beside this gxserver (the same pairing the Windows provider uses), and the wrapper fails with a message instead of opening an editor that cannot answer. The machine's own VISUAL/EDITOR still runs when the user chose it, through `ghostex prompt-editor`'s inherit backend.
+/// SEE-ALSO: `scripts_windows.rs` `start` pins the Windows CLI the same way; `gpui_auto_install_ghostex_cli_wrappers` in apps/desktop keeps `ghostex` on PATH for sessions started before the pin.
+fn session_ghostex_cli_executable() -> Option<String> {
+    let gxserver = std::env::current_exe().ok()?;
+    let gxserver = std::fs::canonicalize(&gxserver).unwrap_or(gxserver);
+    let cli = gxserver.with_file_name("ghostex");
+    crate::ghostex_cli::launchers::is_executable_file_sync(&cli)
+        .then(|| cli.to_string_lossy().into_owned())
 }
 
 fn zmx_prompt_editor_attach_args(prompt_editor: Option<&str>) -> &'static str {

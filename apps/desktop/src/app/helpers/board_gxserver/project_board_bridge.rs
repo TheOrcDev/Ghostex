@@ -8,44 +8,6 @@
 use crate::app::helpers::*;
 use crate::*;
 
-pub(crate) fn kanban_workarea_runtime_url_from_project_snapshot(
-    snapshot: &GpuiProjectSnapshot,
-) -> Option<ProjectWorkareaRealRuntimeUrl> {
-    /*
-    CDXC:CefRuntime 2026-06-24-11:03:
-    Kanban runtime URL authority is the bundled first-party CEF page plus the explicit live sidebar project identity. The URL is passed directly to CefSurface creation and is not stored in shell state, logged, derived from .git/folders, or backed by WKWebView/WebKit.
-    */
-    if !snapshot.feature_availability.kanban || snapshot.is_quick_projectless {
-        return None;
-    }
-    let active_project_id = snapshot.active_project_id.as_ref()?.0.clone();
-    let remote_reference = gpui_remote_project_reference_from_project_id(&active_project_id);
-    let request_project_id = remote_reference
-        .as_ref()
-        .map(|reference| reference.project_id.clone())
-        .unwrap_or(active_project_id);
-    let project_path = snapshot
-        .in_memory_project_path
-        .as_ref()?
-        .to_string_lossy()
-        .to_string();
-    let surface_id = snapshot.surface_ids.kanban_board_id.as_ref()?.clone();
-    let base_url = gpui_cef_html_entry_url("GHOSTEX_GPUI_KANBAN_URL", "kanban.html").ok()?;
-    let mut params = vec![
-        ("projectName", snapshot.display_name.clone()),
-        ("projectPath", project_path),
-        ("projectId", request_project_id),
-        ("projectEditorId", surface_id),
-        ("beadsDisplayKey", snapshot.display_name.clone()),
-    ];
-    if let Some(reference) = remote_reference {
-        params.push(("remoteMachineId", reference.remote_machine_id));
-    }
-    ProjectWorkareaRealRuntimeUrl::from_authorized_runtime_url(append_url_query_params(
-        base_url, &params,
-    ))
-}
-
 #[derive(Clone)]
 pub(crate) struct ProjectBoardBridgeRuntimeContext {
     pub(crate) project_id: Option<String>,

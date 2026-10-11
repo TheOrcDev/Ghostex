@@ -1,0 +1,17 @@
+{
+  "ok": {
+    "icon": "check",
+    "className": "bg-emerald-500/15 text-emerald-400",
+    "color": "#34d399"
+  },
+  "error": {
+    "icon": "alert-triangle",
+    "className": "bg-destructive/15 text-destructive",
+    "color": "#fb7185"
+  },
+  "neutral": {
+    "icon": "info-circle",
+    "className": "bg-muted text-muted-foreground",
+    "color": null
+  }
+}

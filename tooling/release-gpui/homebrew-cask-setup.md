@@ -1,8 +1,16 @@
 # Homebrew cask publishing: one-time setup
 
-Every stable release updates two casks from the macOS publish stage of
-`.github/workflows/release-gpui-publish.yml`, through
-`tooling/release-gpui/publish-homebrew-cask.mjs`:
+**Since 2026-10-04 the official-cask pull request is opt-in** (`--official`; user
+decision): Homebrew's autobump bot updates the official cask on every release, and
+this token's write access to the fork failed with HTTP 404 on every release from
+10.0.1 on. The release workflow only pushes the personal tap now, and its audit
+step (`brew style`/`brew audit`, which only fills in the PR template) is switched
+off with `false &&` in `release-gpui-publish.yml`. Everything below describes the
+`--official` path, kept for when it is wanted again (it needs the fork token
+below); the tap push needs only `HOMEBREW_TAP_TOKEN` or `HOMEBREW_GITHUB_API_TOKEN`.
+
+The macOS publish stage of `.github/workflows/release-gpui-publish.yml` runs
+`tooling/release-gpui/publish-homebrew-cask.mjs`, which can update two casks:
 
 - the official `ghostex` cask, `Casks/g/ghostex.rb` in
   [Homebrew/homebrew-cask](https://github.com/Homebrew/homebrew-cask), by opening a
@@ -29,7 +37,9 @@ Fine-grained personal access token (preferred):
   and `maddada/homebrew-tap`.
 - Repository permissions: **Contents: Read and write**, **Pull requests: Read and
   write**, **Metadata: Read** (added automatically).
-- No account permissions.
+- No account permissions, and no **Workflows** permission (the `workflow` scope
+  of a classic token). The script never copies upstream commits into the fork,
+  so it never has to write under `.github/workflows`; see the fork section.
 
 A fine-grained token opens the pull request against `Homebrew/homebrew-cask`
 even though that repository is not in its list: creating a PR only needs write
@@ -56,11 +66,21 @@ different account or a token that is not allowed to touch the fork.
 ## Fork of Homebrew/homebrew-cask
 
 `maddada/homebrew-cask` already exists (it carried the `add-ghostex` submission).
-The script forks the repository itself if it is missing, then syncs the fork's
-`main` from upstream with the merge-upstream API before branching, so a fork that
-is hundreds of commits behind is fine. The fork's `main` must be fast-forwardable:
-never commit directly to it. Feature branches such as `add-ghostex` do not
-interfere.
+The script forks the repository itself if it is missing. It never syncs the
+fork: the `ghostex-<version>` branch is created (or force-reset, on a retry) at
+the head commit of upstream's default branch, which the fork can reference
+because a fork shares upstream's object network, and the bump is committed on
+top of that commit. The fork's own `main` may fall arbitrarily far behind and
+nothing reads it. Feature branches such as `add-ghostex` do not interfere.
+
+The fork used to be fast-forwarded with the merge-upstream API before
+branching. Release 9.7.0 failed there with HTTP 422, "refusing to allow a
+Personal Access Token to create or update workflow
+`.github/workflows/check-issues.yml` without `workflow` scope": that sync
+copies every upstream commit into the fork, including Homebrew's frequent
+workflow edits, which a token limited to contents and pull requests may not
+write. Do not bring the sync back or widen the token for it; the pull request
+never depends on the fork's `main` being current.
 
 ## Autobump
 
@@ -81,7 +101,7 @@ version.
 
 ```sh
 node tooling/release-gpui/publish-homebrew-cask.mjs --version 9.5.1 --dry-run
-HOMEBREW_GITHUB_API_TOKEN=... node tooling/release-gpui/publish-homebrew-cask.mjs --version 9.5.1 --publish
+HOMEBREW_GITHUB_API_TOKEN=... node tooling/release-gpui/publish-homebrew-cask.mjs --version 9.5.1 --publish --official
 ```
 
 `--dry-run` prints the exact diff for both casks and performs no writes.

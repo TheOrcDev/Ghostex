@@ -298,6 +298,8 @@ fn system_bd_directories(
         PathBuf::from("/usr/bin"),
         PathBuf::from("/bin"),
     ]);
+    // Beads installed by Ghostex (Project board's Install Beads button).
+    directories.push(crate::managed_tools::paths::bin_dir());
     let mut seen = std::collections::HashSet::new();
     directories
         .into_iter()

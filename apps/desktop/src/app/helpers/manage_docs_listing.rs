@@ -4,6 +4,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     fs,
     hash::{Hash, Hasher},
+    path::Path,
 };
 
 /// CDXC:Docs 2026-09-11 DECISION:
@@ -38,7 +39,7 @@ pub(crate) fn manage_list_directory(
     } else {
         let path = manage_docs_path(context, Some(&requested))?;
         if path.chat {
-            return Err("Chat-opened files are not Docs tree items.".to_string());
+            return Err("Chat-opened files are not in the Files tree.".to_string());
         }
         manage_validate_docs_tree_relative_path(&path, context)?;
         let directory = manage_existing_url(&path)?;
@@ -65,7 +66,7 @@ pub(crate) fn manage_list_directory(
                         context.additional_docs_folders_text,
                     )
                 })
-                .ok_or_else(|| "Select a Docs folder to list.".to_string())?;
+                .ok_or_else(|| "Select a folder to list.".to_string())?;
             manage_append_project_file_entries(
                 &mut entries,
                 path.root,
@@ -107,4 +108,189 @@ pub(crate) fn manage_file_git_baseline(
         return Err("Select a file to inspect.".to_string());
     }
     Ok(manage_git_baseline_payload(path.root, &target, &path.inner))
+}
+
+/// The Files view's listing: one folder's children, every file type, without the folders
+/// `ghostex_docs::project::SKIPPED_DIRECTORY_NAMES` names. `path` "" lists the project root plus
+/// the configured Docs directory's mount.
+///
+/// CDXC:Docs 2026-09-27 SEE-ALSO: `list_project_directory` in `server/src/project_docs/project_scope.rs` answers the same request for a remote project; `packages/project-docs/src/project.rs` holds the skip list both use.
+pub(crate) fn manage_list_project_directory(
+    context: ManageDocsContext<'_>,
+    request: &Value,
+) -> Result<Value, String> {
+    let requested = manage_request_string(request, "path").unwrap_or_default();
+    if request.get("force").and_then(Value::as_bool) == Some(true) {
+        ghostex_docs::directory::invalidate();
+    }
+    let mut entries = Vec::new();
+    if requested.is_empty() {
+        manage_append_project_scope_children(
+            &mut entries,
+            &context.roots.project,
+            &context.roots.project,
+            "",
+            "",
+            0,
+        )?;
+        if let Some(mount) = &context.roots.extra {
+            match &mount.location {
+                Ok(root) => entries.push(json!({
+                    "path": MANAGE_DOCS_EXTRA_ROOT_MOUNT_SEGMENT, "name": mount.name,
+                    "displayPath": mount.name, "kind": "directory", "depth": 0, "size": Value::Null,
+                    "modifiedAt": fs::metadata(root).ok().and_then(|m| m.modified().ok()).map(gpui_iso8601_utc),
+                })),
+                Err(error) => entries.push(manage_unavailable_docs_extra_root_entry(&mount.name, error)),
+            }
+        }
+    } else {
+        let path = manage_docs_path(context, Some(&requested))?;
+        if path.chat {
+            return Err(
+                "Files opened from outside the project have no folder to list.".to_string(),
+            );
+        }
+        let directory = manage_existing_url(&path)?;
+        let display_prefix = path.display(context);
+        let depth = requested.split('/').filter(|part| !part.is_empty()).count();
+        manage_append_project_scope_children(
+            &mut entries,
+            path.root,
+            &directory,
+            &path.outer,
+            &display_prefix,
+            depth,
+        )?;
+    }
+    let mut revision_hash = DefaultHasher::new();
+    context.roots.project.hash(&mut revision_hash);
+    entries.hash(&mut revision_hash);
+    let revision = format!("{:x}", revision_hash.finish());
+    let unchanged = request.get("revision").and_then(Value::as_str) == Some(revision.as_str());
+    let mut response = json!({"action": "list", "progressive": true, "requestId": request["requestId"], "path": requested, "revision": revision, "unchanged": unchanged});
+    if !unchanged {
+        response["entries"] = json!(entries);
+    }
+    Ok(response)
+}
+
+/// Appends `directory`'s children, folders first, as entries addressed `outer_prefix/name` and
+/// named `display_prefix/name`. A symlink that leads outside `root` is left out.
+fn manage_append_project_scope_children(
+    entries: &mut Vec<Value>,
+    root: &Path,
+    directory: &Path,
+    outer_prefix: &str,
+    display_prefix: &str,
+    depth: usize,
+) -> Result<(), String> {
+    let mut scanned = 0;
+    let mut children = ghostex_docs::directory::children(
+        directory,
+        &mut scanned,
+        MANAGE_FILE_LIST_MAX_ENTRIES,
+        manage_docs_scan_cap_error,
+    )?;
+    children.sort_by_cached_key(|child| {
+        let is_directory = child.metadata().map(|m| m.is_dir()).unwrap_or(false);
+        (
+            !is_directory,
+            child.file_name().to_string_lossy().to_lowercase(),
+        )
+    });
+    let join = |prefix: &str, name: &str| {
+        if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}/{name}")
+        }
+    };
+    for child in children {
+        let name = child.file_name().to_string_lossy().into_owned();
+        let Ok(metadata) = child.metadata() else {
+            continue;
+        };
+        let is_directory = metadata.is_dir();
+        if (is_directory && ghostex_docs::project::is_skipped_directory(&name))
+            || ghostex_docs::project::is_skipped_file(&name)
+        {
+            continue;
+        }
+        if child.file_type().is_ok_and(|kind| kind.is_symlink())
+            && !fs::canonicalize(child.path()).is_ok_and(|resolved| resolved.starts_with(root))
+        {
+            continue;
+        }
+        entries.push(json!({
+            "depth": depth,
+            "displayPath": join(display_prefix, &name),
+            "kind": if is_directory { "directory" } else { "file" },
+            "modifiedAt": metadata.modified().ok().map(gpui_iso8601_utc),
+            "name": name,
+            "path": join(outer_prefix, &name),
+            "size": if is_directory { None } else { Some(metadata.len()) },
+        }));
+    }
+    Ok(())
+}
+
+/// The Files view's search: every file and folder in the project (and the configured Docs
+/// directory) whose path holds all of the query's words, as flat entries.
+pub(crate) fn manage_search_project(
+    context: ManageDocsContext<'_>,
+    request: &Value,
+) -> Result<Value, String> {
+    const MAX_MATCHES: usize = 500;
+    const MAX_SCANNED: usize = 200_000;
+    let query = manage_request_string(request, "query").unwrap_or_default();
+    let mut roots = vec![(context.roots.project.clone(), String::new(), String::new())];
+    if let Some(mount) = &context.roots.extra
+        && let Ok(location) = &mount.location
+    {
+        roots.push((
+            location.clone(),
+            MANAGE_DOCS_EXTRA_ROOT_MOUNT_SEGMENT.to_string(),
+            mount.name.clone(),
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut incomplete = false;
+    for (root, outer_prefix, display_prefix) in roots {
+        let outcome = ghostex_docs::project::search(&root, &query, MAX_MATCHES, MAX_SCANNED);
+        truncated |= outcome.truncated;
+        incomplete |= outcome.incomplete;
+        for found in outcome.matches {
+            let prefixed = |prefix: &str| {
+                if prefix.is_empty() {
+                    found.relative_path.clone()
+                } else {
+                    format!("{prefix}/{}", found.relative_path)
+                }
+            };
+            let name = found
+                .relative_path
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            entries.push(json!({
+                "depth": 0,
+                "displayPath": prefixed(&display_prefix),
+                "kind": if found.is_directory { "directory" } else { "file" },
+                "modifiedAt": Value::Null,
+                "name": name,
+                "path": prefixed(&outer_prefix),
+                "size": Value::Null,
+            }));
+        }
+    }
+    Ok(json!({
+        "action": "search",
+        "entries": entries,
+        "query": query,
+        "requestId": request["requestId"],
+        "truncated": truncated,
+        "incomplete": incomplete,
+    }))
 }

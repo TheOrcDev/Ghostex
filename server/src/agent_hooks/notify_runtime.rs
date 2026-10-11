@@ -1,9 +1,9 @@
 use std::{
     env, fs,
     io::{Read, Write},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -18,7 +18,7 @@ use super::event_mapping::{
     activity_for_hook_event, claude_notification_is_idle_input, env_string, first_path,
     first_string, is_prompt_event, nested_get, normalized_hook_agent_key, update_hook_status,
 };
-use super::install::{parent_process_id, read_json_object};
+use super::hook_store::write_hook_store;
 use super::probing::{
     decode_base64_text, expand_home_path, insert_json_string, io_error, normalize_prompt_text,
     now_iso, parse_global_session_ref, read_file_text, temp_path_for,
@@ -28,7 +28,14 @@ use super::probing::{
 CDXC:AgentHooks 2026-06-21-19:26:
 The Rust hook artifact must perform the same work as TypeScript gxserver's installed notify script: normalize provider lifecycle events, update the local sidecar for legacy clients, persist hook-session identity for restore, capture the first user prompt for gxserver-owned auto-title jobs, and post authenticated hook events back to gxserver. The shell wrapper calls this hidden helper so Rust does not depend on a random system Node runtime.
 */
-pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
+pub fn run_notify_hook(args: Vec<String>) -> Result<Option<String>, DomainStateError> {
+    /*
+    CDXC:Coordinators 2026-10-03 WHY:
+    The helper's return carries the coordinator context gxserver answered a ZCode SessionStart
+    with. The bash wrapper captures this process's stdout, so the `agent-hook-notify` dispatcher
+    prints it; the native Windows wrapper prints the returned value itself, in place of its
+    canned response. Every other event returns None.
+    */
     let state_path = args.first().map(String::as_str).unwrap_or_default();
     let input_arg = args.get(1).cloned().unwrap_or_else(|| {
         let mut input = String::new();
@@ -61,6 +68,15 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
         .or_else(|| read_state_string(&state, "agent"))
         .unwrap_or_else(|| "codex".to_string());
     let agent_key = normalized_hook_agent_key(&agent_name);
+    /*
+    CDXC:AgentHooks 2026-10-06 DECISION:
+    "The notify hook drops any event whose environment has `EMPRYO_PROJECT_DIR` set while its agent isn't `empryo`." Empryo also runs the hooks in `~/.claude/settings.json` and `~/.codex/hooks.json`, which would report every Empryo event as Claude's and as Codex's too. Empryo's shell tool runs without EMPRYO_PROJECT_DIR, so this guard never drops an agent started from it.
+    */
+    if agent_key == "empryo" {
+        super::ancestor_session::adopt_ancestor_session_routing();
+    } else if env_string("EMPRYO_PROJECT_DIR").is_some() {
+        return Ok(None);
+    }
     let event_name = first_string([
         payload.get("hook_event_name"),
         payload.get("hookEventName"),
@@ -82,10 +98,19 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
         nested_get(&payload, &["properties", "info", "id"]),
     ]);
     let transcript_path = if agent_key == "zcode" {
-        if session_id.as_deref().is_some_and(|id| id.starts_with("sess_subagent")) {
-            return Ok(());
+        if session_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("sess_subagent"))
+        {
+            return Ok(None);
         }
-        Some(crate::session_chat_zcode::zcode_database_path(None).to_string_lossy().into_owned())
+        Some(
+            crate::session_chat_zcode::zcode_database_path(None)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else if agent_key == "empryo" {
+        empryo_session_log_path(session_id.as_deref())
     } else {
         first_path([
             payload.get("transcript_path"),
@@ -97,8 +122,53 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
     if agent_key == "codex"
         && super::resolution::is_codex_subagent_transcript(transcript_path.as_deref())
     {
-        return Ok(());
+        return Ok(None);
     }
+    /*
+    CDXC:SessionIdentity 2026-09-27 WHY:
+    Claude runs a fork (the side question card's Fork, or opening a forked agent) as a background session in its own daemon: `claude --session-id <fork> --fork-session --resume <parent>`, marked `CLAUDE_CODE_SESSION_KIND=bg` and still carrying the terminal's GHOSTEX_SESSION_ID. Its hooks rebound the Ghostex session to the fork's conversation, which holds no messages of its own, so the thread vanished from chat and resuming it could not bring the original back (observed 2026-09-27, session G8z2s). A background session's hooks never replace the conversation the terminal owns; like a Codex subagent, it is not the session's agent.
+    */
+    if matches!(agent_key.as_str(), "claude" | "openclaude")
+        && env_string("CLAUDE_CODE_SESSION_KIND").as_deref() == Some("bg")
+        && session_id.as_deref() != read_state_string(&state, "agentSessionId").as_deref()
+    {
+        return Ok(None);
+    }
+    // See CDXC:SessionIdentity 2026-10-11 in nested_agent.rs: an agent another agent started from its tool is not the session's agent. A Claude background session runs outside the daemon and keeps the rule above.
+    if env_string("CLAUDE_CODE_SESSION_KIND").as_deref() != Some("bg")
+        && super::nested_agent::hook_agent_is_nested(&agent_key)
+    {
+        return Ok(None);
+    }
+    /*
+    CDXC:SessionChat 2026-10-10 WHY:
+    Claude Code runs side queries (the prompt suggestion that predicts the user's next message, compaction, memory extraction) as forked queries inside the session's own process. A fork gets a fresh agent_id but no agent_type, writes no transcript, and still fires PreToolUse under the session's id. Observed 2026-10-10 in the Main Coordinator (fa846d8e): the suggestion fork called AskUserQuestion ("Suggestion mode is asking me to predict your next message; I'll stay silent rather than guess. Anything you want next?"), Claude denied the call so it never reached the terminal or the transcript, but its PreToolUse stored a question card, and the user's answer went to the agent as a real message. The main thread's hooks carry no agent_id, and a real subagent's always carry its agent_type (its foreground questions and approvals do wait in this terminal), so an agent_id without an agent_type is a fork, and none of its events belong to the session.
+    */
+    if matches!(agent_key.as_str(), "claude" | "openclaude")
+        && first_string([payload.get("agent_id")]).is_some()
+        && first_string([payload.get("agent_type")]).is_none()
+    {
+        return Ok(None);
+    }
+    /*
+    CDXC:SessionIdentity 2026-09-27 WHY:
+    Hermes runs a delegate_task subagent inside the terminal's own process, and its terminal tool can start another `hermes` run; both fire this terminal's hooks under their own session id, without the parent's. Each one rebound the Ghostex session to the child: chat showed the child's transcript, the row took the child's title ("Subagent: …"), and the child's end marked the session idle mid-turn (observed 2026-09-27 in the Dobby bot, sessions G26an and G30nd). Hermes marks every process it starts for a subagent with `HERMES_DELEGATED_CHILD_CONTEXT` and starts terminal-tool commands in a new session with no controlling terminal, so neither is the session's agent. A nested run is dropped; a subagent keeps only its approval prompt, which waits in this terminal, and never names the conversation.
+    */
+    let hermes = agent_key == "hermes-agent";
+    if hermes && !hook_process_has_terminal() {
+        return Ok(None);
+    }
+    let hermes_subagent = hermes && env_string("HERMES_DELEGATED_CHILD_CONTEXT").is_some();
+    if hermes_subagent
+        && !matches!(
+            event_name.as_str(),
+            "pre_approval_request" | "post_approval_response"
+        )
+    {
+        return Ok(None);
+    }
+    let session_id = session_id.filter(|_| !hermes_subagent);
+    let transcript_path = transcript_path.filter(|_| !hermes_subagent);
     let prompt = first_string([
         payload.get("user_message"),
         payload.get("prompt"),
@@ -127,7 +197,13 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
     let prompt_event =
         is_prompt_event(&event_name) || (agent_key == "antigravity" && prompt.is_some());
 
-    ensure_state_default(&mut state, "status", "idle");
+    /*
+    CDXC:AgentHooks 2026-09-28 WHY:
+    A zmx pane carries no GHOSTEX_SESSION_STATE_FILE, so the hook starts from an empty state. Seeding idle there invented a status that gxserver applied to every event its mapping leaves unset, blinking a working session idle mid-turn (Hermes post_tool_call, Cursor afterShellExecution, Claude's auto PostCompact; a replayed made-up event idled a working Hermes session within 20ms on 2026-09-28). Without a state file the posted status comes only from activity_for_hook_event.
+    */
+    if has_state_path {
+        ensure_state_default(&mut state, "status", "idle");
+    }
     if read_state_string(&state, "statusUpdatedAt").is_none() {
         if let Some(last_activity_at) = read_state_string(&state, "lastActivityAt") {
             state.insert("statusUpdatedAt".to_string(), json!(last_activity_at));
@@ -137,6 +213,13 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
         state.insert("agent".to_string(), json!(agent_key.clone()));
     }
     if let Some(session_id) = session_id.clone() {
+        // CDXC:SessionIdentity 2026-09-24 WHY:
+        // A new conversation id must not inherit the previous conversation's transcript path; the pair let an unwritten Claude id pass the transcript guard as if it were the old conversation.
+        if transcript_path.is_none()
+            && read_state_string(&state, "agentSessionId").as_deref() != Some(session_id.as_str())
+        {
+            state.remove("agentSessionPath");
+        }
         state.insert("agentSessionId".to_string(), json!(session_id.clone()));
         write_hook_store(
             &hook_state_dir,
@@ -235,7 +318,7 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
                 .then(|| prompt.filter(|prompt| is_actual_user_message_prompt(prompt)))
                 .flatten()
         });
-    post_gxserver_hook_event(
+    let response = post_gxserver_hook_event(
         &agent_key,
         session_id.as_deref(),
         transcript_path.as_deref(),
@@ -247,7 +330,20 @@ pub fn run_notify_hook(args: Vec<String>) -> Result<(), DomainStateError> {
     if has_state_path {
         write_hook_state(Path::new(state_path), &state)?;
     }
-    Ok(())
+    if agent_key == "zcode" && event_name.eq_ignore_ascii_case("SessionStart") {
+        if let Some(context) = coordinator_additional_context(&response) {
+            return Ok(Some(
+                serde_json::to_string(&json!({ "additionalContext": context })).map_err(
+                    |error| {
+                        DomainStateError::bad_request(format!(
+                            "Could not serialize the orchestrator session context: {error}"
+                        ))
+                    },
+                )?,
+            ));
+        }
+    }
+    Ok(None)
 }
 
 /*
@@ -268,6 +364,26 @@ fn is_actual_user_message_prompt(prompt: &str) -> bool {
     };
     !crate::agents::activity::is_first_prompt_claim_meta_prompt(&normalized)
         && !crate::agents::activity::is_first_prompt_claim_slash_command(Some(prompt), &normalized)
+}
+
+/// CDXC:AgentHooks 2026-10-06 DECISION:
+/// "The notify hook derives `<EMPRYO_PROJECT_DIR>/.empryo/sessions/<session_id>/session.jsonl` and posts it as the session path. Empryo sends no `transcript_path`, and the file may appear only after the first prompt."
+fn empryo_session_log_path(session_id: Option<&str>) -> Option<String> {
+    let session_id = session_id?;
+    let project_dir = env_string("EMPRYO_PROJECT_DIR")?;
+    Some(
+        Path::new(&project_dir)
+            .join(".empryo/sessions")
+            .join(session_id)
+            .join("session.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// A `setsid` process cannot open `/dev/tty`; Windows has no controlling terminal, so every hook counts there.
+fn hook_process_has_terminal() -> bool {
+    !cfg!(unix) || fs::File::open("/dev/tty").is_ok()
 }
 
 pub(crate) fn read_hook_state(path: &Path) -> Map<String, Value> {
@@ -339,87 +455,6 @@ pub(crate) fn read_state_string(state: &Map<String, Value>, key: &str) -> Option
         .map(str::to_string)
 }
 
-fn write_hook_store(
-    hook_state_dir: &Path,
-    agent_key: &str,
-    session_id: &str,
-    transcript_path: Option<&str>,
-    payload: &Value,
-) {
-    let (global_project_id, global_session_id) = parse_global_session_ref(
-        env::var("GHOSTEX_GLOBAL_SESSION_REF")
-            .unwrap_or_default()
-            .as_str(),
-    );
-    let workspace_id = env_string("GHOSTEX_WORKSPACE_ID")
-        .or_else(|| env_string("VSMUX_WORKSPACE_ID"))
-        .or_else(|| env_string("ghostex_WORKSPACE_ID"))
-        .or(global_project_id);
-    let surface_id = env_string("GHOSTEX_SESSION_ID")
-        .or_else(|| env_string("VSMUX_SESSION_ID"))
-        .or_else(|| env_string("ghostex_SESSION_ID"))
-        .or(global_session_id);
-    let (Some(workspace_id), Some(surface_id)) = (workspace_id, surface_id) else {
-        return;
-    };
-    let store_path = hook_state_dir.join(format!("{agent_key}-hook-sessions.json"));
-    let mut data = read_json_object(&read_file_text(&store_path));
-    if !data.is_object() {
-        data = json!({});
-    }
-    let object = data.as_object_mut().expect("object");
-    let sessions = object
-        .entry("sessions".to_string())
-        .or_insert_with(|| json!({}));
-    if !sessions.is_object() {
-        *sessions = json!({});
-    }
-    let cwd = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| env_string("GHOSTEX_WORKSPACE_ROOT"))
-        .or_else(|| env_string("VSMUX_WORKSPACE_ROOT"))
-        .unwrap_or_else(|| {
-            env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .to_string_lossy()
-                .to_string()
-        });
-    sessions.as_object_mut().expect("sessions object").insert(
-        session_id.to_string(),
-        json!({
-            "sessionId": session_id,
-            "workspaceId": workspace_id,
-            "surfaceId": surface_id,
-            "cwd": cwd,
-            "transcriptPath": transcript_path,
-            "pid": parent_process_id(),
-            "isRestorable": true,
-            "updatedAt": UtcTimestamp::now_seconds(),
-        }),
-    );
-    object.insert("version".to_string(), json!(1));
-    if let Some(parent) = store_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let temp_path = temp_path_for(&store_path);
-    if let Ok(text) = serde_json::to_string_pretty(&data) {
-        let _ = fs::write(&temp_path, format!("{text}\n"));
-        let _ = fs::rename(&temp_path, &store_path);
-    }
-}
-
-struct UtcTimestamp;
-
-impl UtcTimestamp {
-    fn now_seconds() -> f64 {
-        chrono::Utc::now().timestamp_millis() as f64 / 1000.0
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn post_gxserver_hook_event(
     agent_key: &str,
@@ -429,21 +464,21 @@ fn post_gxserver_hook_event(
     event_name: &str,
     state: &Map<String, Value>,
     payload: &Value,
-) {
+) -> String {
     let base_url = match env_string("GHOSTEX_GXSERVER_BASE_URL") {
         Some(value) => value.trim_end_matches('/').to_string(),
-        None => return,
+        None => return String::new(),
     };
     let (Some(project_id), Some(surface_id)) = parse_global_session_ref(
         env::var("GHOSTEX_GLOBAL_SESSION_REF")
             .unwrap_or_default()
             .as_str(),
     ) else {
-        return;
+        return String::new();
     };
     let token = read_gxserver_auth_token();
     if token.is_empty() {
-        return;
+        return String::new();
     }
     let protocol_version = env_string("GHOSTEX_GXSERVER_PROTOCOL_VERSION")
         .and_then(|value| value.parse::<i64>().ok())
@@ -454,6 +489,18 @@ fn post_gxserver_hook_event(
             if let Some(value) = payload.get(key) {
                 params.insert(key.to_string(), value.clone());
             }
+        }
+    }
+    // CDXC:Notifications 2026-09-15 SEE-ALSO:
+    // The server re-derives Stop activity, so it needs the same background-work evidence as activity_for_hook_event.
+    if matches!(agent_key, "claude" | "openclaude")
+        && event_name.trim().eq_ignore_ascii_case("stop")
+    {
+        if let Some(tasks) = payload
+            .get("background_tasks")
+            .filter(|value| value.is_array())
+        {
+            params.insert("background_tasks".to_string(), tasks.clone());
         }
     }
     params.insert("agentName".to_string(), json!(agent_key));
@@ -525,46 +572,108 @@ fn post_gxserver_hook_event(
         "protocolVersion": protocol_version,
         "params": params,
     });
-    let _ = post_json(
+    post_json(
         &base_url,
         "/api/ingestAgentHookEvent",
         &token,
         protocol_version,
         &body,
-    );
+    )
+    .unwrap_or_default()
 }
 
+/// CDXC:AgentHooks 2026-10-09 WHY:
+/// Standard DNS resolution has no deadline and socket timeouts apply to each operation, so only resolution runs off-thread and every socket operation uses the remaining hook budget; a late DNS answer cannot send a hook event.
 fn post_json(
     base_url: &str,
     path: &str,
     token: &str,
     protocol_version: i64,
     body: &Value,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    let remaining = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "Agent hook request timed out")
+            })
+    };
     let Ok(url) = url::Url::parse(base_url) else {
-        return Ok(());
+        return Ok(String::new());
     };
     if url.scheme() != "http" {
-        return Ok(());
+        return Ok(String::new());
     }
     let Some(host) = url.host_str() else {
-        return Ok(());
+        return Ok(String::new());
     };
     let port = url.port_or_known_default().unwrap_or(80);
     let address = format!("{host}:{port}");
-    let timeout = Duration::from_millis(1500);
-    let mut stream = TcpStream::connect(&address)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+    let resolve_address = address.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new().spawn(move || {
+        let _ = sender.send(
+            resolve_address
+                .to_socket_addrs()
+                .map(|addresses| addresses.collect::<Vec<_>>()),
+        );
+    })?;
+    let addresses = receiver
+        .recv_timeout(remaining()?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::TimedOut, error))??;
+    let mut connection = Err(std::io::Error::new(
+        std::io::ErrorKind::AddrNotAvailable,
+        "Agent hook host resolved to no addresses",
+    ));
+    for address in addresses {
+        connection = TcpStream::connect_timeout(&address, remaining()?);
+        if connection.is_ok() {
+            break;
+        }
+    }
+    let mut stream = connection?;
     let body = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\n{GXSERVER_PROTOCOL_HEADER}: {protocol_version}\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(request.as_bytes())?;
+    let mut pending = request.as_bytes();
+    while !pending.is_empty() {
+        stream.set_write_timeout(Some(remaining()?))?;
+        match stream.write(pending) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(written) => pending = &pending[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
     let mut response = Vec::new();
-    let _ = stream.read_to_end(&mut response);
-    Ok(())
+    let mut buffer = [0; 8192];
+    while let Ok(timeout) = remaining() {
+        stream.set_read_timeout(Some(timeout))?;
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&buffer[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+/// The `additionalContext` gxserver answered with, when the response carries one. The hook prints
+/// it only for a ZCode SessionStart (a coordinator's guide pointer, the Marked handovers note), so every other event keeps the
+/// wrapper's canned response and every other agent sees an empty helper stdout.
+fn coordinator_additional_context(response: &str) -> Option<String> {
+    let body = response.split_once("\r\n\r\n")?.1;
+    let value = serde_json::from_str::<Value>(body.trim()).ok()?;
+    value
+        .get("additionalContext")
+        .and_then(Value::as_str)
+        .filter(|context| !context.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn read_gxserver_auth_token() -> String {

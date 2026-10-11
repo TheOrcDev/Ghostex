@@ -3,13 +3,6 @@
   gap: calc(8px * var(--sidebar-density-scale));
 }
 
-.git-action-row {
-  container-type: inline-size;
-  display: grid;
-  gap: calc(8px * var(--sidebar-density-scale));
-  position: relative;
-}
-
 .git-action-split-button {
   display: grid;
   gap: 0;

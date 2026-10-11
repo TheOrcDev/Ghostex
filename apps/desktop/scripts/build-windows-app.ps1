@@ -12,16 +12,56 @@
 #                                         browser_subprocess_path (sibling)
 #     libcef.dll, chrome_elf.dll, ...  <- CEF Release/ payload
 #     icudtl.dat, *.pak, locales/      <- CEF Resources/ payload
-#     dist/sidebar/                    <- sidebar bundle; the /dist/sidebar/
-#                                         path segment is load-bearing for the
-#                                         CEF helper first-party URL check and
-#                                         the sidebar_url() Windows arm.
+#     dist/sidebar/                    <- the CEF page bundles; the
+#                                         /dist/sidebar/ path segment is
+#                                         load-bearing for the CEF helper's
+#                                         first-party URL check.
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $GpuiDir = Resolve-Path (Join-Path $ScriptDir "..")
 $RepoRoot = Resolve-Path (Join-Path $GpuiDir "../..")
+
+& (Join-Path $RepoRoot "tooling/prepare-windows-build.ps1")
+
+<#
+CDXC:Build 2026-09-18 WHY:
+create-deterministic-tar.sh is a Git for Windows script: it takes Windows paths
+and branches on a MINGW/MSYS/CYGWIN `uname`. Resolving it through `bash` on PATH
+picked WSL's Linux bash on any machine with WSL installed, because Git for
+Windows keeps bash.exe in Git\bin, which it deliberately leaves off PATH. WSL
+bash cannot open `C:\...` arguments, so packaging died with no diagnostic.
+Resolve bash beside git.exe, the same way build-windows-code-server.ps1 does.
+Walk up from every git.exe on PATH rather than assuming one fixed depth: a
+start launched from a Git Bash shell resolves git.exe to Git\mingw64\bin, two
+levels below the install root, while a PowerShell start resolves it to Git\cmd,
+one level below.
+#>
+function Get-GitBash {
+    foreach ($GitPath in (Get-Command git.exe -All -ErrorAction Stop | Select-Object -ExpandProperty Source)) {
+        $Candidate = Split-Path $GitPath -Parent
+        for ($Level = 0; $Level -lt 3 -and $Candidate; $Level += 1) {
+            $Candidate = Split-Path $Candidate -Parent
+            if (!$Candidate) { break }
+            $Bash = Join-Path $Candidate "bin/bash.exe"
+            if (Test-Path $Bash) { return $Bash }
+        }
+    }
+    throw "Git for Windows bash.exe was not found beside git.exe."
+}
+$GitBash = Get-GitBash
+
+<#
+CDXC:Build 2026-10-11 WHY:
+Every release build here records the units it used in target/release/ghostex-build-units.jsonl (cargo's JSON messages on stdout; diagnostics and progress still render on the console). `cargo xtask start` reads it to delete the stale artifacts cargo never removes (tooling/xtask/src/start/sweep.rs).
+#>
+function Invoke-CargoReleaseBuild([string[]]$CargoArguments) {
+    $ReleaseDir = Join-Path (Get-Location) "target/release"
+    New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+    cargo build --release @CargoArguments --message-format=json-render-diagnostics |
+        Set-Content -Encoding UTF8 -Path (Join-Path $ReleaseDir "ghostex-build-units.jsonl")
+}
 $AppName = "Ghostex"
 $AppDir = Join-Path $GpuiDir "build/windows/$AppName"
 $OnDemandComponents = $env:GHOSTEX_ON_DEMAND_ASSETS -eq "1"
@@ -35,27 +75,46 @@ if ($ReleaseArch -notin @("x64", "arm64")) {
     throw "GHOSTEX_WINDOWS_ARCH must be x64 or arm64, got $ReleaseArch"
 }
 # CDXC:Release 2026-09-02: tooling/release-gpui/windows.ps1 runs
-# this script in two watched release steps. "compile" stops after step 2 and
-# "stage" skips steps 1-2 (reusing that compile's dist/ and target/ output);
-# unset runs everything, which is what every other caller does.
+# this script in two watched release steps. "compile" stops after the Rust
+# builds and "stage" skips them (reusing that compile's dist/ and target/
+# output); unset runs everything, which is what every other caller does.
+# "compile-app" (sidebar bundle + desktop crate) and "compile-runtime" (native
+# gxserver, wmx, prompt editor) are the two halves of "compile", which the
+# release builds on separate runners (see windows.ps1).
 $BuildPhase = if ($env:GHOSTEX_WINDOWS_BUILD_PHASE) { $env:GHOSTEX_WINDOWS_BUILD_PHASE } else { "all" }
-if ($BuildPhase -notin @("all", "compile", "stage")) {
-    throw "GHOSTEX_WINDOWS_BUILD_PHASE must be compile, stage, or unset, got $BuildPhase"
+if ($BuildPhase -notin @("all", "compile", "compile-app", "compile-runtime", "stage")) {
+    throw "GHOSTEX_WINDOWS_BUILD_PHASE must be compile, compile-app, compile-runtime, stage, or unset, got $BuildPhase"
 }
+$BuildApp = $BuildPhase -in @("all", "compile", "compile-app")
+$BuildRuntime = $BuildPhase -in @("all", "compile", "compile-runtime")
 
 # Same CEF cache location contract as build-macos-app.sh: cef-dll-sys's build
 # script downloads the CEF binary distribution into CEF_PATH.
 $CefCacheDir = Join-Path $GpuiDir "build/cef-cache"
 $env:CEF_PATH = $CefCacheDir
+# cef-dll-sys uses CEF_PATH/<CEF build>/ only when that folder exists and
+# otherwise accepts an older distribution sitting in CEF_PATH, so create the
+# pinned build's folder first and stage only from it (see cef-distribution.sh).
+# The runtime half links no CEF and runs without the cef-rs reference checkout.
+if ($BuildPhase -ne "compile-runtime") {
+    $CefRsManifest = Join-Path $RepoRoot ".dependencies/cef-rs/Cargo.toml"
+    $CefBuildMatch = Select-String -Path $CefRsManifest -Pattern '^version = "[^"+]*\+([^"]+)"$' |
+        Select-Object -First 1
+    if (-not $CefBuildMatch) {
+        throw "Could not read the pinned CEF build from $CefRsManifest"
+    }
+    $CefVersionedDir = Join-Path $CefCacheDir $CefBuildMatch.Matches[0].Groups[1].Value
+    New-Item -ItemType Directory -Force -Path $CefVersionedDir | Out-Null
+}
 $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $RepoRoot "build/zig-global-cache"
 New-Item -ItemType Directory -Force -Path $env:ZIG_GLOBAL_CACHE_DIR | Out-Null
 
-if ($BuildPhase -ne "stage") {
+if ($BuildApp) {
     # 1) Sidebar bundle (same steps as the macOS script).
     Push-Location $RepoRoot
     try {
-        bun run build:sidebar-css
-        if ($LASTEXITCODE -ne 0) { throw "build:sidebar-css failed" }
+        bun x tailwindcss -i packages/core-ui/styles/shadcn.css -o packages/core-ui/styles/shadcn.generated.css --minify
+        if ($LASTEXITCODE -ne 0) { throw "tailwindcss (sidebar CSS) failed" }
         & (Join-Path $RepoRoot "node_modules/.bin/vite.exe") build --config (Join-Path $GpuiDir "vite.config.ts")
         if ($LASTEXITCODE -ne 0) { throw "vite build failed" }
     }
@@ -68,7 +127,7 @@ if ($BuildPhase -ne "stage") {
     # libghostty-vt (GHOSTEX_ZIG override honored by apps/desktop/build.rs).
     Push-Location $GpuiDir
     try {
-        cargo build --release --bin ghostex-gpui-cef-bootstrap --bin ghostex-gpui --bin ghostex-gpui-cef-helper --bin ghostex-windows-installer
+        Invoke-CargoReleaseBuild @("--bin", "ghostex-gpui-cef-bootstrap", "--bin", "ghostex-gpui", "--bin", "ghostex-gpui-cef-helper", "--bin", "ghostex-windows-installer")
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     }
     finally {
@@ -76,36 +135,57 @@ if ($BuildPhase -ne "stage") {
     }
 }
 
-if ($BuildPhase -ne "stage") {
+if ($BuildRuntime) {
     Push-Location (Join-Path $RepoRoot "server")
     try {
-        cargo build --release --bin gxserver --bin ghostex
+        Invoke-CargoReleaseBuild @("--bin", "gxserver", "--bin", "ghostex")
         if ($LASTEXITCODE -ne 0) { throw "Native Windows runtime build failed" }
     }
     finally { Pop-Location }
     Push-Location (Join-Path $RepoRoot ".dependencies/wmx")
     try {
-        cargo build --release --locked
+        Invoke-CargoReleaseBuild @("--locked")
         if ($LASTEXITCODE -ne 0) { throw "wmx build failed" }
     }
     finally { Pop-Location }
 }
 
-if ($BuildPhase -eq "compile") {
-    Write-Host "Compiled $AppName ($ReleaseArch); staging deferred to the stage phase"
+# CDXC:PromptEditor 2026-09-16 WHY:
+# Ctrl+G needs the standalone helper as well as Code. Omitting it made every Windows build report the prompt editor unavailable.
+if ($BuildRuntime) {
+    Push-Location $RepoRoot
+    try {
+        bun apps/editor/scripts/build-editor-web.mjs
+        if ($LASTEXITCODE -ne 0) { throw "Prompt editor page build failed" }
+    }
+    finally { Pop-Location }
+    # Built from inside its folder so cargo reads apps/editor/desktop/.cargo/config.toml (the static C runtime).
+    Push-Location (Join-Path $RepoRoot "apps/editor/desktop")
+    try {
+        Invoke-CargoReleaseBuild @()
+        if ($LASTEXITCODE -ne 0) { throw "Prompt editor helper build failed" }
+    }
+    finally { Pop-Location }
+}
+
+if ($BuildPhase -like "compile*") {
+    Write-Host "Compiled $AppName ($ReleaseArch, $BuildPhase); staging deferred to the stage phase"
     exit 0
 }
 
 # CDXC:Release 2026-09-14 WHY:
 # The native editor payload is consumed only by staging. Building it during compile made both Windows Rust cache jobs fail on the editor's pinned Node requirement before reaching cargo.
+# CDXC:Release 2026-09-16 WHY:
+# The release workflow hands the verified native editor component archive to the script through GHOSTEX_WINDOWS_NATIVE_CODE_SERVER_ARCHIVE.
+# Without it the script reuses the published component when the code-server tree is clean and builds from source otherwise, so local builds keep working without CI.
 & (Join-Path $ScriptDir "build-windows-code-server.ps1")
 
 # 3) Locate the extracted CEF distribution. cef-dll-sys may export either a
 # flat Windows payload or the upstream Release/ + Resources/ layout.
-$LibCef = Get-ChildItem -Path $CefCacheDir -Recurse -File -Filter "libcef.dll" |
+$LibCef = Get-ChildItem -Path $CefVersionedDir -Recurse -File -Filter "libcef.dll" |
     Select-Object -First 1
 if (-not $LibCef) {
-    throw "cef-rs did not produce libcef.dll under $CefCacheDir"
+    throw "cef-rs did not produce libcef.dll under $CefVersionedDir"
 }
 $CefRelease = $LibCef.Directory
 $CefResources = $CefRelease.FullName
@@ -153,6 +233,9 @@ if (Test-Path $AppDir) {
 }
 New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
 
+# CDXC:CefRuntime 2026-09-28 WHY: with on-demand components Ghostex.exe only launches
+# ghostex-gpui-runtime.exe. The runtime delay-loads libcef.dll and downloads the sealed `cef`
+# component only when the user installs the web runtime, so the app folder carries no CEF files.
 if ($OnDemandComponents) {
     Copy-Item (Join-Path $GpuiDir "target/release/ghostex-gpui-cef-bootstrap.exe") (Join-Path $AppDir "Ghostex.exe")
     Copy-Item (Join-Path $GpuiDir "target/release/ghostex-gpui.exe") (Join-Path $AppDir "ghostex-gpui-runtime.exe")
@@ -205,7 +288,7 @@ if ($OnDemandComponents) {
     }
     if ($SwiftshaderIcd) { Copy-Item -LiteralPath $SwiftshaderIcd $CefComponentStage }
     Copy-Item -Recurse -LiteralPath $Locales -Destination (Join-Path $CefComponentStage "locales")
-    & bash (Join-Path $RepoRoot "tooling/release-gpui/create-deterministic-tar.sh") $CefComponentStage $CefComponentAsset --windows-component
+    & $GitBash (Join-Path $RepoRoot "tooling/release-gpui/create-deterministic-tar.sh") $CefComponentStage $CefComponentAsset --windows-component
     if ($LASTEXITCODE -ne 0) { throw "Could not create the deterministic Windows CEF component asset" }
     Remove-Item -Recurse -Force $CefComponentStage
     & node (Join-Path $RepoRoot "tooling/release-gpui/publish-component.mjs") `
@@ -219,6 +302,11 @@ if ($OnDemandComponents) {
     if ($LASTEXITCODE -ne 0) { throw "Could not seal Windows CEF component metadata" }
 }
 
+$PromptEditorResources = Join-Path $AppDir "resources/GhostexEditor"
+New-Item -ItemType Directory -Force -Path $PromptEditorResources | Out-Null
+Copy-Item (Join-Path $RepoRoot "apps/editor/desktop/target/release/ghostex-editor.exe") (Join-Path $PromptEditorResources "GhostexEditor.exe")
+Copy-Item (Join-Path $RepoRoot "apps/editor/dist/web") (Join-Path $PromptEditorResources "web") -Recurse
+
 # Both environments ship their matching runtime. Source/code-server remains
 # an optional WSL component.
 $NativeResources = Join-Path $AppDir "resources/native"
@@ -227,6 +315,10 @@ foreach ($binary in @("gxserver.exe", "ghostex.exe")) {
     Copy-Item (Join-Path $RepoRoot "server/target/release/$binary") $NativeResources
 }
 Copy-Item (Join-Path $RepoRoot ".dependencies/wmx/target/release/wmx.exe") $NativeResources
+# CDXC:AgentSkills 2026-09-27 WHY:
+# The native CLI resolves its offline skill catalog next to resources/native.
+# First-run setup must work without a source checkout or a GitHub download.
+Copy-Item -LiteralPath (Join-Path $RepoRoot "skills") -Destination (Join-Path $AppDir "resources/skills") -Recurse
 # CDXC:PlatformSupport 2026-09-14 WHY:
 # Native gxserver survives app exit. Seal its runtime identity so an updated app replaces an older control plane while preserving session hosts.
 $NativeHashes = @("gxserver.exe", "ghostex.exe", "wmx.exe") | ForEach-Object {
@@ -298,7 +390,7 @@ if ($WslCodeServerArchive -and (Test-Path $WslCodeServerArchive)) {
     New-Item -ItemType Directory -Force -Path $ComponentStage | Out-Null
     Copy-Item $WslCodeServerArchive (Join-Path $ComponentStage $InnerArchiveName)
     Copy-Item "$WslCodeServerArchive.sha256" (Join-Path $ComponentStage "$InnerArchiveName.sha256")
-    & bash (Join-Path $RepoRoot "tooling/release-gpui/create-deterministic-tar.sh") $ComponentStage $ComponentAsset --windows-component
+    & $GitBash (Join-Path $RepoRoot "tooling/release-gpui/create-deterministic-tar.sh") $ComponentStage $ComponentAsset --windows-component
     if ($LASTEXITCODE -ne 0) { throw "Could not create the deterministic Windows code-server component asset" }
     Remove-Item -Recurse -Force $ComponentStage
     $ComponentAssetSha = (Get-FileHash -Algorithm SHA256 $ComponentAsset).Hash.ToLowerInvariant()
@@ -349,4 +441,13 @@ if (!(Test-Path (Join-Path $NativeCodeRoot "lib/node.exe")) -or
     throw "The native Windows editor build did not produce the required staging payload."
 }
 Copy-Item $NativeCodeRoot (Join-Path $AppDir "code-server") -Recurse -Force
+# CDXC:Release 2026-09-16 WHY:
+# The native editor payload is an immutable, version-free component reused across releases, so the app version and commit are stamped on the staged copy here, not at build time.
+# A reused payload therefore reports the current release exactly like a freshly built one.
+$StagedPackagePath = Join-Path $AppDir "code-server/package.json"
+$StagedPackage = Get-Content $StagedPackagePath -Raw | ConvertFrom-Json
+$StagedPackage.version = $ReleaseVersion
+# The wrapper reports the code-server revision it was built from; the gitlink resolves even when the submodule is not initialized.
+$StagedPackage | Add-Member -NotePropertyName commit -NotePropertyValue ((& git -C $RepoRoot rev-parse "HEAD:.dependencies/code-server").Trim()) -Force
+[IO.File]::WriteAllText($StagedPackagePath, ($StagedPackage | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
 Write-Host "Staged $AppDir"

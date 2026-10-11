@@ -5,7 +5,8 @@ use std::{
 
 // RefCell backs cross-platform runtime state (window frame persistence), not
 // just the macOS-only shims that first introduced the import.
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::time::Duration;
 
 use gpui::{Bounds, Window, WindowBounds, px, size};
 
@@ -48,7 +49,11 @@ pub(crate) fn gpui_window_frame_state_from_window(
     let display = window.display(cx)?;
     let display_origin = display.bounds().origin;
     let display_uuid = display.uuid().ok()?.to_string();
-    let (state, bounds) = match window.window_bounds() {
+    /*
+    CDXC:Workarea 2026-09-29 WHY:
+    On Linux the window draws its own frame inside a shadow inset (`_GTK_FRAME_EXTENTS`), and a window opened at saved bounds is given that inset around them, with its visible frame where the bounds say. Saving the outer bounds grew the window by twice the inset and moved it up and left by the inset on every launch. The inner bounds are the visible frame, which is what the next launch opens; on macOS and Windows they are the same as the window bounds.
+    */
+    let (state, bounds) = match window.inner_window_bounds() {
         WindowBounds::Windowed(bounds) => ("windowed", bounds),
         WindowBounds::Maximized(bounds) => ("maximized", bounds),
         WindowBounds::Fullscreen(bounds) => ("fullscreen", bounds),
@@ -77,6 +82,27 @@ pub(crate) fn persist_gpui_window_frame_state() {
         return;
     };
     write_gpui_window_frame_state_file(&gpui_window_frame_state_path(), &state);
+}
+
+const GPUI_WINDOW_FRAME_PERSIST_DEBOUNCE: Duration = Duration::from_millis(750);
+
+thread_local! {
+    static GPUI_WINDOW_FRAME_PERSIST_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// CDXC:Workarea 2026-09-19 WHY: quit and window-close are not the only ways the app ends (force quit, crash, a dev restart, an update relaunch), and those used to leave the previous run's monitor on disk. Every frame change is written after a short quiet period so the saved frame is the one the user last saw.
+pub(crate) fn schedule_gpui_window_frame_state_persist(cx: &gpui::App) {
+    if GPUI_WINDOW_FRAME_PERSIST_PENDING.replace(true) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(GPUI_WINDOW_FRAME_PERSIST_DEBOUNCE)
+            .await;
+        GPUI_WINDOW_FRAME_PERSIST_PENDING.set(false);
+        persist_gpui_window_frame_state();
+    })
+    .detach();
 }
 
 pub(crate) fn write_gpui_window_frame_state_file(path: &Path, state: &GpuiWindowFrameState) {
@@ -136,7 +162,11 @@ pub(crate) fn load_gpui_window_frame_state_file(path: &Path) -> Option<GpuiWindo
 /// Restores the persisted frame with the macOS multi-monitor rules: prefer
 /// the stored display by uuid, fall back to the primary display, clamp the
 /// size to the display and a minimum, and keep the origin inside the display.
-pub(crate) fn restored_gpui_window_bounds(cx: &gpui::App) -> Option<WindowBounds> {
+///
+/// CDXC:Workarea 2026-09-19 DECISION: User: "always remember to launch in the same monitor and location that it was in when it last closed as much as possible". The chosen display id is returned with the bounds because the macOS window opener resolves bounds against `WindowOptions::display_id` and uses the primary display when it is absent, which put every restored window on the primary monitor.
+pub(crate) fn restored_gpui_window_bounds(
+    cx: &gpui::App,
+) -> Option<(WindowBounds, gpui::DisplayId)> {
     let state = load_gpui_window_frame_state()?;
     restored_gpui_window_bounds_from_state(
         state,
@@ -151,7 +181,7 @@ pub(crate) fn restored_gpui_window_bounds_from_state(
     min_width: f32,
     min_height: f32,
     cx: &gpui::App,
-) -> Option<WindowBounds> {
+) -> Option<(WindowBounds, gpui::DisplayId)> {
     let displays = cx.displays();
     let display = displays
         .iter()
@@ -165,26 +195,32 @@ pub(crate) fn restored_gpui_window_bounds_from_state(
         .or_else(|| cx.primary_display())
         .or_else(|| displays.first().cloned())?;
     let display_bounds = display.bounds();
-    let width = px(state
-        .width
-        .max(min_width)
-        .min(display_bounds.size.width.as_f32()));
+    // CDXC:Workarea 2026-09-22 WHY:
+    // The frame is clamped to the display's visible area, not its full bounds: a saved frame as
+    // tall as the screen restored against the full bounds sat under the Dock, where macOS hid the
+    // window's last row and with it every pane's bottom border. The origin stays relative to the
+    // display's own origin, which is what the saved state records.
+    let visible = display.visible_bounds();
+    let width = px(state.width.max(min_width).min(visible.size.width.as_f32()));
     let height = px(state
         .height
         .max(min_height)
-        .min(display_bounds.size.height.as_f32()));
-    let max_x = (display_bounds.size.width - width).max(px(0.0));
-    let max_y = (display_bounds.size.height - height).max(px(0.0));
+        .min(visible.size.height.as_f32()));
+    let min_x = visible.origin.x - display_bounds.origin.x;
+    let min_y = visible.origin.y - display_bounds.origin.y;
+    let max_x = (min_x + visible.size.width - width).max(min_x);
+    let max_y = (min_y + visible.size.height - height).max(min_y);
     let origin = gpui::point(
-        display_bounds.origin.x + px(state.relative_origin_x).clamp(px(0.0), max_x),
-        display_bounds.origin.y + px(state.relative_origin_y).clamp(px(0.0), max_y),
+        display_bounds.origin.x + px(state.relative_origin_x).clamp(min_x, max_x),
+        display_bounds.origin.y + px(state.relative_origin_y).clamp(min_y, max_y),
     );
     let bounds = Bounds::new(origin, size(width, height));
-    Some(match state.state.as_str() {
+    let window_bounds = match state.state.as_str() {
         "maximized" => WindowBounds::Maximized(bounds),
         "fullscreen" => WindowBounds::Fullscreen(bounds),
         _ => WindowBounds::Windowed(bounds),
-    })
+    };
+    Some((window_bounds, display.id()))
 }
 
 pub(crate) fn gpui_first_run_onboarding_state_path() -> PathBuf {
@@ -201,6 +237,8 @@ pub(crate) struct GpuiFirstRunOnboardingState {
     pub(crate) os_integration_onboarding_seen: bool,
     pub(crate) first_launch_setup_complete: bool,
     pub(crate) windows_terminal_setup_complete: bool,
+    /// The first-run intro video page was left (Continue), so it never opens again.
+    pub(crate) intro_video_seen: bool,
 }
 
 /// CDXC:Onboarding 2026-08-18: the markers whose surfaces are
@@ -208,7 +246,10 @@ pub(crate) struct GpuiFirstRunOnboardingState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GpuiFirstRunOnboardingMarker {
     FirstLaunchSetupSeen,
+    /// The first-launch window was given up before its page was ready, so the next launch shows it again.
+    FirstLaunchSetupNotShown,
     OsIntegrationOnboardingSeen,
+    IntroVideoSeen,
 }
 
 pub(crate) fn load_gpui_first_run_onboarding_state() -> GpuiFirstRunOnboardingState {
@@ -245,6 +286,10 @@ pub(crate) fn load_gpui_first_run_onboarding_state() -> GpuiFirstRunOnboardingSt
             .get("windowsTerminalSetupComplete")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+        intro_video_seen: value
+            .get("introVideoSeen")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -260,6 +305,7 @@ pub(crate) fn persist_gpui_first_run_onboarding_state(state: &GpuiFirstRunOnboar
         "tipsAndTricksSeen": state.tips_and_tricks_seen,
         "firstLaunchSetupComplete": state.first_launch_setup_complete,
         "windowsTerminalSetupComplete": state.windows_terminal_setup_complete,
+        "introVideoSeen": state.intro_video_seen,
     });
     let _ = fs::write(path, payload.to_string());
 }

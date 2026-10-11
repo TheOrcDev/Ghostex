@@ -118,8 +118,8 @@ void GhostexGpuiAttachToastPopupToMainWindow(void *toastNativeView,
  detaches it first: a child window closed while still attached lingers in the
  parent's childWindows list and can be ordered back in with the parent.
  */
-void GhostexGpuiAttachAppModalWindowToMainWindow(void *modalNativeView,
-                                                 void *mainNativeView) {
+static void GhostexGpuiAttachChildWindow(void *modalNativeView,
+                                        void *mainNativeView, BOOL activate) {
   @autoreleasepool {
     if (modalNativeView == NULL || mainNativeView == NULL) {
       return;
@@ -150,7 +150,62 @@ void GhostexGpuiAttachAppModalWindowToMainWindow(void *modalNativeView,
                     observer = nil;
                   }
                 }];
-    [modalWindow makeKeyAndOrderFront:nil];
+    if (activate) [modalWindow makeKeyAndOrderFront:nil];
+  }
+}
+
+void GhostexGpuiAttachAppModalWindowToMainWindow(void *modalNativeView,
+                                               void *mainNativeView) {
+  GhostexGpuiAttachChildWindow(modalNativeView, mainNativeView, YES);
+}
+
+// CDXC:SessionChat 2026-09-17 WHY:
+// Autocomplete owns a child window but typing must remain in the composer's window.
+// It keeps the shadowless chrome set above: the macOS window shadow outlines the rounded card with
+// a dark hairline that React's picker does not have, which read as a black border in light mode.
+void GhostexGpuiAttachComposerSuggestionsWindow(void *nativeView,
+                                               void *mainNativeView) {
+  NSWindow *window = ((__bridge NSView *)nativeView).window;
+  GhostexGpuiRemoveToastPopupWindowChrome(nativeView);
+  if ([window isKindOfClass:[NSPanel class]]) {
+    ((NSPanel *)window).becomesKeyOnlyIfNeeded = YES;
+  }
+  GhostexGpuiAttachChildWindow(nativeView, mainNativeView, NO);
+}
+
+// A frosted chat control fades as a whole window, blur included (the fork switcher at rest).
+void GhostexGpuiSetChildWindowAlpha(void *nativeView, double alpha) {
+  NSWindow *window = ((__bridge NSView *)nativeView).window;
+  if (window != nil && window.alphaValue != alpha) {
+    window.alphaValue = alpha;
+  }
+}
+
+// CDXC:SessionChat 2026-09-19 WHY:
+// A pane-sized chat overlay (the image preview) has to follow its pane when a divider or the main
+// window is resized. GPUI can resize a window but not move it, and a pane resized from its left or
+// top edge moves as well, so the frame is set here. The rect is in the main window's content
+// coordinates, top-left origin, which is what GPUI reports for the pane.
+void GhostexGpuiSetChildWindowContentFrame(void *childNativeView,
+                                          void *mainNativeView, double x,
+                                          double y, double width,
+                                          double height) {
+  @autoreleasepool {
+    if (childNativeView == NULL || mainNativeView == NULL) {
+      return;
+    }
+    NSWindow *child = ((__bridge NSView *)childNativeView).window;
+    NSWindow *mainWindow = ((__bridge NSView *)mainNativeView).window;
+    if (child == nil || mainWindow == nil || child == mainWindow) {
+      return;
+    }
+    NSRect content = [mainWindow contentRectForFrameRect:mainWindow.frame];
+    NSRect frame = NSMakeRect(content.origin.x + x,
+                              content.origin.y + content.size.height - y - height,
+                              width, height);
+    if (!NSEqualRects(child.frame, frame)) {
+      [child setFrame:frame display:YES];
+    }
   }
 }
 
@@ -178,5 +233,149 @@ void GhostexGpuiPrepareTitlebarPopupWindow(void *nativeView) {
       window.hidesOnDeactivate = NO;
     }
     [window orderFrontRegardless];
+  }
+}
+
+// Where the pointer is, in GPUI's global space: points from the top-left corner of the primary
+// display (the one whose bottom-left corner is AppKit's origin), which is the space window frames
+// are opened in.
+bool GhostexGpuiPointerScreenLocation(double *x, double *y) {
+  NSScreen *primary = NSScreen.screens.firstObject;
+  if (primary == nil || x == NULL || y == NULL) {
+    return false;
+  }
+  NSPoint location = NSEvent.mouseLocation;
+  *x = location.x;
+  *y = NSMaxY(primary.frame) - location.y;
+  return true;
+}
+
+// The "Copied!" bubble's window (app/window/copied_indicator.rs): a borderless non-activating
+// panel that ignores the mouse, so a click made while it fades lands on whatever it floats over,
+// and that joins every Space, so it shows over a fullscreen window too.
+void GhostexGpuiPrepareCopiedIndicatorWindow(void *nativeView) {
+  @autoreleasepool {
+    NSView *view = (__bridge NSView *)nativeView;
+    NSWindow *window = view.window;
+    if (window == nil) {
+      return;
+    }
+    GhostexGpuiRemoveToastPopupWindowChrome(nativeView);
+    window.ignoresMouseEvents = YES;
+    window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                NSWindowCollectionBehaviorIgnoresCycle |
+                                NSWindowCollectionBehaviorTransient;
+    if ([window isKindOfClass:[NSPanel class]]) {
+      ((NSPanel *)window).becomesKeyOnlyIfNeeded = YES;
+      window.hidesOnDeactivate = NO;
+    }
+    [window orderFrontRegardless];
+  }
+}
+
+// CDXC:AppModal 2026-09-27 WHY:
+// Shows `child` attached directly above `parent` without `orderFront:`. On an attached child that
+// call brings the parent's whole group forward, so a main-window tooltip, menu or panel that
+// appeared while an app modal was open (Saved Prompts, reached by a right-click whose pointer then
+// rested on the button's tooltip) raised the main window over the modal and the modal looked
+// closed. Re-attaching keeps the child above the parent's other child windows, as `orderFront:` did.
+// SEE-ALSO: GpuiSidebarReveal.m and GpuiDocsDrawer.m show their panels through this too.
+void GhostexGpuiShowChildWindowAboveParent(NSWindow *child, NSWindow *parent) {
+  if (child == nil) {
+    return;
+  }
+  if (parent == nil || parent == child) {
+    [child orderFront:nil];
+    return;
+  }
+  if (child.parentWindow != nil) {
+    [child.parentWindow removeChildWindow:child];
+  }
+  [parent addChildWindow:child ordered:NSWindowAbove];
+  [child orderWindow:NSWindowAbove relativeTo:parent.windowNumber];
+}
+
+// Whether the window holding `childNativeView` is attached to the one holding `parentNativeView`,
+// directly or through other child windows: a workspace window that closes while another stays open
+// closes what it carries (app/workspace_windows/close.rs).
+bool GhostexGpuiWindowIsAttachedTo(void *childNativeView, void *parentNativeView) {
+  @autoreleasepool {
+    if (childNativeView == NULL || parentNativeView == NULL) {
+      return false;
+    }
+    NSWindow *child = ((__bridge NSView *)childNativeView).window;
+    NSWindow *parent = ((__bridge NSView *)parentNativeView).window;
+    if (child == nil || parent == nil || child == parent) {
+      return false;
+    }
+    for (NSWindow *ancestor = child.parentWindow; ancestor != nil;
+         ancestor = ancestor.parentWindow) {
+      if (ancestor == parent) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+// CDXC:Theming 2026-09-25 WHY:
+// Under window glass the app's menus and tooltips draw in small frosted child windows, and only
+// one of each kind is up at a time, so each kind keeps one window and hides it between uses:
+// creating a GPUI window pays for a new Metal surface every time a tooltip appears. Hiding orders
+// the child out; showing orders it back in above its parent (re-attaching it, since an ordered-out
+// child can be dropped from the parent's list). A tooltip window also ignores the mouse, so it can
+// never take the hover away from the control it describes.
+void GhostexGpuiSetFrostedChildWindowVisible(void *childNativeView,
+                                            void *mainNativeView,
+                                            bool visible) {
+  @autoreleasepool {
+    if (childNativeView == NULL) {
+      return;
+    }
+    NSWindow *child = ((__bridge NSView *)childNativeView).window;
+    if (child == nil) {
+      return;
+    }
+    if (!visible) {
+      [child orderOut:nil];
+      return;
+    }
+    NSWindow *mainWindow =
+        mainNativeView == NULL ? nil : ((__bridge NSView *)mainNativeView).window;
+    if (mainWindow != nil && mainWindow != child) {
+      child.level = mainWindow.level;
+    }
+    GhostexGpuiShowChildWindowAboveParent(child, mainWindow);
+  }
+}
+
+// Whether Ghostex is the frontmost app, so a closing modal can hand key status back to the main
+// window without pulling Ghostex in front of the app the user switched to.
+bool GhostexGpuiApplicationIsActive(void) {
+  @autoreleasepool {
+    return NSApp.active;
+  }
+}
+
+void GhostexGpuiSetWindowIgnoresMouse(void *nativeView, bool ignores) {
+  @autoreleasepool {
+    if (nativeView == NULL) {
+      return;
+    }
+    NSWindow *window = ((__bridge NSView *)nativeView).window;
+    window.ignoresMouseEvents = ignores;
+  }
+}
+
+// Names a window so AppKit-side observers can tell it apart (the sidebar's outside-click monitor
+// in GpuiCefAppKitHooks.m recognises the frosted sidebar menu this way).
+void GhostexGpuiSetWindowIdentifier(void *nativeView, const char *identifier) {
+  @autoreleasepool {
+    if (nativeView == NULL || identifier == NULL) {
+      return;
+    }
+    NSWindow *window = ((__bridge NSView *)nativeView).window;
+    window.identifier = [NSString stringWithUTF8String:identifier];
   }
 }

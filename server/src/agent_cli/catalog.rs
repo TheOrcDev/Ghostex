@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::LazyLock};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +21,14 @@ pub(crate) struct Definition {
     pub winget_id: Option<String>,
     pub native: Option<Native>,
     pub version_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub install_dirs: InstallDirs,
+    pub latest_version: Option<LatestVersion>,
+    /// A sentence every install method's tooltip adds (Grok and Cursor both install `agent`).
+    pub install_note: Option<String>,
+    /// The update kills running processes of the CLI (Droid's installer runs `pkill droid`).
+    #[serde(default)]
+    pub update_stops_sessions: bool,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +37,76 @@ pub(crate) struct Native {
     install: String,
     update: Option<String>,
     windows_install: Option<String>,
+    /// Variables the official installer and updater need, such as `CODEX_NON_INTERACTIVE`.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// Lowercase, `/`-separated path fragments that only this agent's official installer produces.
+    #[serde(default)]
+    path_markers: Vec<String>,
+    /// Commands the official installer needs besides curl, per platform family.
+    #[serde(default)]
+    requires: InstallDirs,
+    /// The macOS installer copies an app into /Applications (Kiro).
+    #[serde(default)]
+    needs_applications_folder: bool,
+    /// Tooltip wording for an inline script that is not worth showing verbatim (Rovo Dev's download).
+    plan: Option<String>,
+}
+
+/// Folders the official installer puts the binary in, `~` and `%VAR%` expanded. An installer that does not
+/// add its folder to PATH (Claude's) still leaves a CLI Ghostex can find, and put on PATH.
+#[derive(Default, Deserialize)]
+pub(crate) struct InstallDirs {
+    #[serde(default)]
+    windows: Vec<String>,
+    #[serde(default)]
+    unix: Vec<String>,
+}
+
+/// Where the newest published version is read: a plain-text version, or one field of a JSON reply.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LatestVersion {
+    pub url: String,
+    pub json_field: Option<String>,
+}
+
+impl Definition {
+    pub(crate) fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
+        let dirs = if cfg!(windows) {
+            &self.install_dirs.windows
+        } else {
+            &self.install_dirs.unix
+        };
+        dirs.iter()
+            .filter_map(|dir| expand_dir(dir, home))
+            .collect()
+    }
+
+    pub(crate) fn native_env(&self) -> BTreeMap<String, String> {
+        self.native
+            .as_ref()
+            .map(|native| native.env.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn expand_dir(template: &str, home: &Path) -> Option<PathBuf> {
+    let mut text = template.to_string();
+    if let Some(rest) = text.strip_prefix("~/") {
+        text = format!("{}/{rest}", home.to_string_lossy());
+    }
+    while let Some(start) = text.find('%') {
+        let end = start + 1 + text[start + 1..].find('%')?;
+        let value = std::env::var(&text[start + 1..end]).ok()?;
+        text.replace_range(start..=end, &value);
+    }
+    let path = if cfg!(windows) {
+        PathBuf::from(text.replace('/', "\\"))
+    } else {
+        PathBuf::from(text)
+    };
+    path.is_absolute().then_some(path)
 }
 
 #[derive(Clone, Serialize)]
@@ -35,6 +117,28 @@ pub(crate) struct Method {
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// Tooltip text: exactly what one click does, including anything Ghostex installs first.
+    pub plan: String,
+    /// A tool Ghostex installs before running `command` ("node", "homebrew" or "systemTools").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prerequisite: Option<String>,
+    /// Commands `systemTools` must provide first (Linux).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub system_tools: Vec<String>,
+}
+
+impl Method {
+    fn new(id: &str, label: &str, command: String, plan: String) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            command,
+            unavailable_reason: None,
+            plan,
+            prerequisite: None,
+            system_tools: Vec::new(),
+        }
+    }
 }
 
 pub(crate) static CATALOG: LazyLock<Vec<Definition>> = LazyLock::new(|| {
@@ -44,6 +148,8 @@ pub(crate) static CATALOG: LazyLock<Vec<Definition>> = LazyLock::new(|| {
     .expect("valid bundled CLI catalog")
 });
 
+/// CDXC:ManagedTools 2026-09-29 DECISION:
+/// User: "when they click on something, we help them install it on windows/macos/linux automatically (show a button with a tooltip explaining how we'll install) but 1 click installs it for them as much as possible". Every method carries its tooltip `plan`, and a method whose tool is missing but that Ghostex can install (npm through its own Node.js, Homebrew on a Mac, curl/unzip/git on Linux) stays available with that tool as its `prerequisite` instead of asking the user to install it first.
 pub(crate) fn methods(
     definition: &Definition,
     executable: Option<&str>,
@@ -52,6 +158,22 @@ pub(crate) fn methods(
 ) -> Vec<Method> {
     let installed = executable.is_some();
     let mut methods = Vec::new();
+    let note = |plan: String| -> String {
+        let mut plan = plan;
+        if let Some(note) = &definition.install_note {
+            plan.push(' ');
+            plan.push_str(note);
+        }
+        if installed && definition.update_stops_sessions {
+            plan.push_str(" Updating stops sessions that are running it.");
+        }
+        plan
+    };
+    // A package published for bun only (omp's starts with `#!/usr/bin/env bun`) does not run from mise's npm install.
+    let npm_runnable = definition
+        .package_managers
+        .as_ref()
+        .is_none_or(|managers| managers.iter().any(|manager| manager == "npm"));
     let mise_tool = mise_installation
         .and_then(|installation| installation.tool.clone())
         .or_else(|| definition.mise_tool.clone())
@@ -59,18 +181,24 @@ pub(crate) fn methods(
             definition
                 .npm_package
                 .as_ref()
+                .filter(|_| npm_runnable)
                 .map(|package| format!("npm:{package}"))
         });
     if let Some(tool) = mise_tool {
-        methods.push(Method {
-            id: "mise".into(),
-            label: "mise".into(),
-            command: super::mise::command(
-                &tool,
-                mise_installation.is_some_and(|installation| installation.tool.is_some()),
-            ),
-            unavailable_reason: missing_command("mise", home),
+        let managed = mise_installation.is_some_and(|installation| installation.tool.is_some());
+        let command = super::mise::command(&tool, managed);
+        let mut method = Method::new(
+            "mise",
+            "mise",
+            command.clone(),
+            note(format!("Runs {command} with your mise.")),
+        );
+        method.unavailable_reason = missing_command("mise", home).or_else(|| {
+            (!managed)
+                .then(|| super::mise::unavailable_reason(&tool, home))
+                .flatten()
         });
+        methods.push(method);
     }
     if let Some(native) = &definition.native {
         let install = if cfg!(windows) {
@@ -84,21 +212,22 @@ pub(crate) fn methods(
             } else {
                 install
             };
-            let prerequisite = if command.starts_with("curl ") {
-                "curl"
+            let mut method = Method::new(
+                "native",
+                "Official installer",
+                command.into(),
+                note(match &native.plan {
+                    Some(plan) => plan.clone(),
+                    None => format!("Runs the official installer: {command}. No password needed."),
+                }),
+            );
+            if installed && !command.starts_with("curl ") && !command.contains("irm ") {
+                // The CLI's own updater.
+                method.unavailable_reason = None;
             } else {
-                &definition.binary
-            };
-            methods.push(Method {
-                id: "native".into(),
-                label: "Official installer".into(),
-                command: command.into(),
-                unavailable_reason: if installed || command.starts_with("curl ") {
-                    missing_command(prerequisite, home)
-                } else {
-                    None
-                },
-            });
+                apply_native_requirements(&mut method, native, command, home);
+            }
+            methods.push(method);
         }
     }
     if let Some(package) = &definition.npm_package {
@@ -113,12 +242,28 @@ pub(crate) fn methods(
             } else {
                 String::new()
             };
-            methods.push(Method {
-                id: manager.clone(),
-                label: manager.clone(),
-                command: format!("{manager} {verb} -g {flags}{package}@latest"),
-                unavailable_reason: missing_command(&manager, home),
-            });
+            let command = format!("{manager} {verb} -g {flags}{package}@latest");
+            let mut method = Method::new(
+                &manager,
+                &manager,
+                command.clone(),
+                note(format!("Runs {command}.")),
+            );
+            let missing = missing_command(&manager, home);
+            if manager == "npm" && missing.is_some() {
+                match crate::managed_tools::node::supported() {
+                    Ok(()) => {
+                        method.prerequisite = Some("node".into());
+                        method.plan = note(format!(
+                            "Ghostex first downloads Node.js (LTS) from nodejs.org into its tools folder and adds it to the end of your PATH, then runs {command}. No password needed."
+                        ));
+                    }
+                    Err(reason) => method.unavailable_reason = Some(reason),
+                }
+            } else {
+                method.unavailable_reason = missing;
+            }
+            methods.push(method);
         }
     }
     if !cfg!(windows) {
@@ -135,31 +280,152 @@ pub(crate) fn methods(
                 .unwrap_or(formula);
             let verb = if installed { "upgrade" } else { "install" };
             let cask = if definition.brew_cask { "--cask " } else { "" };
-            methods.push(Method {
-                id: "brew".into(),
-                label: "Homebrew".into(),
-                command: format!("brew {verb} {cask}{formula}"),
-                unavailable_reason: missing_command("brew", home),
-            });
+            let command = format!("brew {verb} {cask}{formula}");
+            let mut method = Method::new(
+                "brew",
+                "Homebrew",
+                command.clone(),
+                note(format!("Runs {command} with Homebrew.")),
+            );
+            if let Some(missing) = missing_command("brew", home) {
+                match crate::managed_tools::homebrew::can_install_homebrew() {
+                    Ok(()) if !installed => {
+                        method.prerequisite = Some("homebrew".into());
+                        method.plan = note(format!(
+                            "Ghostex first installs Homebrew with its official installer (macOS asks for your password once, and Apple's Command Line Tools are installed if missing), then runs {command}."
+                        ));
+                    }
+                    Ok(()) => method.unavailable_reason = Some(missing),
+                    Err(reason) => {
+                        method.unavailable_reason = Some(if cfg!(target_os = "macos") {
+                            reason
+                        } else {
+                            missing
+                        })
+                    }
+                }
+            }
+            methods.push(method);
         }
     }
     if cfg!(windows) {
         if let Some(package) = &definition.winget_id {
             let verb = if installed { "upgrade" } else { "install" };
-            methods.push(Method {
-                id: "winget".into(),
-                label: "WinGet".into(),
-                command: format!("winget {verb} --id {package} --exact --disable-interactivity"),
-                unavailable_reason: missing_command("winget", home),
-            });
+            let command = format!("winget {verb} --id {package} --exact --disable-interactivity");
+            let mut method = Method::new(
+                "winget",
+                "WinGet",
+                command.clone(),
+                note(format!("Runs {command}.")),
+            );
+            method.unavailable_reason = missing_command("winget", home);
+            methods.push(method);
         }
     }
     methods
 }
 
+/// What the official installer needs on this computer, and what Ghostex can install for it.
+fn apply_native_requirements(method: &mut Method, native: &Native, command: &str, home: &Path) {
+    let mut wanted: Vec<&str> = Vec::new();
+    if command.starts_with("curl ") {
+        wanted.extend(["curl", "ca-certificates"]);
+    }
+    let extra = if cfg!(windows) {
+        &native.requires.windows
+    } else {
+        &native.requires.unix
+    };
+    wanted.extend(extra.iter().map(String::as_str));
+    if native.needs_applications_folder && cfg!(target_os = "macos") && !applications_writable() {
+        method.unavailable_reason = Some("This installer copies an app into /Applications, which this account can't change. Sign in as an administrator, or ask one to install it.".into());
+        return;
+    }
+    if cfg!(target_os = "linux") {
+        let missing = crate::managed_tools::system_tools::missing(home, &wanted);
+        if missing.is_empty() {
+            return;
+        }
+        let list = missing
+            .iter()
+            .map(|name| {
+                if *name == "ca-certificates" {
+                    "certificates"
+                } else {
+                    name
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if crate::managed_tools::system_tools::can_install_in_background() {
+            method.prerequisite = Some("systemTools".into());
+            method.system_tools = missing.iter().map(|name| name.to_string()).collect();
+            method.plan = format!(
+                "Ghostex first installs {list} with your package manager (your computer asks for your password once), then {}",
+                lowercase_first(&method.plan)
+            );
+        } else {
+            method.unavailable_reason = Some(format!(
+                "This installer needs {list}. Use Install system tools in Settings > Integrations > Tools (it opens a terminal that asks for your password), then try again."
+            ));
+        }
+        return;
+    }
+    for &tool in &wanted {
+        if tool == "ca-certificates" || crate::agent_hooks::probing::command_exists(tool, home) {
+            continue;
+        }
+        // CDXC:ManagedTools 2026-09-29 DECISION:
+        // User (8B): when git is missing outside Linux (Hermes on a Mac without Apple's Command Line Tools, Claude Code on Windows without Git for Windows), show a clear "install git first" message instead of installing it.
+        method.unavailable_reason = Some(match (tool, cfg!(target_os = "macos")) {
+            ("git", true) => "This agent needs git. Install Apple's Command Line Tools first (run xcode-select --install in a terminal), then try again.".into(),
+            ("git", false) => "This agent needs Git for Windows. Install it from git-scm.com/downloads/win, then try again.".into(),
+            _ => format!("This installer needs {tool}. Install it first, then try again."),
+        });
+        return;
+    }
+    if cfg!(target_os = "macos") && wanted.contains(&"git") && !mac_git_usable() {
+        method.unavailable_reason = Some("This agent needs git. Install Apple's Command Line Tools first (run xcode-select --install in a terminal), then try again.".into());
+    }
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+#[cfg(unix)]
+fn applications_writable() -> bool {
+    let path = std::ffi::CString::new("/Applications").expect("static path");
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn applications_writable() -> bool {
+    true
+}
+
+/// `/usr/bin/git` on a Mac is a stub that opens Apple's installer dialog until the Command Line
+/// Tools (or Xcode) are installed; a git from Homebrew works either way.
+fn mac_git_usable() -> bool {
+    std::process::Command::new("/usr/bin/xcode-select")
+        .arg("-p")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+        || ["/opt/homebrew/bin/git", "/usr/local/bin/git"]
+            .iter()
+            .any(|path| Path::new(path).is_file())
+}
+
+/// Prerequisites (npm, curl, brew, winget, mise) come from the shared 60 second probe cache: a list of every
+/// agent asks for the same few tools many times over.
 fn missing_command(command: &str, home: &Path) -> Option<String> {
-    super::process::resolve(command, home)
-        .is_none()
+    (!crate::agent_hooks::probing::command_exists(command, home))
         .then(|| format!("Install {command} on this computer first."))
 }
 
@@ -204,6 +470,11 @@ pub(crate) fn detected_method(path: &str, definition: &Definition) -> Option<Str
         return definition.brew_formula.as_ref().map(|_| "brew".into());
     }
     if definition.npm_package.is_some() {
+        // On Windows npm leaves only a `.cmd` shim beside Ghostex's node.exe, which never resolves
+        // into node_modules.
+        if Path::new(path).starts_with(crate::managed_tools::paths::node_dir()) {
+            return Some("npm".into());
+        }
         if original.contains("/.bun/") || normalized.contains("/.bun/") {
             return Some("bun".into());
         }
@@ -214,6 +485,13 @@ pub(crate) fn detected_method(path: &str, definition: &Definition) -> Option<Str
             || (cfg!(windows) && original.contains("/appdata/roaming/npm/"))
         {
             return Some("npm".into());
+        }
+    }
+    if let Some(native) = &definition.native {
+        if native.path_markers.iter().any(|marker| {
+            normalized.contains(marker.as_str()) || original.contains(marker.as_str())
+        }) {
+            return Some("native".into());
         }
     }
     if definition.native.is_some()

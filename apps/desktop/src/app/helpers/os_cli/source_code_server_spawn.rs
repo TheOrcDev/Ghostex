@@ -1,7 +1,4 @@
-use std::{
-    process::{Command, Stdio},
-    time::Instant,
-};
+use std::{process::Stdio, time::Instant};
 
 use anyhow::Result;
 
@@ -35,12 +32,10 @@ fn source_code_server_spawn_host_runtime(
         target.endpoint,
         SourceCodeServerRuntimeEndpoint::Remote { .. }
     ) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         return source_code_server_spawn_remote_runtime(target, startup_deadline);
-        #[cfg(not(target_os = "macos"))]
-        return Err(
-            "Remote Source runtime is available only from the macOS SSH owner.".to_string(),
-        );
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        return Err("Remote Source runtime is unavailable from this SSH host.".to_string());
     }
     if source_code_server_health_check() {
         let remaining = startup_deadline.saturating_duration_since(Instant::now());
@@ -65,7 +60,7 @@ fn source_code_server_spawn_host_runtime(
         return Err("Source runtime startup timed out".to_string());
     }
 
-    let mut command = Command::new(&node_path);
+    let mut command = gpui_background_command(&node_path);
     command
         .arg("--eval")
         .arg(SOURCE_CODE_SERVER_OWNED_ENTRY)
@@ -105,8 +100,6 @@ fn source_code_server_spawn_host_runtime(
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
         command
             .arg("--session-socket")
             .arg(source_code_server_native_session_socket(&user_data_dir));
@@ -134,6 +127,12 @@ pub(crate) fn source_code_server_spawn_runtime(
     settings: &SourceCodeServerRuntimeSettings,
     startup_deadline: Instant,
 ) -> Result<SourceCodeServerRuntimeStartOutput, String> {
+    if matches!(
+        target.endpoint,
+        SourceCodeServerRuntimeEndpoint::Remote { .. }
+    ) {
+        return source_code_server_spawn_remote_runtime(target, startup_deadline);
+    }
     if windows_terminal_backend::current_preference()
         == windows_terminal_backend::WindowsTerminalBackendPreference::PowerShell
     {

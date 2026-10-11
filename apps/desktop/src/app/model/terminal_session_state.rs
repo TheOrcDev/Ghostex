@@ -61,17 +61,6 @@ impl TerminalSessionPresentationState {
         }
     }
 
-    pub(crate) fn tab_badge_label(self) -> Option<&'static str> {
-        match self {
-            Self::Running => None,
-            Self::Sleeping => None,
-            Self::Mounting => Some("MNT"),
-            Self::StartupFailed => Some("ERR"),
-            Self::RestoredUnmounted => Some("RST"),
-            Self::PoppedOutPlaceholder => Some("OUT"),
-        }
-    }
-
     pub(crate) fn placeholder_label(self) -> &'static str {
         match self {
             Self::Running => "Running",
@@ -163,40 +152,6 @@ impl AgentTerminalActivity {
             Self::Idle => "idle",
             Self::Working => "working",
             Self::Attention => "attention",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentTerminalTabStatus {
-    Idle,
-    Working,
-    Attention,
-    DelayedSend,
-}
-
-impl AgentTerminalTabStatus {
-    pub(crate) fn element_slug(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Working => "working",
-            Self::Attention => "attention",
-            Self::DelayedSend => "delayed-send",
-        }
-    }
-}
-
-pub(crate) fn agent_terminal_tab_status(
-    activity: AgentTerminalActivity,
-    delayed_send_active: bool,
-) -> AgentTerminalTabStatus {
-    if delayed_send_active {
-        AgentTerminalTabStatus::DelayedSend
-    } else {
-        match activity {
-            AgentTerminalActivity::Idle => AgentTerminalTabStatus::Idle,
-            AgentTerminalActivity::Working => AgentTerminalTabStatus::Working,
-            AgentTerminalActivity::Attention => AgentTerminalTabStatus::Attention,
         }
     }
 }
@@ -320,9 +275,5 @@ impl TerminalSession {
         self.startup_eligible_when_mounting = presentation_state
             == TerminalSessionPresentationState::Mounting
             && startup_eligible_when_mounting;
-    }
-
-    pub(crate) fn tab_status(&self) -> AgentTerminalTabStatus {
-        agent_terminal_tab_status(self.activity, self.delayed_send_active)
     }
 }

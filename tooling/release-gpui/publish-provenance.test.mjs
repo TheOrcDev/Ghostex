@@ -10,6 +10,8 @@
  * never allow, so every rejection has a named test.
  */
 
+import path from 'node:path';
+
 import { describe, expect, test } from 'vitest';
 
 import { computePlan, validatePlan } from './plan.mjs';
@@ -151,7 +153,7 @@ describe('plan intake', () => {
     const resolved = readPublishPlan({
       artifactsRoot: '/artifacts',
       env: {},
-      fileExists: (file) => file === '/artifacts/release-plan/release-plan.json',
+      fileExists: (file) => file === path.join('/artifacts', 'release-plan', 'release-plan.json'),
       readTextFile: () => inline,
     });
     expect(resolved.sourceSha).toBe(plan.sourceSha);

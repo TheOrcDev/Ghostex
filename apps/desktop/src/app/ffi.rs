@@ -67,43 +67,23 @@ pub extern "C" fn GhostexGpuiKeyboardRouteNativeEvent(
             .to_string_lossy()
             .into_owned()
     };
-    let should_probe =
-        keycode == 0 || characters.chars().count() > 1 || shortcut_characters.chars().count() > 1;
-    if should_probe {
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.nativeEventEntry",
-            serde_json::json!({
-                "action": action,
-                "characters": support_logs::temporary_fluid_voice_text_shape(&characters),
-                "shortcutCharacters":
-                    support_logs::temporary_fluid_voice_text_shape(&shortcut_characters),
-                "keycode": keycode,
-                "modifiers": modifiers,
-                "rootViewPresent": !gpui_root_view.is_null(),
-            }),
-        );
-    }
-    let handled = route_gpui_native_keyboard_event(
+    route_gpui_native_keyboard_event(
         gpui_root_view,
         action,
         keycode,
         modifiers,
         &shortcut_characters,
         &characters,
-    );
-    if should_probe {
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.nativeEventResult",
-            serde_json::json!({
-                "action": action,
-                "handled": handled,
-                "keycode": keycode,
-            }),
-        );
-    }
-    handled as _
+    ) as _
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn GhostexGpuiPerformTextInputHistoryCommand(
+    gpui_root_view: *mut std::ffi::c_void,
+    redo: std::ffi::c_int,
+) -> std::ffi::c_int {
+    dispatch_text_input_history_from_edit_menu(gpui_root_view, redo != 0) as _
 }
 
 #[cfg(target_os = "macos")]
@@ -122,27 +102,7 @@ pub extern "C" fn GhostexGpuiKeyboardOwnerUsesRendererEditHotkeys(
                         FirstResponderCefSurface::ProjectWorkarea(
                             ProjectWorkareaCefSurfaceSlotKey::Source
                                 | ProjectWorkareaCefSurfaceSlotKey::Manage
-                        ) | FirstResponderCefSurface::SessionChat(_)
-                    ))
-                )
-            }) as std::ffi::c_int
-    })
-}
-
-#[cfg(target_os = "macos")]
-#[unsafe(no_mangle)]
-pub extern "C" fn GhostexGpuiKeyboardOwnerIsSessionChat(
-    gpui_root_view: *mut std::ffi::c_void,
-) -> std::ffi::c_int {
-    GPUI_KEYBOARD_ROUTER_TARGETS.with(|targets| {
-        targets
-            .borrow()
-            .get(&(gpui_root_view as usize))
-            .is_some_and(|target| {
-                matches!(
-                    target.owner,
-                    GpuiKeyboardOwner::FirstResponder(FirstResponderTarget::CefSurface(
-                        FirstResponderCefSurface::SessionChat(_)
+                        )
                     ))
                 )
             }) as std::ffi::c_int
@@ -317,32 +277,10 @@ pub extern "C" fn GhostexGpuiTerminalInsertCommittedText(
     CDXC:Terminal 2026-06-27-03:46:
     AppKit committed IME text crosses into Rust only as borrowed bytes for this synchronous callback. Insert only into the Ghostty surface registered for the exact mounted host view, reject null or empty committed text, and never store, log, persist, or reroute typed text through focused-surface fallback.
     */
-    let target_registered =
-        terminal_ghostty_surface::native_key_target_diagnostic_for_view(native_view).is_some();
     let Some(text) = std::ptr::NonNull::new(text.cast_mut()) else {
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.nativeCommittedText",
-            serde_json::json!({
-                "accepted": false,
-                "reason": "nullText",
-                "targetRegistered": target_registered,
-                "text": support_logs::temporary_fluid_voice_bytes_shape(&[]),
-            }),
-        );
         return 0;
     };
     if len == 0 {
-        support_logs::append_temporary(
-            support_logs::GpuiSupportLog::TerminalFocus,
-            "TEMP.gpui.fluidVoice.nativeCommittedText",
-            serde_json::json!({
-                "accepted": false,
-                "reason": "emptyText",
-                "targetRegistered": target_registered,
-                "text": support_logs::temporary_fluid_voice_bytes_shape(&[]),
-            }),
-        );
         return 0;
     }
     let bytes = unsafe { std::slice::from_raw_parts(text.as_ptr() as *const u8, len) };
@@ -364,15 +302,6 @@ pub extern "C" fn GhostexGpuiTerminalInsertCommittedText(
             },
         )
     });
-    support_logs::append_temporary(
-        support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.gpui.fluidVoice.nativeCommittedText",
-        serde_json::json!({
-            "accepted": accepted,
-            "targetRegistered": target_registered,
-            "text": support_logs::temporary_fluid_voice_bytes_shape(bytes),
-        }),
-    );
     if accepted { 1 } else { 0 }
 }
 
@@ -391,31 +320,11 @@ pub extern "C" fn GhostexGpuiTerminalSetPreeditText(
         &[]
     } else {
         let Some(text) = std::ptr::NonNull::new(text.cast_mut()) else {
-            support_logs::append_temporary(
-                support_logs::GpuiSupportLog::TerminalFocus,
-                "TEMP.gpui.fluidVoice.nativePreeditText",
-                serde_json::json!({
-                    "accepted": false,
-                    "reason": "nullNonEmptyText",
-                    "text": support_logs::temporary_fluid_voice_bytes_shape(&[]),
-                }),
-            );
             return 0;
         };
         unsafe { std::slice::from_raw_parts(text.as_ptr() as *const u8, len) }
     };
-    let target_registered =
-        terminal_ghostty_surface::native_key_target_diagnostic_for_view(native_view).is_some();
     let accepted = terminal_ghostty_surface::set_native_preedit_text_for_view(native_view, bytes);
-    support_logs::append_temporary(
-        support_logs::GpuiSupportLog::TerminalFocus,
-        "TEMP.gpui.fluidVoice.nativePreeditText",
-        serde_json::json!({
-            "accepted": accepted,
-            "targetRegistered": target_registered,
-            "text": support_logs::temporary_fluid_voice_bytes_shape(bytes),
-        }),
-    );
     if accepted { 1 } else { 0 }
 }
 
@@ -449,7 +358,6 @@ pub extern "C" fn GhostexGpuiTerminalGetImePoint(
 
 #[cfg(target_os = "macos")]
 thread_local! {
-    pub(crate) static GPUI_APP_SHOTS_CALLBACK_TARGET: RefCell<Option<GpuiAppShotsCallbackTarget>> = const { RefCell::new(None) };
     pub(crate) static GPUI_MENU_BAR_STATUS_CALLBACK_TARGET: RefCell<Option<GpuiMenuBarStatusCallbackTarget>> = const { RefCell::new(None) };
     pub(crate) static GPUI_SIDEBAR_POINTER_CALLBACK_TARGET: RefCell<Option<GpuiSidebarPointerCallbackTarget>> = const { RefCell::new(None) };
     pub(crate) static GPUI_SESSION_ATTENTION_NOTIFICATION_CALLBACK_TARGET: RefCell<Option<GpuiSessionAttentionNotificationCallbackTarget>> = const { RefCell::new(None) };
@@ -466,13 +374,6 @@ thread_local! {
     // exists (macOS `pendingOSIntegrationCommands` parity); buffer them until
     // the callback target registers.
     pub(crate) static GPUI_PENDING_OS_INTEGRATION_URLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-pub(crate) struct GpuiAppShotsCallbackTarget {
-    pub(crate) app: gpui::WeakEntity<GhostexGpuiApp>,
-    pub(crate) async_app: gpui::AsyncApp,
 }
 
 #[cfg(target_os = "macos")]
@@ -548,77 +449,6 @@ pub(crate) struct GpuiKeyboardRouterCallbackTarget {
     pub(crate) owner_generation: u64,
     pub(crate) window_keyboard_id: u64,
     pub(crate) pressed_keys: HashMap<u32, GpuiCapturedKeyRoute>,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Debug)]
-pub(crate) struct GpuiAppShotCapture {
-    pub(crate) app_name: String,
-    pub(crate) bundle_identifier: Option<String>,
-    pub(crate) image_path: String,
-    pub(crate) window_title: Option<String>,
-    pub(crate) window_width: Option<i32>,
-    pub(crate) window_height: Option<i32>,
-    pub(crate) trigger: Option<String>,
-}
-
-#[cfg(target_os = "macos")]
-#[unsafe(no_mangle)]
-pub extern "C" fn GhostexGpuiAppShotsSettingsEnabled() -> std::ffi::c_int {
-    if shared_settings::shared_sidebar_settings_snapshot()
-        .app_shots_settings()
-        .enabled
-    {
-        1
-    } else {
-        0
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[unsafe(no_mangle)]
-pub extern "C" fn GhostexGpuiAppShotsSettingsHotkey() -> std::ffi::c_int {
-    shared_settings::shared_sidebar_settings_snapshot()
-        .app_shots_settings()
-        .hotkey
-        .native_code()
-}
-
-#[cfg(target_os = "macos")]
-#[unsafe(no_mangle)]
-pub extern "C" fn GhostexGpuiAppShotsCaptureSucceeded(
-    app_name: *const std::ffi::c_char,
-    bundle_identifier: *const std::ffi::c_char,
-    image_path: *const std::ffi::c_char,
-    window_title: *const std::ffi::c_char,
-    window_width: i32,
-    window_height: i32,
-    trigger: *const std::ffi::c_char,
-) {
-    let Some(app_name) = gpui_app_shots_c_string(app_name) else {
-        queue_gpui_app_shot_status("App Shot failed.");
-        return;
-    };
-    let Some(image_path) = gpui_app_shots_c_string(image_path) else {
-        queue_gpui_app_shot_status("App Shot failed.");
-        return;
-    };
-    let capture = GpuiAppShotCapture {
-        app_name,
-        bundle_identifier: gpui_app_shots_c_string(bundle_identifier),
-        image_path,
-        window_title: gpui_app_shots_c_string(window_title),
-        window_width: (window_width > 0).then_some(window_width),
-        window_height: (window_height > 0).then_some(window_height),
-        trigger: gpui_app_shots_c_string(trigger),
-    };
-    queue_gpui_app_shot_capture(capture);
-}
-
-#[cfg(target_os = "macos")]
-#[unsafe(no_mangle)]
-pub extern "C" fn GhostexGpuiAppShotsCaptureFailed(_message: *const std::ffi::c_char) {
-    queue_gpui_app_shot_status("Could not capture an App Shot.");
 }
 
 #[cfg(target_os = "macos")]

@@ -1,0 +1,1 @@
+../../../../desktop/src/app/native_chat/panel_card.rs

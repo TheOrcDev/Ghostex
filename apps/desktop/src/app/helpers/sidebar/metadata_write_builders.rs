@@ -74,6 +74,21 @@ pub(crate) fn gpui_sidebar_agent_metadata_write_from_command(
                 request_id,
             })
         }
+        Some("setSidebarAgentsEnabled") => {
+            let agent_ids = command
+                .get("agentIds")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| gpui_normalized_string_order_from_values(items))
+                .unwrap_or_default();
+            let enabled = command
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| GPUI_SIDEBAR_METADATA_GENERIC_ERROR.to_string())?;
+            if agent_ids.is_empty() {
+                return Err(GPUI_SIDEBAR_METADATA_GENERIC_ERROR.to_string());
+            }
+            Ok(GpuiSidebarAgentMetadataWrite::SetEnabled { agent_ids, enabled })
+        }
         _ => Err(GPUI_SIDEBAR_METADATA_GENERIC_ERROR.to_string()),
     }
 }
@@ -155,6 +170,11 @@ pub(crate) fn gpui_sidebar_command_metadata_write_from_command(
                     .and_then(|value| gpui_trimmed_nonempty_str(Some(value)))
                     .map(str::to_string),
                 icon,
+                links: if action_type == "terminal" {
+                    gpui_titlebar_action_links_from_sidebar_command_button(command)
+                } else {
+                    Vec::new()
+                },
                 name,
                 play_completion_sound: action_type == "terminal"
                     && command
@@ -270,6 +290,14 @@ pub(crate) fn gpui_sidebar_agent_mutation_params(
             );
             params.insert("agentIds".to_string(), gpui_string_array_value(agent_ids));
         }
+        GpuiSidebarAgentMetadataWrite::SetEnabled { agent_ids, enabled } => {
+            params.insert(
+                "operation".to_string(),
+                serde_json::Value::String("setEnabled".to_string()),
+            );
+            params.insert("agentIds".to_string(), gpui_string_array_value(agent_ids));
+            params.insert("enabled".to_string(), serde_json::Value::Bool(*enabled));
+        }
     }
     serde_json::Value::Object(params)
 }
@@ -291,6 +319,7 @@ pub(crate) fn gpui_sidebar_command_mutation_params(
             command_id,
             scope: _,
             icon,
+            links,
             name,
             play_completion_sound,
             show_on_project_row,
@@ -315,6 +344,23 @@ pub(crate) fn gpui_sidebar_command_mutation_params(
             gpui_insert_optional_nonempty_string(&mut params, "command", command.as_deref());
             gpui_insert_optional_nonempty_string(&mut params, "commandId", command_id.as_deref());
             gpui_insert_optional_nonempty_string(&mut params, "icon", icon.as_deref());
+            params.insert(
+                "links".to_string(),
+                serde_json::Value::Array(
+                    links
+                        .iter()
+                        .map(|link| {
+                            serde_json::json!({
+                                "url": link.url,
+                                "target": match link.target {
+                                    GpuiTitlebarActionLinkTarget::Integrated => "integrated",
+                                    GpuiTitlebarActionLinkTarget::External => "external",
+                                },
+                            })
+                        })
+                        .collect(),
+                ),
+            );
             params.insert("name".to_string(), serde_json::Value::String(name.clone()));
             params.insert(
                 "playCompletionSound".to_string(),

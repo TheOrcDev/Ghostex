@@ -12,273 +12,12 @@
 //
 // Cluster: titlebar menus, popups, actions, and titlebar render_* builders
 
-use std::time::Duration;
-
-// RefCell backs cross-platform runtime state (window frame persistence), not
-// just the macOS-only shims that first introduced the import.
-
-use gpui::AnyElement;
-use gpui::InteractiveElement as _;
-use gpui::IntoElement;
-use gpui::MouseButton;
-use gpui::MouseDownEvent;
-use gpui::ParentElement as _;
-use gpui::Styled as _;
-use gpui::Window;
-use gpui::div;
-use gpui::prelude::FluentBuilder as _;
-use gpui::px;
-use gpui_component::ElementExt;
-use gpui_component::tooltip::ManagedTooltipExt as _;
-use gpui_component::tooltip::ManagedTooltipPlacement;
-
 use crate::app::consts::*;
 use crate::app::helpers::*;
 use crate::app::window::*;
 use crate::*;
 
 impl GhostexGpuiApp {
-    pub(crate) fn render_titlebar_actions_button(
-        &self,
-        icon_path: &'static str,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let open = self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::Actions);
-        let on_cooldown = self.titlebar_quick_action_button_on_cooldown();
-        let icon_color = if open {
-            titlebar_icon_hover_color()
-        } else {
-            titlebar_icon_color()
-        };
-        let anchor_state =
-            window.use_keyed_state("ghostex-gpui-titlebar-actions-popup-anchor", cx, |_, _| {
-                GpuiTitlebarPopupAnchorState::default()
-            });
-        let anchor_bounds = anchor_state.read(cx).bounds;
-        let trigger_bounds_captured = anchor_state.read(cx).trigger_bounds_captured;
-        let trigger_bounds = trigger_bounds_captured.then_some(anchor_bounds);
-
-        div()
-            .id("ghostex-gpui-titlebar-button-actions")
-            .relative()
-            .flex()
-            .h(px(TITLEBAR_CONTROL_HEIGHT))
-            .w(px(TITLEBAR_BUTTON_WIDTH))
-            .items_center()
-            .justify_center()
-            .when(cfg!(target_os = "windows"), |this| this.occlude())
-            .border_l_1()
-            .border_color(titlebar_button_border_color())
-            .text_color(icon_color)
-            .cursor_default()
-            .when(open, |this| this.bg(titlebar_active_segment_color()))
-            .when(on_cooldown, |this| this.opacity(0.5))
-            .when(!on_cooldown, |this| {
-                this.hover(move |this| {
-                    if open {
-                        this.bg(titlebar_active_segment_color())
-                            .text_color(titlebar_icon_hover_color())
-                    } else {
-                        this.bg(titlebar_button_hover_color())
-                            .text_color(titlebar_icon_hover_color())
-                    }
-                })
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    log_gpui_titlebar_popup_mouse_down(
-                        GpuiTitlebarPopupKind::Actions,
-                        "left",
-                        "runPrimaryAction",
-                        open,
-                        trigger_bounds,
-                        event,
-                        window,
-                    );
-                    this.run_active_gpui_titlebar_action(window, cx);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    log_gpui_titlebar_popup_mouse_down(
-                        GpuiTitlebarPopupKind::Actions,
-                        "right",
-                        "togglePopup",
-                        open,
-                        trigger_bounds,
-                        event,
-                        window,
-                    );
-                    this.set_gpui_titlebar_popup_open(
-                        GpuiTitlebarPopupKind::Actions,
-                        !open,
-                        trigger_bounds,
-                        window,
-                        cx,
-                    );
-                }),
-            )
-            .when(!open, |this| {
-                this.managed_discrete_tooltip_with_placement(
-                    ManagedTooltipPlacement::Left,
-                    Duration::from_millis(300),
-                    |window, cx| titlebar_tooltip(TITLEBAR_ACTIONS_TOOLTIP, window, cx),
-                )
-            })
-            .on_prepaint({
-                let anchor_state = anchor_state.clone();
-                move |bounds, window, cx| {
-                    let (first_capture, moved) = anchor_state.update(cx, |state, _| {
-                        let first_capture = !state.trigger_bounds_captured;
-                        let moved = state.bounds != bounds;
-                        state.bounds = bounds;
-                        state.trigger_bounds_captured = true;
-                        (first_capture, moved)
-                    });
-                    if first_capture || moved {
-                        log_gpui_titlebar_popup_anchor(
-                            GpuiTitlebarPopupKind::Actions,
-                            bounds,
-                            first_capture,
-                            moved,
-                            window,
-                        );
-                        window.request_animation_frame();
-                    }
-                }
-            })
-            .child(titlebar_svg_icon(icon_path, 16.0, icon_color))
-            .into_any_element()
-    }
-
-    pub(crate) fn render_titlebar_open_targets_button(
-        &self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let (icon_path, _icon_size) = self.titlebar_open_target_icon();
-        let open = self.titlebar_popup_menu_open(GpuiTitlebarPopupKind::OpenTargets);
-        let icon_color = if open {
-            titlebar_icon_hover_color()
-        } else {
-            titlebar_icon_color()
-        };
-        let anchor_state = window.use_keyed_state(
-            "ghostex-gpui-titlebar-open-targets-popup-anchor",
-            cx,
-            |_, _| GpuiTitlebarPopupAnchorState::default(),
-        );
-        let anchor_bounds = anchor_state.read(cx).bounds;
-        let trigger_bounds_captured = anchor_state.read(cx).trigger_bounds_captured;
-        let trigger_bounds = trigger_bounds_captured.then_some(anchor_bounds);
-
-        div()
-            .id("ghostex-gpui-titlebar-button-open-project")
-            .relative()
-            .flex()
-            .h(px(TITLEBAR_CONTROL_HEIGHT))
-            .w(px(TITLEBAR_BUTTON_WIDTH))
-            .items_center()
-            .justify_center()
-            .when(cfg!(target_os = "windows"), |this| this.occlude())
-            .border_l_1()
-            .when(
-                cfg!(any(target_os = "windows", target_os = "linux")),
-                |this| this.border_r_1(),
-            )
-            .border_color(titlebar_button_border_color())
-            .text_color(icon_color)
-            .cursor_default()
-            .when(open, |this| this.bg(titlebar_active_segment_color()))
-            .hover(move |this| {
-                if open {
-                    this.bg(titlebar_active_segment_color())
-                        .text_color(titlebar_icon_hover_color())
-                } else {
-                    this.bg(titlebar_button_hover_color())
-                        .text_color(titlebar_icon_hover_color())
-                }
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    log_gpui_titlebar_popup_mouse_down(
-                        GpuiTitlebarPopupKind::OpenTargets,
-                        "left",
-                        "openPrimaryTarget",
-                        open,
-                        trigger_bounds,
-                        event,
-                        window,
-                    );
-                    this.open_active_project_with_active_open_target(window, cx);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    log_gpui_titlebar_popup_mouse_down(
-                        GpuiTitlebarPopupKind::OpenTargets,
-                        "right",
-                        "togglePopup",
-                        open,
-                        trigger_bounds,
-                        event,
-                        window,
-                    );
-                    this.set_gpui_titlebar_popup_open(
-                        GpuiTitlebarPopupKind::OpenTargets,
-                        !open,
-                        trigger_bounds,
-                        window,
-                        cx,
-                    );
-                }),
-            )
-            .when(!open, |this| {
-                this.managed_discrete_tooltip_with_placement(
-                    ManagedTooltipPlacement::Left,
-                    Duration::from_millis(300),
-                    |window, cx| titlebar_tooltip(TITLEBAR_OPEN_TARGETS_TOOLTIP, window, cx),
-                )
-            })
-            .on_prepaint({
-                let anchor_state = anchor_state.clone();
-                move |bounds, window, cx| {
-                    let (first_capture, moved) = anchor_state.update(cx, |state, _| {
-                        let first_capture = !state.trigger_bounds_captured;
-                        let moved = state.bounds != bounds;
-                        state.bounds = bounds;
-                        state.trigger_bounds_captured = true;
-                        (first_capture, moved)
-                    });
-                    if first_capture || moved {
-                        log_gpui_titlebar_popup_anchor(
-                            GpuiTitlebarPopupKind::OpenTargets,
-                            bounds,
-                            first_capture,
-                            moved,
-                            window,
-                        );
-                        window.request_animation_frame();
-                    }
-                }
-            })
-            .child(titlebar_svg_icon(icon_path, 12.0, icon_color))
-            .into_any_element()
-    }
-
     pub(crate) fn titlebar_open_targets_popup_content_height(&self) -> f32 {
         let target_count = gpui_visible_open_targets_from_current_settings().len();
         let mut rows = vec![TITLEBAR_POPUP_MENU_ROW_HEIGHT; target_count];
@@ -302,7 +41,11 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn titlebar_git_popup_content_height(&self) -> f32 {
-        let Some(state) = self.titlebar_git_menu_state.as_ref() else {
+        let Some(state) = self
+            .titlebar_git_menu_state
+            .as_ref()
+            .filter(|state| !state.is_busy && state.is_repo)
+        else {
             return titlebar_popup_menu_height_for_rows(&[TITLEBAR_POPUP_MENU_ROW_HEIGHT]);
         };
         let section_label_height =
@@ -332,11 +75,16 @@ impl GhostexGpuiApp {
             GpuiTitlebarPopupKind::Actions => self.titlebar_actions_popup_content_height(),
             GpuiTitlebarPopupKind::BrowserActions(_) => self.browser_actions_popup_content_height(),
             GpuiTitlebarPopupKind::Extensions => {
+                // The popup lists exactly the extensions scoped to the active project, so its measured
+                // height must count the same rows `build_gpui_titlebar_extensions_popup_menu` renders.
                 let extension_count = self
                     .extensions_snapshot
                     .installed
                     .values()
-                    .filter(|extension| extension.enabled)
+                    .filter(|extension| {
+                        extension.enabled
+                            && self.view_scope_allows(&extension_view_scope_key(&extension.id))
+                    })
                     .count();
                 let mut rows = if extension_count == 0 {
                     vec![TITLEBAR_POPUP_MENU_ROW_HEIGHT]
@@ -349,6 +97,7 @@ impl GhostexGpuiApp {
             }
             GpuiTitlebarPopupKind::Git => self.titlebar_git_popup_content_height(),
             GpuiTitlebarPopupKind::Help => super::help_menu::titlebar_help_popup_content_height(),
+            GpuiTitlebarPopupKind::More => self.titlebar_more_popup_content_height(),
             GpuiTitlebarPopupKind::OpenTargets => self.titlebar_open_targets_popup_content_height(),
             GpuiTitlebarPopupKind::Notifications => TITLEBAR_POPUP_NOTIFICATIONS_MAX_HEIGHT,
             GpuiTitlebarPopupKind::Resources

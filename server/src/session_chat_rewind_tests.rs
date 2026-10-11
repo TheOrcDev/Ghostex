@@ -57,7 +57,7 @@ async fn live_claude_rewind_middle_then_oldest() {
         cancelled: &|| false,
     };
     for index in [1, 0] {
-        let target = resolve_rewind_target(&path, &prompts[index].lineage.id).unwrap();
+        let target = resolve_rewind_target(&path, &prompts[index].lineage.id, None).unwrap();
         let plan = RewindPlan {
             codex: None,
             claude_target: Some((path.clone(), target.clone())),
@@ -66,7 +66,7 @@ async fn live_claude_rewind_middle_then_oldest() {
         };
         let started = std::time::Instant::now();
         driver.run(&plan).await.unwrap();
-        assert!(resolve_rewind_target(&path, &target.message_id).is_err());
+        assert!(resolve_rewind_target(&path, &target.message_id, None).is_err());
         assert_eq!(
             session_chat_pending_rewind(&path).unwrap().leaf_id,
             target.leaf_id

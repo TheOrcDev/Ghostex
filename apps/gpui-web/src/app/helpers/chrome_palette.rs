@@ -1,0 +1,1 @@
+../../../../desktop/src/app/helpers/chrome_palette.rs

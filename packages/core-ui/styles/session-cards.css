@@ -1276,13 +1276,14 @@
  * the exact spot the queued-prompt badge occupies, so a draft that becomes a
  * queued row swaps in place. User picked the stacked pile for the case where
  * both exist: the badge stays where it is and paints in front (z-index 6 vs 5),
- * and `data-stacked` slides the dot up and to the right so a white crescent
+ * and `data-stacked` slides the dot up and to the right so a light-blue crescent
  * peeks out from behind the yellow. Same layout ownership as the badge: an
  * absolutely positioned, pointer-transparent sibling of the leading icon that
  * contributes nothing to the row's flow. Never wrap the icon to position it.
  */
 .session-composer-draft-dot {
-  background: #fff;
+  /* CDXC:Sessions 2026-09-21 DECISION: User: the composer-draft dot is #B9D8FA (GPUI sidebar matches). */
+  background: #b9d8fa;
   border-radius: 50%;
   box-shadow: 0 0 0 1px rgba(12, 12, 14, 0.75);
   box-sizing: border-box;
@@ -1565,6 +1566,11 @@
 .session-floating-agent-icon[data-agent-icon='zcode'],
 .session-header-agent-icon[data-agent-icon='zcode'] {
   --session-agent-icon-color: var(--ghostex-zcode-logo, #fff);
+}
+
+.session-floating-agent-icon[data-agent-icon='empryo'],
+.session-header-agent-icon[data-agent-icon='empryo'] {
+  --session-agent-icon-color: #1fa31d;
 }
 
 .session-floating-agent-tabler-icon[data-agent-icon='browser'],
@@ -2403,9 +2409,7 @@ body[data-custom-sidebar-titlebar-colors='true']
  * Dark awake/sleeping timestamps remain #a6a6a6/#686868; light timestamps use #424242/#959595, with all session titles #262626 in sidebar-light.css.
  * This supersedes the blue timestamp tint and the earlier light-mode title colors that varied with sleeping, visible, or focused state.
  */
-.sidebar-reference-layout[data-reference-sidebar='true']
-  .session[data-sleeping='true']
-  .session-last-interaction-time {
+.sidebar-reference-layout[data-reference-sidebar='true'] .session[data-sleeping='true'] .session-last-interaction-time {
   color: #686868;
 }
 
@@ -2489,8 +2493,15 @@ body[data-custom-sidebar-titlebar-colors='true']
   width: var(--session-leading-icon-size);
 }
 
+.sidebar-reference-layout[data-reference-sidebar='true'] .session[data-pinned='true'] {
+  --session-note-dot-pinned-left-shift: var(--session-note-dot-left-shift);
+}
+
+/* CDXC:Sessions 2026-09-17 DECISION:
+ * User: remove the sidebar row's floating pin and unpin icons.
+ */
 .sidebar-reference-layout[data-reference-sidebar='true'] .session-pinned-floating-button {
-  display: inline-flex;
+  display: none;
   left: calc(
     var(--session-leading-icon-left) - var(--session-leading-icon-size) - var(--session-pinned-icon-left-shift)
   );
@@ -2833,17 +2844,14 @@ body[data-custom-sidebar-titlebar-colors='true']
   width: 12px;
 }
 
-/*
- * CDXC:Sessions 2026-05-29-19:03:
- * macOS sidebar session buttons should not show the right-edge working timer
- * spinner. Keep left-side Delayed Send clocks and other card identity chrome
- * intact, but remove the passive trailing spinner from the reference sidebar
- * row so the title remains the primary scan target.
+/* CDXC:SessionStatus 2026-09-17 DECISION:
+ * User: show the working spinner and attention dot on sidebar session rows.
+ * Supersedes the earlier suppression of the reference sidebar's working spinner.
  */
 .sidebar-reference-layout[data-reference-sidebar='true']
   .session-frame[data-activity='working']
   .session-status-dot-inline {
-  display: none;
+  display: block;
 }
 
 .sidebar-reference-layout[data-reference-sidebar='true'] .session-status-dot-anchored {

@@ -78,7 +78,7 @@ const FIXTURE_FILES = {
     2
   )}\n`,
   'tooling/build-remote-gxserver-linux-release.sh': '#!/usr/bin/env bash\n',
-  'tooling/release-ghostex.mjs': '// remote package\n',
+  'tooling/release-shared.mjs': '// remote package\n',
   'tooling/release-gpui/android.sh': '#!/usr/bin/env bash\n',
   'tooling/release-gpui/code-server-component-identity.mjs': '// identity\n',
   'tooling/release-gpui/common.sh': '# manifest writer\n',
@@ -308,25 +308,25 @@ export function sourceRunFromPlan({
 export function componentTagStateFixture() {
   return {
     cef: {
-      componentVersion: '148.4.0-148.0.10',
+      componentVersion: '154.0.26-ge72305f-chromium-154.0.8037.58',
       platforms: {
         'darwin-arm64': {
-          assetName: 'cef-148.4.0-148.0.10-darwin-arm64.tar.gz',
+          assetName: 'cef-154.0.26-ge72305f-chromium-154.0.8037.58-darwin-arm64.tar.gz',
           sha256: fixtureDigest('cef-darwin-arm64'),
           sizeBytes: 10,
         },
         'linux-x64': {
-          assetName: 'cef-148.4.0-148.0.10-linux-x64.tar.gz',
+          assetName: 'cef-154.0.26-ge72305f-chromium-154.0.8037.58-linux-x64.tar.gz',
           sha256: fixtureDigest('cef-linux-x64'),
           sizeBytes: 10,
         },
         'windows-arm64': {
-          assetName: 'cef-148.4.0-148.0.10-windows-arm64.tar.gz',
+          assetName: 'cef-154.0.26-ge72305f-chromium-154.0.8037.58-windows-arm64.tar.gz',
           sha256: fixtureDigest('cef-win-arm64'),
           sizeBytes: 10,
         },
         'windows-x64': {
-          assetName: 'cef-148.4.0-148.0.10-windows-x64.tar.gz',
+          assetName: 'cef-154.0.26-ge72305f-chromium-154.0.8037.58-windows-x64.tar.gz',
           sha256: fixtureDigest('cef-win-x64'),
           sizeBytes: 10,
         },
@@ -335,7 +335,15 @@ export function componentTagStateFixture() {
     'code-server': {
       componentVersion: `390f119a145e-p2-${fixtureDigest('payload')}`,
       platforms: Object.fromEntries(
-        ['darwin-arm64', 'linux-arm64', 'linux-x64', 'windows-arm64', 'windows-x64'].map((platform) => [
+        [
+          'darwin-arm64',
+          'linux-arm64',
+          'linux-x64',
+          'windows-arm64',
+          'windows-native-arm64',
+          'windows-native-x64',
+          'windows-x64',
+        ].map((platform) => [
           platform,
           { assetName: `code-server-x-${platform}.tar.gz`, sha256: fixtureDigest(platform), sizeBytes: 10 },
         ])

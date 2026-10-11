@@ -1,0 +1,225 @@
+//! The shadcn `Button` sizes and variants the Settings management pages use besides the 32px
+//! `SettingButton` of controls.rs: `xs` (24px, 10px sides, 12px icons: the extension card
+//! actions), `sm` (28px, 12px sides: the account and detail-page actions), the default 32px, and
+//! the `secondary` and `destructive` fills, all in the Settings type scale (14px, weight 400).
+use super::super::super::native_modal_kit::*;
+use super::super::palette::SettingsPalette;
+use super::row::{CONTROL_HEIGHT, settings_icon, tooltip_text};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyElement, Context, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+};
+use gpui_component::h_flex;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SizedButtonSize {
+    /// `size='xs'`: 24px tall.
+    Xs,
+    /// `size='sm'`: 28px tall.
+    Sm,
+    /// `size='default'`: 32px tall, the height of the Settings fields and selects.
+    Default,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SizedButtonVariant {
+    Outline,
+    Ghost,
+    /// `variant='default'`: Settings draws it as the quiet bordered button.
+    Default,
+    Secondary,
+    Destructive,
+    /// The stock filled primary (a dialog's confirm button outside the Settings skin).
+    Primary,
+}
+
+/// `bg-secondary` in the Settings skin.
+pub(crate) fn secondary_fill(p: &SettingsPalette) -> gpui::Rgba {
+    if p.glass && !p.light {
+        css_mix(gpui::rgb(0xffffff), 0.06, p.modal.solid_surface)
+    } else if p.light {
+        gpui::rgb(0xf1f1f1)
+    } else {
+        gpui::rgb(0x27272a)
+    }
+}
+
+/// `(background, border, hover background, text)` of a variant.
+pub(crate) fn sized_button_colors(
+    p: &SettingsPalette,
+    variant: SizedButtonVariant,
+) -> (gpui::Hsla, gpui::Hsla, gpui::Rgba, gpui::Rgba) {
+    match variant {
+        SizedButtonVariant::Outline => (
+            if p.light {
+                hsla(p.surface)
+            } else {
+                transparent()
+            },
+            hsla(p.hairline),
+            if p.light {
+                gpui::rgb(0xf1f1f1)
+            } else {
+                css_fade(p.hairline, 0.3)
+            },
+            p.foreground,
+        ),
+        SizedButtonVariant::Default => (
+            transparent(),
+            hsla(p.hairline),
+            p.raised_hover,
+            p.foreground,
+        ),
+        SizedButtonVariant::Ghost => (
+            transparent(),
+            transparent(),
+            if p.light {
+                gpui::rgb(0xf1f1f1)
+            } else {
+                css_fade(gpui::rgb(0x262626), 0.5)
+            },
+            p.foreground,
+        ),
+        SizedButtonVariant::Secondary => {
+            // `bg-secondary text-secondary-foreground`: Settings leaves the stock tokens in place.
+            let fill = secondary_fill(p);
+            let text = if p.light {
+                p.foreground
+            } else {
+                gpui::rgb(0xfafafa)
+            };
+            (hsla(fill), transparent(), css_mix(text, 0.05, fill), text)
+        }
+        SizedButtonVariant::Destructive => {
+            let (rest, hover) = if p.light { (0.10, 0.20) } else { (0.20, 0.30) };
+            (
+                hsla(css_fade(p.destructive, rest)),
+                transparent(),
+                css_fade(p.destructive, hover),
+                p.destructive,
+            )
+        }
+        SizedButtonVariant::Primary => (
+            hsla(p.primary),
+            transparent(),
+            css_fade(p.primary, 0.8),
+            p.modal.primary_foreground,
+        ),
+    }
+}
+
+/// A shadcn button of `size` and `variant`: optional leading and trailing icons (12px at `xs`,
+/// 16px otherwise), half opacity and the `DisabledSettingControlTooltip` reason while disabled.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settings_sized_button<V: 'static>(
+    p: &SettingsPalette,
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    leading_icon: Option<&'static str>,
+    trailing_icon: Option<&'static str>,
+    variant: SizedButtonVariant,
+    size: SizedButtonSize,
+    disabled: bool,
+    disabled_reason: Option<SharedString>,
+    on_click: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let (background, border, hover, text) = sized_button_colors(p, variant);
+    let (height, side, gap, icon_size, line_height) = match size {
+        SizedButtonSize::Xs => (24.0, 10.0, 4.0, 12.0, 18.67),
+        SizedButtonSize::Sm => (28.0, 12.0, 4.0, 16.0, 20.0),
+        SizedButtonSize::Default => (CONTROL_HEIGHT, 12.0, 6.0, 16.0, 20.0),
+    };
+    let icon_side = match size {
+        SizedButtonSize::Xs | SizedButtonSize::Sm => 8.0,
+        SizedButtonSize::Default => 10.0,
+    };
+    let label: SharedString = label.into();
+    h_flex()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .flex_shrink_0()
+        .h(px(height))
+        .px(px(side))
+        .when(leading_icon.is_some(), |this| this.pl(px(icon_side)))
+        .when(trailing_icon.is_some(), |this| this.pr(px(icon_side)))
+        .gap(px(gap))
+        .items_center()
+        .justify_center()
+        .rounded(px(MODAL_RADIUS_CONTROL))
+        .border_1()
+        .border_color(border)
+        .bg(background)
+        .text_size(px(14.0))
+        .line_height(px(line_height))
+        .text_color(hsla(text))
+        .whitespace_nowrap()
+        .when(disabled, |this| this.opacity(0.5))
+        .when_some(disabled_reason.filter(|_| disabled), |this, reason| {
+            this.tooltip(tooltip_text(reason))
+        })
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hsla(hover)))
+                .on_press(cx, move |this, window, cx| {
+                    on_click(this, window, cx);
+                })
+        })
+        .children(leading_icon.map(|icon| settings_icon(icon, icon_size, text)))
+        .child(label)
+        .children(trailing_icon.map(|icon| settings_icon(icon, icon_size, text)))
+        .into_any_element()
+}
+
+/// A square icon button (`icon-xs` 24px with a 12px glyph, `icon-sm` 28px, `icon` 32px) with an
+/// optional tooltip, in any variant.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settings_square_button<V: 'static>(
+    p: &SettingsPalette,
+    id: impl Into<ElementId>,
+    icon: &'static str,
+    icon_color: Option<gpui::Rgba>,
+    variant: SizedButtonVariant,
+    size: f32,
+    tooltip: Option<SharedString>,
+    disabled: bool,
+    disabled_reason: Option<SharedString>,
+    on_click: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let (background, border, hover, text) = sized_button_colors(p, variant);
+    let icon_size = if size <= 24.0 { 12.0 } else { 16.0 };
+    let tip = if disabled {
+        disabled_reason.or(tooltip)
+    } else {
+        tooltip
+    };
+    let id: ElementId = id.into();
+    let a11y_label: SharedString = tip.clone().unwrap_or_else(|| id.to_string().into());
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(a11y_label)
+        .flex_shrink_0()
+        .size(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(MODAL_RADIUS_CONTROL))
+        .border_1()
+        .border_color(border)
+        .bg(background)
+        .when(disabled, |this| this.opacity(0.5))
+        .when_some(tip, |this, tip| this.tooltip(tooltip_text(tip)))
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hsla(hover)))
+                .on_press(cx, move |this, window, cx| {
+                    on_click(this, window, cx);
+                })
+        })
+        .child(settings_icon(icon, icon_size, icon_color.unwrap_or(text)))
+        .into_any_element()
+}

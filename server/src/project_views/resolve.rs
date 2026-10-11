@@ -26,6 +26,7 @@ pub(super) struct Plan {
     pub url: String,
     pub report: Option<(PathBuf, String)>,
     pub timeout: u64,
+    pub owned_output: Option<PathBuf>,
 }
 impl Plan {
     pub fn value(&self) -> Value {
@@ -58,11 +59,15 @@ pub(super) fn resolve(params: &Value) -> Result<Plan> {
         command: String::new(),
         url: String::new(),
         report: None,
+        owned_output: None,
         timeout: source["timeoutSeconds"]
             .as_u64()
             .unwrap_or(60)
             .clamp(5, 600),
     };
+    if text(view, "id") == "storybook" {
+        return super::storybook::resolve(plan);
+    }
     match text(source, "kind") {
         "" | "website" => {
             let destination = text(source, "destination");
@@ -233,10 +238,17 @@ fn github_url(remote: &str) -> Result<String> {
 /// CDXC:Extensions 2026-09-09 WHY:
 /// Ghostex's Storybook config is nested and its package script first generates CSS, so discovery preserves the script entry point and never executes configuration files.
 fn discover_storybook(root: &Path) -> Result<Vec<(PathBuf, String, String)>> {
+    discover_packages(root, scripts)
+}
+
+pub(super) fn discover_packages(
+    root: &Path,
+    select: fn(&Path, &Value, &str) -> Vec<(PathBuf, String, String)>,
+) -> Result<Vec<(PathBuf, String, String)>> {
     let package = read_package(root)?;
     let manager = package_manager(root, &package);
-    let direct = scripts(root, &package, &manager);
-    if !direct.is_empty() {
+    let direct = select(root, &package, &manager);
+    if direct.iter().any(|(_, command, _)| !command.is_empty()) {
         return Ok(direct);
     }
     let workspace_value = &package["workspaces"];
@@ -301,7 +313,7 @@ fn discover_storybook(root: &Path) -> Result<Vec<(PathBuf, String, String)>> {
                 && path.join("package.json").is_file()
             {
                 let child = read_package(&path)?;
-                found.extend(scripts(&path, &child, &manager));
+                found.extend(select(&path, &child, &manager));
             }
             if !patterns.is_empty() {
                 directories.push(path);
@@ -309,7 +321,7 @@ fn discover_storybook(root: &Path) -> Result<Vec<(PathBuf, String, String)>> {
         }
     }
     found.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    Ok(found)
+    Ok(if found.is_empty() { direct } else { found })
 }
 fn read_package(path: &Path) -> Result<Value> {
     let bytes = fs::read(path.join("package.json"))

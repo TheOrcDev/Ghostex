@@ -6,6 +6,9 @@ use crate::app::helpers::*;
 use crate::app::window::*;
 use crate::*;
 
+mod remote_files;
+pub(crate) use remote_files::open_remote_source_file;
+
 pub(crate) struct GpuiResolvedSessionChatFile {
     pub(crate) file_path: PathBuf,
     pub(crate) is_directory: bool,

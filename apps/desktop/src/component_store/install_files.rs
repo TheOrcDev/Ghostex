@@ -1,0 +1,206 @@
+use std::{
+    fs,
+    fs::File,
+    io,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use flate2::read::GzDecoder;
+
+use super::*;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+
+pub(crate) fn unpack_tar_gz(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let file = File::open(archive_path).map_err(|error| {
+        format!(
+            "Could not open verified component archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(destination).map_err(|error| {
+        format!(
+            "Could not unpack verified component archive {}: {error}",
+            archive_path.display()
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn remove_macos_quarantine(path: &Path) -> Result<(), String> {
+    let status = Command::new("/usr/bin/xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(path)
+        .status()
+        .map_err(|error| {
+            format!(
+                "Could not strip macOS quarantine from verified component {}: {error}",
+                path.display()
+            )
+        })?;
+    if !status.success() {
+        return Err(format!(
+            "Could not strip macOS quarantine from verified component {}: xattr exited with {status}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn remove_macos_quarantine(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+pub(crate) fn write_install_marker(
+    path: &Path,
+    name: &str,
+    version: &str,
+    platform: &str,
+    sha256: &str,
+) -> Result<(), String> {
+    let marker = serde_json::json!({
+        "name": name,
+        "version": version,
+        "platform": platform,
+        "sha256": sha256,
+    });
+    fs::write(
+        path.join(".ghostex-component.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&marker).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| format!("Could not write component install marker: {error}"))
+}
+
+pub(crate) fn installed_marker_matches(
+    path: &Path,
+    name: &str,
+    version: &str,
+    platform: &str,
+    expected_sha256: Option<&str>,
+) -> Result<bool, String> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    let marker_path = path.join(".ghostex-component.json");
+    let data = match fs::read_to_string(&marker_path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Could not read component marker {}: {error}",
+                marker_path.display()
+            ));
+        }
+    };
+    let marker = serde_json::from_str::<serde_json::Value>(&data).map_err(|error| {
+        format!(
+            "Malformed component marker {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    Ok(
+        marker.get("name").and_then(serde_json::Value::as_str) == Some(name)
+            && marker.get("version").and_then(serde_json::Value::as_str) == Some(version)
+            && marker.get("platform").and_then(serde_json::Value::as_str) == Some(platform)
+            && marker
+                .get("sha256")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|sha256| {
+                    valid_sha256(sha256)
+                        && expected_sha256.is_none_or(|expected| sha256 == expected)
+                }),
+    )
+}
+
+pub(crate) fn directory_size(path: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    for entry in fs::read_dir(path)
+        .map_err(|error| format!("Could not measure {}: {error}", path.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Could not measure {}: {error}", path.display()))?;
+        let metadata = entry
+            .path()
+            .symlink_metadata()
+            .map_err(|error| format!("Could not measure {}: {error}", entry.path().display()))?;
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path())?);
+        } else {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
+pub(crate) fn prune_temporary_install_artifacts(version_root: &Path) {
+    let Ok(entries) = fs::read_dir(version_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(".download-")
+            && !name.starts_with(".install-")
+            && !name.starts_with(".previous-")
+        {
+            continue;
+        }
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => {
+                let _ = fs::remove_dir_all(path);
+            }
+            Ok(_) => {
+                let _ = fs::remove_file(path);
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+pub(crate) fn prune_other_versions(
+    component_root: &Path,
+    retained_version: &str,
+) -> Result<(), String> {
+    let entries = match fs::read_dir(component_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Could not prune component versions under {}: {error}",
+                component_root.display()
+            ));
+        }
+    };
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Could not inspect component version: {error}"))?;
+        let name = entry.file_name();
+        if name.to_string_lossy() == retained_version
+            || !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+        {
+            continue;
+        }
+        fs::remove_dir_all(entry.path()).map_err(|error| {
+            format!(
+                "Could not prune old component version {}: {error}",
+                entry.path().display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn unique_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}

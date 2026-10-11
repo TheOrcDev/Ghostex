@@ -7,13 +7,18 @@
 // submodule contributes its own `impl GhostexGpuiApp` block, so no glob
 // re-export is needed here (inherent methods resolve on the type regardless
 // of which module defines them). See docs/2026-08-22/repo-restructure/SPLITS.md C1.
+pub(crate) mod agentbox_settings;
 pub(crate) mod cua_gte_and_file_open;
 pub(crate) mod first_run_onboarding;
 pub(crate) mod gxserver_bootstrap;
+#[cfg(target_os = "windows")]
+pub(crate) mod gxserver_launch_context;
 pub(crate) mod gxserver_stop_and_workspace_sleep;
 pub(crate) mod keep_awake_automation;
 pub(crate) mod keep_awake_core;
 pub(crate) mod keep_awake_lid_sleep;
+pub(crate) mod managed_tool_terminal;
 pub(crate) mod notifications_and_portless;
+pub(crate) mod spaceo;
 pub(crate) mod toast_and_status_dispatch;
 pub(crate) mod updater;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { validateMajorMinorReleaseNotes } from './release-ghostex.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { validateMajorMinorReleaseNotes } from './release-shared.mjs';
 
 /*
  CDXC:Release 2026-09-01-12:05:
@@ -19,11 +19,22 @@ import { validateMajorMinorReleaseNotes } from './release-ghostex.mjs';
  CHANGELOG.md: drafting and committing are separate acts, and the operator
  reviews in between.
 
- It is not an oracle and must not be trusted blindly. Major vs Minor here is a
- guess from the conventional-commit type; the real judgement is the operator's.
+ It is not an oracle and must not be trusted blindly. The grouping is a guess
+ from the conventional-commit scope and type; the real judgement, and every
+ theme name, is the operator's.
+
+ CDXC:Release 2026-09-16 DECISION:
+ User: "we add emojis and headings dividing the changelog items into different
+ groups", and each heading "should actually describe what changed in high level
+ with the points under it". So the draft is written in the headed section
+ format validateMajorMinorReleaseNotes accepts for 9.8.0 and later: a bold
+ intro line, one `### <emoji> <theme>` heading per conventional-commit scope
+ (a TODO placeholder name, because a scope is a code area and not a theme),
+ and a `### 🩹 Fixes` heading collecting fix commits, all with flat `- ` items,
+ instead of the `- Major` / `- Minor` bullets it emitted before.
 */
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /* ASCII record/field separators: git subjects and bodies never contain them. */
 const RECORD_SEPARATOR = '\u001e';
@@ -36,8 +47,10 @@ const FIELD_SEPARATOR = '\u001f';
 */
 const internalTypes = new Set(['build', 'chore', 'ci', 'docs', 'refactor', 'release', 'revert', 'style', 'test']);
 const internalScopes = new Set(['ci', 'deps', 'release', 'skills', 'tooling']);
-const majorTypes = new Set(['feat']);
-const minorTypes = new Set(['fix', 'perf']);
+const fixTypes = new Set(['fix']);
+
+const fixesHeading = '### 🩹 Fixes';
+const noScopeHeading = '### 🧭 TODO: name this theme';
 
 /* Co-author trailers written by agent tooling, never a human to credit. */
 const toolAuthorPattern = /(cursor|claude|codex|copilot|github-actions|dependabot|renovate|\[bot\])/i;
@@ -296,16 +309,13 @@ function classify(commit) {
   if (commit.files.length > 0 && commit.files.every((file) => internalPathPattern.test(file))) {
     return { bucket: 'omitted', why: 'touches only docs, skills, tooling, or workflow files' };
   }
-  if (commit.breaking) {
-    return { bucket: 'major', why: 'marked breaking' };
+  if (commit.type && fixTypes.has(commit.type)) {
+    return { bucket: 'fix', why: `${commit.type} commits start under ${fixesHeading}` };
   }
-  if (commit.type && majorTypes.has(commit.type)) {
-    return { bucket: 'major', why: `${commit.type} commits start in Major` };
-  }
-  if (commit.type && minorTypes.has(commit.type)) {
-    return { bucket: 'minor', why: `${commit.type} commits start in Minor` };
-  }
-  return { bucket: 'minor', why: 'unrecognized commit type; parked in Minor for review' };
+  return {
+    bucket: 'change',
+    why: commit.scope ? `grouped under the ${commit.scope} scope theme` : 'no scope; parked under the TODO theme',
+  };
 }
 
 function attributionFor(commit, primaryAuthor) {
@@ -323,7 +333,7 @@ function attributionFor(commit, primaryAuthor) {
   return credits;
 }
 
-/* One physical `  - ` line, because validateMajorMinorReleaseNotes rejects wraps. */
+/* One physical `- ` line at column 0, because validateMajorMinorReleaseNotes rejects wraps and nesting. */
 function renderBullet(commit, primaryAuthor) {
   const scope = commit.scope ? `[${commit.scope}] ` : '';
   const summary = summaryParagraph(commit);
@@ -331,7 +341,7 @@ function renderBullet(commit, primaryAuthor) {
   const credits = attributionFor(commit, primaryAuthor);
   const thanks = credits.length > 0 ? `, thanks to ${credits.map((name) => `@${name}`).join(' and ')}` : '';
   const sentence = `${scope}${commit.headline}.${detail}`.replace(/\s+/g, ' ').trim().replace(/\.+$/, '');
-  return `  - ${sentence}${thanks}. (${commit.shortSha})`;
+  return `- ${sentence}${thanks}. (${commit.shortSha})`;
 }
 
 function todayIso() {
@@ -340,21 +350,37 @@ function todayIso() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+/* The scope-named theme placeholder; the operator replaces it with what actually changed. */
+function scopeHeading(scope) {
+  return scope ? `### 🧭 TODO: name the ${scope} theme` : noScopeHeading;
+}
+
 export function renderChangelogSection({ commits, date, primaryAuthor, version }) {
-  const byScope = (left, right) => (left.scope ?? '~').localeCompare(right.scope ?? '~');
-  const major = commits.filter((commit) => commit.bucket === 'major').sort(byScope);
-  const minor = commits.filter((commit) => commit.bucket === 'minor').sort(byScope);
-  const lines = [`## ${version} - ${date}`, '', '- Major'];
-  if (major.length === 0) {
-    lines.push('  - TODO: no commit was classified as Major. Promote the release headline here before this ships.');
-  } else {
-    lines.push(...major.map((commit) => renderBullet(commit, primaryAuthor)));
+  const lines = [
+    `## ${version} - ${date}`,
+    '',
+    `**Ghostex ${version} is out.** TODO: one paragraph naming the headline changes of this release.`,
+  ];
+  const changes = commits.filter((commit) => commit.bucket === 'change');
+  const scopes = [...new Set(changes.map((commit) => commit.scope ?? ''))].sort((left, right) =>
+    (left || '~').localeCompare(right || '~')
+  );
+  for (const scope of scopes) {
+    const members = changes.filter((commit) => (commit.scope ?? '') === scope);
+    lines.push('', scopeHeading(scope), ...members.map((commit) => renderBullet(commit, primaryAuthor)));
   }
-  lines.push('- Minor');
-  if (minor.length === 0) {
-    lines.push('  - TODO: no commit was classified as Minor. Move a supporting change here before this ships.');
-  } else {
-    lines.push(...minor.map((commit) => renderBullet(commit, primaryAuthor)));
+  const fixes = commits
+    .filter((commit) => commit.bucket === 'fix')
+    .sort((left, right) => (left.scope ?? '~').localeCompare(right.scope ?? '~'));
+  if (fixes.length > 0) {
+    lines.push('', fixesHeading, ...fixes.map((commit) => renderBullet(commit, primaryAuthor)));
+  }
+  if (scopes.length === 0 && fixes.length === 0) {
+    lines.push(
+      '',
+      noScopeHeading,
+      '- TODO: no commit was classified as user-facing. Write the release headline here before this ships.'
+    );
   }
   return lines.join('\n');
 }
@@ -367,11 +393,11 @@ function renderGuidance({ base, commitCount, head, primaryAuthor, version }) {
     'THIS IS A FIRST DRAFT, NOT AN ORACLE. Do not paste it unread.',
     '  - Every bullet is a commit subject plus its body, not release prose. Rewrite',
     '    each one the way a user would describe it, and merge the duplicates.',
-    '  - Major vs Minor is guessed from the conventional-commit type (feat starts in',
-    '    Major, fix and perf start in Minor). That judgement is yours, not the',
-    "    script's - move bullets between the two sections freely.",
-    '  - A "- GPUI" section may follow Minor for cross-platform app work. This draft',
-    '    never invents one; add it by hand when the release warrants it.',
+    '  - Headings are grouped by conventional-commit scope and named TODO on purpose:',
+    '    a scope is a code area, and each heading must say what changed for the user',
+    '    (one emoji, then the theme). Rename, merge, and reorder them freely; fix',
+    '    commits start under "### 🩹 Fixes".',
+    '  - Fill in the bold intro line with the headline changes of the release.',
     '  - Verify every "thanks to @handle". The handle comes from the commit author',
     '    name, which is not always the GitHub login.',
     '  - Confirm every entry under "omitted - confirm" before accepting the exclusion.',

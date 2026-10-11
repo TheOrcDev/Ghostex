@@ -133,6 +133,15 @@ pub fn dispatch_agent_endpoint(
             })?;
             switch_draft_agent(repository, db, params, context)?
         }
+        // Where a draft runs (this computer or an agentbox box): the chat composer's Run on row.
+        "/api/draftRunLocation" => {
+            let context = zmx_context.ok_or_else(|| {
+                AgentEndpointError::DependencyUnavailable(
+                    "Cannot move a draft without gxserver zmx context.".to_string(),
+                )
+            })?;
+            draft_run_location(repository, db, home_dir, params, context)?
+        }
         /*
         CDXC:AgentProviders 2026-09-03:
         Prompted-session account switching. Only a row rewrite: the client's

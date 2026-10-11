@@ -53,9 +53,14 @@ pub fn run_resume_lookup(args: Vec<String>) -> Result<()> {
     }
 }
 
+/// CDXC:AgentProviders 2026-09-18 WHY:
+/// HOME is unset on Windows, so this returned "." and the account usage-history scan looked for transcripts under the process working directory.
 pub(crate) fn home_dir() -> PathBuf {
-    env::var_os("HOME")
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(env::var_os)
         .map(PathBuf::from)
+        .find(|path| path.is_absolute())
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -81,6 +86,7 @@ fn normalized_path(value: &str) -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("/"))
             .join(expanded)
     };
+    let mut prefix: Option<std::ffi::OsString> = None;
     let mut parts: Vec<std::ffi::OsString> = Vec::new();
     for component in absolute.components() {
         match component {
@@ -89,18 +95,23 @@ fn normalized_path(value: &str) -> PathBuf {
                 parts.pop();
             }
             Component::Normal(part) => parts.push(part.to_os_string()),
-            Component::RootDir | Component::Prefix(_) => {}
+            // The drive or UNC prefix is part of the identity: dropping it made `C:\project` and `D:\project` the same folder.
+            Component::Prefix(value) => prefix = Some(value.as_os_str().to_os_string()),
+            Component::RootDir => {}
         }
     }
-    let mut result = PathBuf::from("/");
+    let mut result = match prefix {
+        Some(prefix) => {
+            let mut root = prefix;
+            root.push(std::path::MAIN_SEPARATOR_STR);
+            PathBuf::from(root)
+        }
+        None => PathBuf::from("/"),
+    };
     for part in parts {
         result.push(part);
     }
     result
-}
-
-fn path_contains(parent: &Path, child: &Path) -> bool {
-    child != parent && child.starts_with(parent)
 }
 
 fn normalize_whitespace(value: &str) -> String {
@@ -244,6 +255,11 @@ fn scan_claude_transcript(
                 names.push(custom_title.to_string());
             }
         }
+        if item_type == "ai-title" {
+            if let Some(ai_title) = item.get("aiTitle").and_then(Value::as_str) {
+                names.push(ai_title.to_string());
+            }
+        }
         if item_type == "agent-name" {
             if let Some(agent_name) = item.get("agentName").and_then(Value::as_str) {
                 names.push(agent_name.to_string());
@@ -255,8 +271,14 @@ fn scan_claude_transcript(
         if let Some(summary) = item.get("summary").and_then(Value::as_str) {
             summaries.push(summary.to_string());
         }
-        if item_type == "user" && first_user.is_empty() {
-            first_user = text_from_message(item.get("message"));
+        if item_type == "user"
+            && first_user.is_empty()
+            && item.get("isMeta").and_then(Value::as_bool) != Some(true)
+        {
+            let text = text_from_message(item.get("message"));
+            if !is_claude_local_command_text(&text) {
+                first_user = text;
+            }
         }
     }
     let project_score = if cwd_values
@@ -277,33 +299,57 @@ fn scan_claude_transcript(
         .filter(|value| !value.is_empty())
         .collect();
     let normalized_first_user = normalize_whitespace(&first_user);
-    let mut score = project_score;
-    if !title.is_empty() {
-        if normalized_names.iter().any(|value| value == title) {
-            score += 8;
-        } else if normalized_names
-            .iter()
-            .any(|value| value.contains(title) || title.contains(value.as_str()))
-        {
-            score += 4;
-        }
-    }
-    if !first_prompt.is_empty() && !normalized_first_user.is_empty() {
-        if normalized_first_user == first_prompt {
-            score += 10;
-        } else if first_prompt.contains(&normalized_first_user)
-            || normalized_first_user.contains(first_prompt)
-        {
-            score += 5;
-        }
-    }
-    (score > 0).then_some(ClaudeMatch {
+    let title_score = if title.is_empty() {
+        0
+    } else if normalized_names.iter().any(|value| value == title) {
+        8
+    } else if normalized_names
+        .iter()
+        .any(|value| substring_is_evidence(value, title))
+    {
+        4
+    } else {
+        0
+    };
+    let first_prompt_score = if first_prompt.is_empty() || normalized_first_user.is_empty() {
+        0
+    } else if normalized_first_user == first_prompt {
+        10
+    } else if substring_is_evidence(&normalized_first_user, first_prompt) {
+        5
+    } else {
+        0
+    };
+    /*
+    CDXC:AgentProviders 2026-09-20 WHY:
+    The project score alone used to be enough to return a transcript, so "find the conversation with this title" became "hand back the newest conversation near this folder" whenever the title matched nothing, and a wake whose saved conversation id no longer existed silently opened an unrelated chat instead of failing. Only a name or a first prompt identifies a conversation; the project is a filter, never the evidence.
+    */
+    (title_score > 0 || first_prompt_score > 0).then(|| ClaudeMatch {
         latest,
-        score,
+        score: project_score + title_score + first_prompt_score,
         session_id,
     })
 }
 
+/// CDXC:AgentProviders 2026-09-24 WHY:
+/// Claude records slash commands and their output as `user` lines (`<command-name>`, `<local-command-stdout>`, the `isMeta` caveat) before the first typed prompt, so taking the first `user` line compared the saved first prompt against `/effort` output and never matched. Claude's automatic conversation title is stored only as `ai-title`, which is the title Ghostex shows for untitled sessions, so the title lookup reads it too.
+fn is_claude_local_command_text(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<command-name>")
+        || text.starts_with("<command-message>")
+        || text.starts_with("<local-command-")
+}
+
+/// CDXC:AgentProviders 2026-09-20 WHY:
+/// A substring match with no length floor let noise win: a session named "y" is contained in almost every title and a first message of "hi" in almost every prompt, so those conversations outscored real matches machine-wide. Require the shorter side to be long enough to identify a conversation on its own; exact equality still matches at any length.
+fn substring_is_evidence(stored: &str, requested: &str) -> bool {
+    const MINIMUM_SUBSTRING_MATCH_CHARACTERS: usize = 12;
+    stored.chars().count().min(requested.chars().count()) >= MINIMUM_SUBSTRING_MATCH_CHARACTERS
+        && (stored.contains(requested) || requested.contains(stored))
+}
+
+/// CDXC:AgentProviders 2026-09-20 WHY:
+/// This used to accept a transcript whose cwd merely contained the project path or sat inside it, so a session opened at the home directory matched every Claude conversation on the machine and a session in any subfolder matched every home-directory conversation. A conversation belongs to the pane it was launched in, so the recorded cwd has to be that directory.
 fn claude_project_matches(project_path: &str, cwd: &str) -> bool {
     if project_path.is_empty() {
         return true;
@@ -314,9 +360,13 @@ fn claude_project_matches(project_path: &str, cwd: &str) -> bool {
     }
     let project = normalized_path(project_path);
     let candidate = normalized_path(cwd_text);
-    candidate == project
-        || path_contains(&project, &candidate)
-        || path_contains(&candidate, &project)
+    if candidate == project {
+        return true;
+    }
+    match (fs::canonicalize(&candidate), fs::canonicalize(&project)) {
+        (Ok(candidate), Ok(project)) => candidate == project,
+        _ => false,
+    }
 }
 
 pub(crate) fn text_from_message(message: Option<&Value>) -> String {
@@ -735,10 +785,11 @@ mod tests {
     }
 
     #[test]
-    fn claude_project_matching_accepts_nested_paths() {
+    fn claude_project_matching_requires_the_same_directory() {
         assert!(claude_project_matches("/tmp/project", "/tmp/project"));
-        assert!(claude_project_matches("/tmp/project", "/tmp/project/sub"));
-        assert!(claude_project_matches("/tmp/project/sub", "/tmp/project"));
+        assert!(claude_project_matches("/tmp/project", "/tmp/project/./"));
+        assert!(!claude_project_matches("/tmp/project", "/tmp/project/sub"));
+        assert!(!claude_project_matches("/tmp/project/sub", "/tmp/project"));
         assert!(!claude_project_matches("/tmp/project", "/tmp/other"));
         assert!(claude_project_matches("", "anything"));
     }

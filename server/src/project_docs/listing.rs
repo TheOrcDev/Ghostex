@@ -59,7 +59,7 @@ pub(super) fn list_directory(
                 .find(|count| {
                     path_is_scan_root(&parts[..*count].join("/"), context.additional_docs_folders)
                 })
-                .ok_or_else(|| "Select a Docs folder to list.".to_string())?;
+                .ok_or_else(|| "Select a folder to list.".to_string())?;
             append_file_entries(
                 &mut entries,
                 path.root,

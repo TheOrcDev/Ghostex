@@ -56,6 +56,24 @@ pub(crate) fn schedule_presentation_project_delta(
     Ok(())
 }
 
+/// CDXC:Projects 2026-09-27 WHY:
+/// `ghostex create-agent --project-id` started a live agent inside a project parked in Recent Projects, and no sidebar, session list or CLI verb could then show, focus or close it. A new session brings its parked project back to the sidebar first, as resuming an external conversation already did.
+pub(crate) fn restore_parked_project_for_new_session(
+    state: &AppState,
+    db: &rusqlite::Connection,
+    repository: &DomainRepository<'_>,
+    project_id: &str,
+) -> std::result::Result<(), DomainStateError> {
+    let parked = repository.get_project(project_id)?.is_some_and(|project| {
+        project.get("isRecentProject").and_then(Value::as_bool) == Some(true)
+    });
+    if !parked {
+        return Ok(());
+    }
+    repository.restore_recent_project(project_id)?;
+    schedule_presentation_project_delta(state, db, repository, project_id, "projectUpdated")
+}
+
 pub(crate) fn schedule_presentation_session_delta(
     state: &AppState,
     db: &rusqlite::Connection,
@@ -124,9 +142,11 @@ revision so revision order stays identical to broadcast order.
 pub(crate) fn broadcast_pruned_sidebar_spaces(
     state: &AppState,
     db: &rusqlite::Connection,
+    previous_collections: &Value,
     collections: &Value,
 ) -> std::result::Result<(), DomainStateError> {
-    let Some(spaces) = prune_sidebar_spaces_for_collections(db, collections)? else {
+    let Some(spaces) = prune_sidebar_spaces_for_collections(db, previous_collections, collections)?
+    else {
         return Ok(());
     };
     let revision = increment_presentation_revision(db)?;
@@ -135,6 +155,7 @@ pub(crate) fn broadcast_pruned_sidebar_spaces(
         "revision": revision,
         "serverId": state.metadata.server_id.clone(),
         "sidebarSpaces": spaces,
+        "sidebarSpacesEnabled": crate::sidebar_spaces::read_sidebar_spaces_enabled(&state.paths),
         "type": "sidebarSpacesChanged",
     }));
     Ok(())
@@ -157,12 +178,14 @@ pub(crate) fn read_presentation_snapshot_in_sequence(
     */
     let auto_settle_after_days = session_lifecycle::read_sweep_auto_settle_after_days(&state.paths);
     let sidebar_v2_selected = session_lifecycle::read_sidebar_v2_selected(&state.paths);
+    let sidebar_spaces_enabled = crate::sidebar_spaces::read_sidebar_spaces_enabled(&state.paths);
     let _event_sequence = lock_presentation_event_sequence(state)?;
     read_presentation_snapshot(
         db,
         server_id,
         auto_settle_after_days,
         sidebar_v2_selected,
+        sidebar_spaces_enabled,
         sessions,
     )
 }
@@ -338,8 +361,13 @@ pub(crate) async fn run_zmx_title_observer(
             }
         };
         let mut command = Command::new(&zmx.executable_path);
+        crate::platform::process::NoConsoleWindow::no_console_window(&mut command);
+        /*
+        CDXC:SessionTitles 2026-09-28 WHY:
+        wmx finds a session's endpoint under WMX_DIR, which every other wmx call gets from scripts_windows. Spawned without it, watch-title exited at once, so no native Windows session ever took its agent's terminal title (Claude sessions stayed "Claude Session") or its title-derived status.
+        */
         #[cfg(windows)]
-        command.creation_flags(0x0800_0000);
+        command.env("WMX_DIR", crate::zmx::session_directory());
         let mut child = match command
             .args(["watch-title", zmx_name.as_str()])
             .stdout(std::process::Stdio::piped())
@@ -405,15 +433,37 @@ pub(crate) async fn run_zmx_title_observer(
                 Err(_) => break,
             }
         }
-        let _ = child.wait().await;
-        if observed_output
-            || watch_started_at.elapsed() >= ZMX_TITLE_OBSERVER_HEALTHY_WATCH_DURATION
-        {
-            failure_count = 0;
+        let status = child.wait().await.ok();
+        if zmx_title_watcher_failed_to_load(status) {
+            failure_count = ZMX_TITLE_OBSERVER_RETRY_DELAYS_MS.len();
+        } else {
+            if observed_output
+                || watch_started_at.elapsed() >= ZMX_TITLE_OBSERVER_HEALTHY_WATCH_DURATION
+            {
+                failure_count = 0;
+            }
+            failure_count += 1;
         }
-        failure_count += 1;
         delay_zmx_title_observer_retry(failure_count).await;
     }
+}
+
+const ZMX_TITLE_OBSERVER_RETRY_DELAYS_MS: [u64; 6] = [250, 500, 1_000, 2_000, 5_000, 60_000];
+
+/// CDXC:SessionTitles 2026-10-06 WHY:
+/// While Windows shuts down, every watcher exits and its replacement can no longer load (0xc0000142, user32 cannot reach the closing desktop). That is not a watch that ended, so the 250 ms retry ladder only kept starting processes that could not run. A watcher Windows could not load waits the longest retry delay instead.
+fn zmx_title_watcher_failed_to_load(status: Option<std::process::ExitStatus>) -> bool {
+    const LOADER_FAILURES: [u32; 5] = [
+        0xC000_0142, // STATUS_DLL_INIT_FAILED
+        0xC000_0135, // STATUS_DLL_NOT_FOUND
+        0xC000_0139, // STATUS_ENTRYPOINT_NOT_FOUND
+        0xC000_007B, // STATUS_INVALID_IMAGE_FORMAT
+        0xC000_0145, // STATUS_APP_INIT_FAILURE
+    ];
+    cfg!(windows)
+        && status
+            .and_then(|status| status.code())
+            .is_some_and(|code| LOADER_FAILURES.contains(&(code as u32)))
 }
 
 pub(crate) async fn delay_zmx_title_observer_retry(failure_count: usize) {
@@ -423,9 +473,13 @@ pub(crate) async fn delay_zmx_title_observer_retry(failure_count: usize) {
     a fresh fast-retry cycle for the same dead session. Cap the backoff and
     keep waiting instead.
     */
-    const DELAYS_MS: [u64; 6] = [250, 500, 1_000, 2_000, 5_000, 60_000];
-    let delay_index = failure_count.saturating_sub(1).min(DELAYS_MS.len() - 1);
-    tokio::time::sleep(Duration::from_millis(DELAYS_MS[delay_index])).await;
+    let delay_index = failure_count
+        .saturating_sub(1)
+        .min(ZMX_TITLE_OBSERVER_RETRY_DELAYS_MS.len() - 1);
+    tokio::time::sleep(Duration::from_millis(
+        ZMX_TITLE_OBSERVER_RETRY_DELAYS_MS[delay_index],
+    ))
+    .await;
 }
 
 pub(crate) fn ingest_zmx_title_observation(

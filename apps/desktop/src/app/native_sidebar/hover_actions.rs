@@ -1,0 +1,126 @@
+use super::{
+    appearance::SidebarAppearance,
+    model::{NativeSidebarGroup, NativeSidebarSession},
+};
+use crate::{GhostexGpuiApp, app::helpers::*};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+    div, px,
+};
+use gpui_component::{
+    h_flex,
+    tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement},
+};
+use serde_json::{Value, json};
+
+impl GhostexGpuiApp {
+    pub(crate) fn render_native_session_hover_actions(
+        &self,
+        group: &NativeSidebarGroup,
+        session: &NativeSidebarSession,
+        appearance: &SidebarAppearance,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let id = session.session_id.clone();
+        let scale = appearance.scale;
+        let expanded = group.hover_actions_expanded;
+        let chevron = session.details.get("hoverChevron").and_then(Value::as_bool) == Some(true);
+        let before = session.details.get("hoverBefore").and_then(Value::as_array);
+        let after = session.details.get("hoverAfter").and_then(Value::as_array);
+        let mut actions = Vec::new();
+        if expanded || !chevron {
+            actions.extend(before.into_iter().flatten().cloned());
+        }
+        if chevron && before.is_some_and(|actions| !actions.is_empty()) {
+            actions.push(json!({ "label": if expanded { "Collapse actions" } else { "Expand actions" }, "icon": if expanded { "chevron-right" } else { "chevron-left" }, "expand": true }));
+        }
+        actions.extend(after.into_iter().flatten().cloned());
+        h_flex()
+            .id(format!("native-sidebar-hover-actions-{id}"))
+            .flex_shrink_0()
+            .h_full()
+            .gap(px(2.0 * scale))
+            // CDXC:Sidebar 2026-09-21 DECISION: User: "make pointer over an inner button of the session also remove the tooltip". The title's tooltip was anchored to the title's width before these buttons appeared and took part of it, so the pointer reaching them does not read as leaving the title; close it here.
+            .on_hover(|hovered, window, cx| {
+                if *hovered {
+                    gpui_component::Root::hide_tooltip(window, cx);
+                }
+            })
+            .children(actions.into_iter().enumerate().map(|(index, item)| {
+                let label = item["label"].as_str().unwrap_or("").to_owned();
+                let command = item.get("command").cloned();
+                let menu = item.get("children").cloned();
+                let expand = item["expand"].as_bool() == Some(true);
+                let storage_id = group.storage_id.clone();
+                div()
+                    .id(format!("native-sidebar-hover-{id}-{index}"))
+                    .role(gpui::Role::Button)
+                    .aria_label(label.clone())
+                    .size(px(20.0 * scale))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0 * scale))
+                    .cursor_pointer()
+                    // On light-mode glass the buttons are white washes like the selected row.
+                    .when(appearance.light, |item| {
+                        item.bg(if appearance.glass {
+                            gpui::Hsla::from(gpui::rgb(0xffffff)).opacity(0.55)
+                        } else {
+                            gpui::Hsla::from(gpui::rgb(0xf4f4f5))
+                        })
+                    })
+                    .hover(|item| {
+                        item.bg(if appearance.light && appearance.glass {
+                            gpui::Hsla::from(gpui::rgb(0xffffff)).opacity(0.85)
+                        } else if appearance.light {
+                            gpui::Hsla::from(gpui::rgb(0xe4e4e7))
+                        } else {
+                            appearance.hover
+                        })
+                    })
+                    .child(
+                        gpui::svg()
+                            .path(gpui_sidebar_command_icon_asset_path(item["icon"].as_str()))
+                            .size(px(14.0 * scale))
+                            .text_color(appearance.muted),
+                    )
+                    .when(
+                        self.native_sidebar.pointer_inside
+                            && self.native_sidebar.menu.is_none()
+                            && !cx.has_active_drag(),
+                        |row| {
+                            // CDXC:Tooltips 2026-09-15 DECISION: User: the small buttons inside a session card must not show their tooltip instantly; they wait as long as the card's own title tooltip does.
+                            row.managed_discrete_tooltip_with_placement(
+                                ManagedTooltipPlacement::BelowLeft,
+                                appearance.tooltip_delay,
+                                move |window, cx| titlebar_tooltip(label.clone(), window, cx),
+                            )
+                        },
+                    )
+                    .on_click(
+                        cx.listener(move |app, event: &gpui::ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            if expand {
+                                app.dispatch_native_sidebar_ui(
+                                    json!({"type": "toggleHoverActions", "groupId": storage_id}),
+                                    cx,
+                                );
+                            } else if let Some(menu) = &menu {
+                                Self::show_native_sidebar_menu(
+                                    menu,
+                                    event.position(),
+                                    scale,
+                                    window,
+                                    cx,
+                                );
+                            } else if let Some(command) = &command {
+                                app.dispatch_native_sidebar_ui(command.clone(), cx);
+                            }
+                        }),
+                    )
+            }))
+            .into_any_element()
+    }
+}

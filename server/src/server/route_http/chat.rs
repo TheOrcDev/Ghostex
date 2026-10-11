@@ -1,0 +1,229 @@
+//! Session chat routes: reading the chat, sending, attachments and images, prompts, interrupts, rewind, model selection, drafts and the queue, the terminal tail, and transcript export.
+
+use serde_json::Value;
+
+use crate::{
+    domain::{read_project_id, read_session_id},
+    session_chat_files::{
+        handle_read_session_chat_files_http, handle_read_session_chat_image_http,
+        handle_save_session_chat_attachment_http, handle_save_session_chat_image_http,
+    },
+    session_chat_queue_runtime::handle_session_chat_queue_http,
+    session_chat_read::handle_read_session_chat_http,
+    session_chat_send::{
+        handle_answer_session_chat_prompt_http, handle_handoff_session_chat_draft_http,
+        handle_interrupt_session_chat_http, handle_replace_session_chat_draft_http,
+        handle_send_session_chat_message_http,
+    },
+    session_chat_skills::handle_read_session_chat_skills_http,
+    session_transcript_export::handle_export_session_transcript_http,
+    session_transcript_size::handle_read_session_transcript_sizes_http,
+};
+
+use super::*;
+
+pub(super) async fn route_chat_http(
+    request: RouteHttpRequest,
+) -> Result<RoutedResponse, RouteHttpRequest> {
+    let RouteHttpRequest {
+        state,
+        endpoint,
+        request_id,
+        body_json,
+        token_extension_id,
+    } = request;
+    Ok(match endpoint.path.as_str() {
+        "/api/readSessionChat" => {
+            handle_read_session_chat_http(&state, endpoint.path, request_id, &body_json).await
+        }
+        "/api/readSessionChatSkills" => {
+            handle_read_session_chat_skills_http(&state, endpoint.path, request_id, &body_json)
+                .await
+        }
+        "/api/readSessionChatFiles" => {
+            handle_read_session_chat_files_http(&state, endpoint.path, request_id, &body_json).await
+        }
+        "/api/sendSessionChatMessage" => {
+            let mut response = handle_send_session_chat_message_http(
+                &state,
+                endpoint.path,
+                request_id.clone(),
+                &body_json,
+            )
+            .await;
+            crate::session_chat_send_diagnostics::record_response(
+                &state,
+                &request_id,
+                &body_json,
+                &mut response,
+            )
+            .await;
+            response
+        }
+        "/api/saveSessionChatImage" => {
+            handle_save_session_chat_image_http(&state, endpoint.path, request_id, &body_json)
+        }
+        "/api/saveSessionChatAttachment" => {
+            handle_save_session_chat_attachment_http(&state, endpoint.path, request_id, &body_json)
+        }
+        "/api/readSessionChatImage" => {
+            handle_read_session_chat_image_http(&state, endpoint.path, request_id, &body_json)
+        }
+        "/api/answerSessionChatPrompt" => {
+            crate::session_chat_send_requests::send_once(
+                &state,
+                endpoint.path,
+                request_id,
+                &body_json,
+                |state, endpoint_path, request_id, body| async move {
+                    handle_answer_session_chat_prompt_http(&state, endpoint_path, request_id, &body)
+                        .await
+                },
+            )
+            .await
+        }
+        "/api/interruptSessionChat" => {
+            handle_interrupt_session_chat_http(&state, endpoint.path, request_id, &body_json).await
+        }
+        /*
+        CDXC:SessionChat 2026-09-02:
+        Held open for the whole drive rather than queued-and-acknowledged: the
+        answer a caller needs is whether Claude Code ACCEPTED the rewind, and
+        that is only knowable once the driver has watched the dialog close.
+        */
+        "/api/rewindSessionChat" => {
+            crate::session_chat_rewind::handle_rewind_session_chat_http(
+                &state,
+                endpoint.path,
+                request_id,
+                &body_json,
+            )
+            .await
+        }
+        "/api/selectSessionChatModel" => {
+            crate::session_chat_codex_picker::handle_select_session_chat_model_http(
+                &state,
+                endpoint.path,
+                request_id,
+                &body_json,
+            )
+            .await
+        }
+        "/api/handoffSessionChatDraft" => {
+            handle_handoff_session_chat_draft_http(&state, endpoint.path, request_id, &body_json)
+                .await
+        }
+        "/api/replaceSessionChatDraft" => {
+            handle_replace_session_chat_draft_http(&state, endpoint.path, request_id, &body_json)
+                .await
+        }
+        "/api/claimSessionChatLaunchDraft" => handle_claim_session_chat_launch_draft_http(
+            &state,
+            endpoint.path,
+            request_id,
+            &body_json,
+        ),
+        "/api/readSessionChatQueue"
+        | "/api/queueSessionChatPrompt"
+        | "/api/updateSessionChatQueuedPrompt"
+        | "/api/removeSessionChatQueuedPrompt"
+        | "/api/reorderSessionChatQueue"
+        | "/api/sendSessionChatQueuedPrompt"
+        | "/api/setSessionChatDraft"
+        | "/api/acknowledgeSessionChatDraftHandoff" => {
+            // A queued prompt is a send too: a repeated `sendRequestId` must not queue it twice.
+            let mut response = if endpoint.path == "/api/queueSessionChatPrompt" {
+                let queue_state = state.clone();
+                crate::session_chat_send_requests::send_once(
+                    &state,
+                    endpoint.path,
+                    request_id.clone(),
+                    &body_json,
+                    move |_, endpoint_path, request_id, body| async move {
+                        handle_session_chat_queue_http(
+                            &queue_state,
+                            endpoint_path,
+                            request_id,
+                            &body,
+                        )
+                        .await
+                    },
+                )
+                .await
+            } else {
+                handle_session_chat_queue_http(
+                    &state,
+                    endpoint.path,
+                    request_id.clone(),
+                    &body_json,
+                )
+                .await
+            };
+            crate::session_chat_send_diagnostics::record_response(
+                &state,
+                &request_id,
+                &body_json,
+                &mut response,
+            )
+            .await;
+            response
+        }
+        // CDXC:Drafts 2026-08-28: the boot-time draft-cache
+        // reconcile read; see list_session_chat_drafts_value.
+        "/api/listSessionChatDrafts" => handle_domain_http(
+            &state,
+            endpoint.path,
+            request_id,
+            &body_json,
+            |_repository, db, _params, _| {
+                crate::session_chat_queue::list_session_chat_drafts_value(db)
+            },
+        ),
+        /*
+        CDXC:SessionChat 2026-08-26:
+        The evidence read behind a `composerNotReady` refusal. Domain-shaped
+        because everything it needs is one session row plus one screen capture,
+        and the capture is a direct socket read measured in single-digit
+        milliseconds — the same one every screen-state reader already takes.
+        */
+        "/api/readSessionTerminalTail" => handle_domain_http(
+            &state,
+            endpoint.path,
+            request_id,
+            &body_json,
+            |repository, _db, params, _| {
+                crate::session_chat_composer::read_session_terminal_tail(
+                    repository,
+                    &read_project_id(params)?,
+                    &read_session_id(params)?,
+                    params.get("agentId").and_then(Value::as_str),
+                )
+            },
+        ),
+        "/api/exportSessionTranscript" => {
+            handle_export_session_transcript_http(&state, endpoint.path, request_id, &body_json)
+                .await
+        }
+        "/api/readSessionTranscriptSizes" => {
+            handle_read_session_transcript_sizes_http(&state, endpoint.path, request_id, &body_json)
+                .await
+        }
+        crate::visual_pages::PUBLISH_VISUAL_PAGE_ENDPOINT => {
+            crate::visual_pages::handle_publish_visual_page_http(
+                &state,
+                endpoint.path,
+                request_id,
+                &body_json,
+            )
+        }
+        _ => {
+            return Err(RouteHttpRequest {
+                state,
+                endpoint,
+                request_id,
+                body_json,
+                token_extension_id,
+            })
+        }
+    })
+}

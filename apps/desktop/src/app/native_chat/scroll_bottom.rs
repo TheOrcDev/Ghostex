@@ -1,0 +1,401 @@
+use super::{appearance::ChatAppearance, state::NativeChatView};
+use crate::app::hotkeys::{
+    GPUI_DEFAULT_GHOSTEX_HOTKEYS, gpui_configured_hotkey_label, gpui_keystroke_from_shared_hotkey,
+    gpui_migrated_hotkey_for_action, gpui_platform_hotkey_for_action,
+};
+use crate::app::native_chat::cursor::ChatCursor as _;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AnyElement, App, Context, EntityInputHandler as _, Focusable as _, FontWeight,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement, StatefulInteractiveElement, Styled,
+    Window, div, px,
+};
+use gpui_component::tooltip::{ManagedTooltipExt as _, ManagedTooltipPlacement};
+use serde::Deserialize;
+use std::{collections::HashSet, sync::LazyLock};
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrollBottom {
+    label: String,
+    edge_threshold: f32,
+    height: f32,
+    font_size: f32,
+    padding_x: f32,
+    bottom: f32,
+    error_tone: ErrorTone,
+}
+
+#[derive(Deserialize)]
+struct ErrorTone {
+    dark: ToneColors,
+    light: ToneColors,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToneColors {
+    background: String,
+    border: String,
+    border_alpha: f32,
+    text: String,
+}
+
+static SPEC: LazyLock<ScrollBottom> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../../../packages/gx-chat-core/visual/scroll-bottom.json"
+    ))
+    .expect("shared scroll button appearance")
+});
+
+pub(super) fn label() -> &'static str {
+    &SPEC.label
+}
+
+pub(super) fn font_size() -> f32 {
+    SPEC.font_size
+}
+
+/// CDXC:SessionChat 2026-09-29 DECISION:
+/// User: "remove the hotkey shown for the scroll to bottom indicator in the gpui app on desktop but show it in the tooltip by itself when i hover on it." The pill reads only "Scroll to bottom"; hovering it shows the configured shortcut alone, above the pill so it never covers the composer.
+pub(super) const TOOLTIP_PLACEMENT: ManagedTooltipPlacement =
+    ManagedTooltipPlacement::Preferred(gpui_component::Placement::Top);
+
+/// The configured shortcut's label, or `None` when the action has no hotkey.
+pub(super) fn shortcut_label() -> Option<String> {
+    gpui_configured_hotkey_label("scrollChatToBottom").filter(|label| !label.is_empty())
+}
+
+pub(super) fn shortcut_tooltip(key: String, window: &mut Window, cx: &mut App) -> gpui::AnyView {
+    gpui_component::tooltip::Tooltip::new(key).build(window, cx)
+}
+
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(super) struct ScrollChatToBottom {
+    shortcut: String,
+}
+
+#[derive(Default)]
+struct RegisteredShortcuts(HashSet<String>);
+impl gpui::Global for RegisteredShortcuts {}
+
+fn shortcut() -> Option<String> {
+    let action = "scrollChatToBottom";
+    let (_, default) = GPUI_DEFAULT_GHOSTEX_HOTKEYS
+        .iter()
+        .find(|(id, _)| *id == action)?;
+    let settings = crate::shared_settings::shared_sidebar_settings_snapshot();
+    let key = settings
+        .object()
+        .get("hotkeys")
+        .and_then(|hotkeys| hotkeys.get(action))
+        .and_then(serde_json::Value::as_str);
+    let key = gpui_migrated_hotkey_for_action(action, key.unwrap_or(default), default);
+    gpui_keystroke_from_shared_hotkey(gpui_platform_hotkey_for_action(action, key))
+}
+
+pub(super) fn register(cx: &mut App) {
+    let Some(shortcut) = shortcut() else { return };
+    if !cx.has_global::<RegisteredShortcuts>() {
+        cx.set_global(RegisteredShortcuts::default());
+    }
+    if cx
+        .global_mut::<RegisteredShortcuts>()
+        .0
+        .insert(shortcut.clone())
+    {
+        // Bound in the focused field's context too, the way search and zoom are: a binding on
+        // `NativeChat` alone loses by depth to any binding of the same chord on the chat box.
+        cx.bind_keys(["NativeChat", "NativeChat > Input"].map(|context| {
+            KeyBinding::new(
+                &shortcut,
+                ScrollChatToBottom {
+                    shortcut: shortcut.clone(),
+                },
+                Some(context),
+            )
+        }));
+    }
+}
+
+impl NativeChatView {
+    pub(super) fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.list.set_follow_mode(gpui::FollowMode::Tail);
+        self.invoke(serde_json::json!({"type":"composerExpand"}), cx);
+        cx.notify();
+    }
+
+    pub(super) fn scroll_bottom_action(
+        &mut self,
+        action: &ScrollChatToBottom,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if shortcut().as_deref() != Some(action.shortcut.as_str()) {
+            cx.propagate();
+            return;
+        }
+        for input in self
+            .input
+            .iter()
+            .chain(self.answer_input.iter().map(|(_, input)| input))
+            .chain(self.async_answer_input.iter().map(|(_, input)| input))
+        {
+            if input.read(cx).focus_handle(cx).is_focused(window)
+                && input.update(cx, |input, cx| {
+                    input.marked_text_range(window, cx).is_some()
+                })
+            {
+                cx.propagate();
+                return;
+            }
+        }
+        if self.composer_held_key.as_deref() != Some("scroll-to-bottom") {
+            self.composer_held_key = Some("scroll-to-bottom".into());
+            self.jump_to_bottom(cx);
+        }
+        cx.stop_propagation();
+        window.prevent_default();
+    }
+
+    /// The toast that takes the pill's place: "Press Escape again to interrupt" while a first Escape
+    /// waits, then the red "Agent was interrupted" (`interrupt` in
+    /// `packages/gx-chat-core/src/composer/send.rs`).
+    ///
+    /// CDXC:SessionChat 2026-10-01 DECISION:
+    /// User: the Escape toast and the scroll-to-bottom pill must be centred on each other, in "exact same style", with the Escape one hiding the scroll one while it shows; the red "Agent was interrupted" one takes the same spot and look. The toasts therefore take the pill's own slot and shape (in-window and in the frosted window), visual only: no click, hover, focus or tooltip.
+    pub(super) fn pill_toast(&self) -> Option<PillToast> {
+        let toast = &self.snapshot["interruptToast"];
+        Some(PillToast {
+            text: toast["text"].as_str()?.to_string(),
+            error: toast["tone"] == "error",
+        })
+    }
+
+    /// A downward wheel that lands within the pill's edge threshold of the end has reached the
+    /// bottom: the transcript follows its tail again. Called from the transcript's capture-phase
+    /// wheel listener, before the list applies the same event, which keeps following on a downward
+    /// scroll.
+    pub(super) fn follow_tail_if_wheel_reaches_end(
+        &self,
+        event: &gpui::ScrollWheelEvent,
+        scale: f32,
+    ) {
+        if self.list.is_following_tail() || self.disclosure_motion.borrow().follow_paused {
+            return;
+        }
+        // gpui's list turns wheel lines into 20px each (`ListElement::paint`).
+        let delta = event.delta.pixel_delta(px(20.0)).y;
+        if delta < px(0.0)
+            && transcript_distance_to_end(&self.list) + delta <= px(SPEC.edge_threshold * scale)
+        {
+            self.list.set_follow_mode(gpui::FollowMode::Tail);
+        }
+    }
+
+    /// Paints nothing; placed after the list so its prepaint reads the layout this frame just made,
+    /// and redraws the chat when the pill drawn before that layout no longer matches it.
+    pub(super) fn scroll_bottom_sync(&self, cx: &Context<Self>) -> AnyElement {
+        let list = self.list.clone();
+        let drawn = self.scroll_bottom_drawn.clone();
+        let chat = cx.entity_id();
+        gpui::canvas(
+            move |_, _, cx| {
+                if transcript_left_bottom(&list) != drawn.get() {
+                    cx.notify(chat);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_0()
+        .into_any_element()
+    }
+
+    pub(super) fn scroll_bottom_button(&self, cx: &Context<Self>) -> AnyElement {
+        let glass = crate::app::helpers::window_glass_active_for(self.main_window);
+        let p = ChatAppearance::current(&self.snapshot).on_window_glass(glass);
+        let toast = self.pill_toast();
+        let left_bottom = transcript_left_bottom(&self.list);
+        self.scroll_bottom_drawn.set(left_bottom);
+        let shown = toast.is_some() || left_bottom;
+        if glass {
+            let label = toast.map_or_else(|| SPEC.label.clone(), |toast| toast.text);
+            return self.scroll_bottom_window_placeholder(shown, label, &p, cx);
+        }
+        if !shown {
+            return div().into_any_element();
+        }
+        let row = div()
+            .absolute()
+            .bottom(px(SPEC.bottom * p.scale))
+            .w_full()
+            .flex()
+            .justify_center();
+        // The pill wears the composer's own chrome: the same opaque card fill, the 1px outline and
+        // the inset top highlight session-chat-composer-focus.css gives both of them.
+        let outline = if p.light {
+            gpui::black().opacity(0.08)
+        } else {
+            gpui::white().opacity(0.05)
+        };
+        let highlight = gpui::white().opacity(if p.light { 0.0 } else { 0.03 });
+        if let Some(toast) = toast {
+            let (fill, border, text) = match toast.error {
+                true => error_tone(p.light),
+                false => (p.composer_background, outline, p.primary),
+            };
+            return row
+                .child(
+                    pill_shape(div(), p.scale)
+                        .id("chat-interrupt-toast")
+                        .role(gpui::Role::Status)
+                        .aria_label(toast.text.clone())
+                        .border_color(border)
+                        .bg(fill)
+                        .text_color(text)
+                        .when(!toast.error, |pill| pill.child(pill_highlight(highlight)))
+                        .child(toast.text),
+                )
+                .into_any_element();
+        }
+        let label = SPEC.label.clone();
+        let shortcut = shortcut_label();
+        row.child(
+            pill_shape(div(), p.scale)
+                .id("chat-scroll-bottom")
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .aria_label(label.clone())
+                .chat_cursor_pointer()
+                .when_some(shortcut, |pill, key| {
+                    pill.managed_tooltip_with_placement(TOOLTIP_PLACEMENT, move |window, cx| {
+                        shortcut_tooltip(key.clone(), window, cx)
+                    })
+                })
+                .border_color(outline)
+                .bg(p.composer_background)
+                .text_color(p.primary)
+                .focus_visible(|style| style.border_color(p.ring))
+                .child(pill_highlight(highlight))
+                .child(label)
+                .on_click(cx.listener(|chat, _, _, cx| chat.jump_to_bottom(cx))),
+        )
+        .into_any_element()
+    }
+}
+
+/// How far the viewport's bottom is above the transcript's end, as of the list's last layout.
+pub(super) fn transcript_distance_to_end(list: &gpui::ListState) -> gpui::Pixels {
+    list.max_offset_for_scrollbar().y + list.scroll_px_offset_for_scrollbar().y
+}
+
+/// The reader has left the bottom of the transcript: the "Scroll to bottom" pill shows, and new
+/// rows arrive below the fold.
+///
+/// CDXC:SessionChat 2026-10-04 WHY:
+/// User (Windows): "we're not auto scrolling down to the bottom automatically even when i don't see the scroll to bottom [button]". The pill used to hide within the 10px edge threshold while gpui's list resumes following only within 1px of the end, so a reader a few pixels short of it saw neither the pill nor following. This is now the one definition: the pill hides exactly while the list follows or will at its next layout, `scroll_bottom_sync` redraws it from the layout just made (the render decides it from the previous one), and the edge threshold only widens what counts as reaching the end on a downward wheel (`follow_tail_if_wheel_reaches_end`). Only a scroll up stops following.
+pub(super) fn transcript_left_bottom(list: &gpui::ListState) -> bool {
+    !list.is_following_tail() && transcript_distance_to_end(list) > px(LIST_RESUME_TOLERANCE)
+}
+
+/// gpui's list follows its tail again once a layout leaves the viewport within this many pixels
+/// of the end (`StateInner::layout_items`).
+const LIST_RESUME_TOLERANCE: f32 = 1.0;
+
+/// What the pill's slot shows instead of "Scroll to bottom".
+pub(super) struct PillToast {
+    pub(super) text: String,
+    /// The red "Agent was interrupted" tone.
+    pub(super) error: bool,
+}
+
+/// The pill's shape, shared by "Scroll to bottom" and the toasts that take its place.
+fn pill_shape(pill: gpui::Div, scale: f32) -> gpui::Div {
+    pill.relative()
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(SPEC.height * scale))
+        .px(px(SPEC.padding_x * scale))
+        .rounded_full()
+        .border_1()
+        .text_size(px(SPEC.font_size * scale))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+}
+
+/// Visual only, and inside the pill's own frame: the `inset 0 1px` highlight.
+fn pill_highlight(highlight: gpui::Hsla) -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(px(1.0))
+        .bg(highlight)
+}
+
+/// The red tone's fill, border and text (`errorTone` in `scroll-bottom.json`).
+pub(super) fn error_tone(light: bool) -> (gpui::Hsla, gpui::Hsla, gpui::Hsla) {
+    let tone = if light {
+        &SPEC.error_tone.light
+    } else {
+        &SPEC.error_tone.dark
+    };
+    let hex = |value: &str| -> gpui::Hsla {
+        gpui::rgb(u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0)).into()
+    };
+    (
+        hex(&tone.background),
+        hex(&tone.border).opacity(tone.border_alpha),
+        hex(&tone.text),
+    )
+}
+
+impl NativeChatView {
+    /// CDXC:SessionChat 2026-09-23 DECISION:
+    /// User: the scroll-to-bottom pill "should match the color and everything of the composer box", then, when the composer's see-through wash let the transcript read through it, "can't we make it's bg more frosted glass??". Under window glass the pill wears the composer's wash and border over a real blur of what is behind it. Supersedes the same day's opaque menu tone and the plain see-through wash.
+    ///
+    /// CDXC:SessionChat 2026-09-23 WHY:
+    /// GPUI cannot blur behind an element inside a window, only behind a whole window, so the pill is drawn in a small blurred child window of its own (frosted_overlay_window.rs). This placeholder lays out an invisible pill of the same size where the in-window one would be and hands its bounds to that window. The pill stays down while something else sits over the pane (a chat popup window, the account-switch card, the subagent viewer), or while it would stick out of the pane, because a window of its own would float above all of them.
+    fn scroll_bottom_window_placeholder(
+        &self,
+        shown: bool,
+        label: String,
+        p: &ChatAppearance,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let overlay = super::frosted_overlay_window::FrostedOverlay::ScrollBottom;
+        let shown = shown && !self.frosted_overlay_covered(overlay);
+        let report = self.frosted_overlay_reporter(overlay, shown, cx);
+        if !shown {
+            return div().absolute().size_0().child(report).into_any_element();
+        }
+        div()
+            .absolute()
+            .bottom(px(SPEC.bottom * p.scale))
+            .w_full()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .h(px(SPEC.height * p.scale))
+                    .px(px(SPEC.padding_x * p.scale))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .text_color(gpui::transparent_black())
+                    .text_size(px(SPEC.font_size * p.scale))
+                    .font_weight(FontWeight::MEDIUM)
+                    .whitespace_nowrap()
+                    .child(label)
+                    .child(report),
+            )
+            .into_any_element()
+    }
+}

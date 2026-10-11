@@ -68,6 +68,19 @@ int32_t GhostexGpuiAccessibilityDisplayShouldReduceMotion(void) {
   }
 }
 
+int32_t GhostexGpuiAccessibilityDisplayShouldReduceTransparency(void) {
+  @autoreleasepool {
+    __block int32_t result = 0;
+    GhostexGpuiRunAccessibilityDisplayOptionsOnMain(^{
+      result = NSWorkspace.sharedWorkspace
+                       .accessibilityDisplayShouldReduceTransparency
+                   ? 1
+                   : 0;
+    });
+    return result;
+  }
+}
+
 void GhostexGpuiInstallAccessibilityDisplayOptionsMonitor(void) {
   @autoreleasepool {
     GhostexGpuiRunAccessibilityDisplayOptionsOnMain(^{

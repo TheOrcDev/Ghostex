@@ -18,7 +18,17 @@ pub(crate) struct ProcessRow {
 struct ProcessIdentityCandidate {
     confidence: i64,
     depth: i64,
+    /// Depth of the first agent process of this candidate's launcher chain.
+    chain_depth: i64,
     identity: ZmxProcessIdentity,
+}
+
+/// The agent process that owns a path down the tree: the last process of its launcher chain.
+#[derive(Clone, Debug)]
+struct ProcessTreeAgentOwner {
+    agent_id: String,
+    pid: i64,
+    chain_depth: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -133,7 +143,7 @@ pub(crate) fn resolve_process_tree_agent_identity(
         .collect::<HashMap<_, _>>();
     let mut candidates = Vec::<ProcessIdentityCandidate>::new();
     /*
-    CDXC:SessionIdentity 2026-09-02:
+    CDXC:SessionIdentity 2026-09-02 WHY:
     The first agent process found on a path down from the zmx root owns the
     terminal; every process below it was spawned BY that agent. A different
     agent CLI down there is one of its tool invocations (`grok models`,
@@ -141,30 +151,42 @@ pub(crate) fn resolve_process_tree_agent_identity(
     2026-09-02), not the session's agent, and the deepest-wins ordering below
     let it replace the real identity: the row flipped to that agent, the
     transcript was then decoded with the wrong reader, and the chat view sat on
-    "Loading conversation…" for good. Only same-agent descendants stay
-    candidates, which keeps the launcher → binary wrapper chains (node codex →
-    lib/codex) that deepest-wins exists for.
+    "Loading conversation…" for good.
+    CDXC:SessionIdentity 2026-10-05 WHY:
+    The same holds for the SAME agent: a `claude -p` or `cswap run … claude` an agent starts from its Bash tool, or another session's tree hung below this one by a reused Windows pid, is a deeper `claude --resume <other id>` that deepest-wins took as the session's agent, so the session got another conversation's id, title and final message (thread G0hhy took coordinator G4snt's on 2026-10-04). A same-agent process only continues the owner's launcher chain when it is the owner's DIRECT child (`node codex` → native `codex`, which deepest-wins exists for); anything further down is the agent's own tool run and never a candidate. Separate chains rank by how close their first agent process is to the session's shell, so the session's own agent wins over anything grafted deeper.
+    SEE-ALSO: .dependencies/wmx/src/process_snapshot.rs (drops reused-pid parent links on Windows).
     */
-    let mut queue = VecDeque::from([(0_i64, root_pid, None::<String>)]);
+    let mut queue = VecDeque::from([(0_i64, root_pid, None::<ProcessTreeAgentOwner>)]);
     let mut seen = HashSet::<i64>::new();
-    while let Some((depth, pid, owner_agent_id)) = queue.pop_front() {
+    while let Some((depth, pid, owner)) = queue.pop_front() {
         if !seen.insert(pid) {
             continue;
         }
-        let mut owner_agent_id = owner_agent_id;
+        let mut owner = owner;
         if let Some(row) = rows_by_pid.get(&pid) {
             if let Some(mut observation) = resolve_process_command_agent_identity(&row.command) {
                 if let Some(agent_id) = observation.identity.agent_id.clone() {
-                    let spawned_by_other_agent = owner_agent_id
-                        .as_deref()
-                        .is_some_and(|owner| owner != agent_id);
-                    if !spawned_by_other_agent {
-                        owner_agent_id = Some(agent_id);
+                    let chain_depth = match owner.as_ref() {
+                        None => Some(depth),
+                        Some(current)
+                            if current.agent_id == agent_id && current.pid == row.ppid =>
+                        {
+                            Some(current.chain_depth)
+                        }
+                        Some(_) => None,
+                    };
+                    if let Some(chain_depth) = chain_depth {
+                        owner = Some(ProcessTreeAgentOwner {
+                            agent_id,
+                            pid: row.pid,
+                            chain_depth,
+                        });
                         observation.identity.process_id = Some(row.pid);
                         observation.identity.terminal_name = row.terminal_name.clone();
                         candidates.push(ProcessIdentityCandidate {
                             confidence: observation.confidence,
                             depth,
+                            chain_depth,
                             identity: observation.identity,
                         });
                     }
@@ -173,11 +195,15 @@ pub(crate) fn resolve_process_tree_agent_identity(
         }
         if let Some(children) = children_by_parent_pid.get(&pid) {
             for child in children {
-                queue.push_back((depth + 1, child.pid, owner_agent_id.clone()));
+                queue.push_back((depth + 1, child.pid, owner.clone()));
             }
         }
     }
     candidates.sort_by(|left, right| {
+        let chain = left.chain_depth.cmp(&right.chain_depth);
+        if chain != std::cmp::Ordering::Equal {
+            return chain;
+        }
         let confidence =
             score_process_identity_candidate(right).cmp(&score_process_identity_candidate(left));
         if confidence != std::cmp::Ordering::Equal {
@@ -214,7 +240,7 @@ fn resolve_process_command_agent_identity(command: &str) -> Option<ProcessIdenti
         return None;
     }
     resolve_agent_process_invocation(&tokens, 0, GXSERVER_DIRECT_AGENT_PROCESS_CONFIDENCE)
-        .or_else(|| resolve_wrapped_agent_process_invocation(&tokens))
+        .or_else(|| resolve_wrapped_agent_process_invocation(command, &tokens))
 }
 
 fn should_ignore_process_command_for_agent_identity(command: &str, tokens: &[String]) -> bool {
@@ -233,11 +259,24 @@ fn should_ignore_process_command_for_agent_identity(command: &str, tokens: &[Str
         .any(|marker| lower_command.contains(marker))
 }
 
+/// CDXC:SessionIdentity 2026-09-28 WHY:
+/// Hermes runs as a Python interpreter: its installer's launcher is `python3 -I -c "<bootstrap>"` and a pip install is `python3 …/bin/hermes`. Left unrecognised, the first agent binary below it owned the row, and Hermes's Claude subscription provider spawns the native `claude` for every turn, so a Hermes row turned into a Claude session mid-conversation, dropped its Hermes conversation id, and its chat lost the history (observed live 2026-09-28).
 fn resolve_wrapped_agent_process_invocation(
+    command: &str,
     tokens: &[String],
 ) -> Option<ProcessIdentityObservation> {
-    let executable_name = normalize_process_executable_name(tokens.first().map(String::as_str));
-    if executable_name.as_deref() == Some("env") {
+    let executable_name = normalize_process_executable_name(tokens.first().map(String::as_str))?;
+    let is_python = executable_name.starts_with("python");
+    if is_python && command.contains("import hermes_bootstrap") {
+        return Some(ProcessIdentityObservation {
+            confidence: GXSERVER_WRAPPED_AGENT_PROCESS_CONFIDENCE,
+            identity: ZmxProcessIdentity {
+                agent_id: Some("hermes-agent".to_string()),
+                ..ZmxProcessIdentity::default()
+            },
+        });
+    }
+    if executable_name == "env" || is_python {
         if let Some(invocation_index) = find_env_wrapped_command_index(tokens) {
             return resolve_agent_process_invocation(
                 tokens,
@@ -246,10 +285,7 @@ fn resolve_wrapped_agent_process_invocation(
             );
         }
     }
-    if !executable_name
-        .as_deref()
-        .is_some_and(|name| matches!(name, "bun" | "node"))
-    {
+    if !matches!(executable_name.as_str(), "bun" | "node") {
         return None;
     }
     for index in 1..tokens.len().min(8) {
@@ -295,8 +331,9 @@ pub(crate) fn read_codex_process_session_identity(
 pub(crate) fn codex_process_session_identity_from_paths(
     paths: impl IntoIterator<Item = PathBuf>,
 ) -> Option<(String, String)> {
-    let mut identities = HashMap::<String, PathBuf>::new();
+    let mut identities = HashMap::<String, (String, PathBuf)>::new();
     let mut predecessors = HashSet::new();
+    let mut inherited_rollouts = HashSet::new();
     for target in paths {
         let Some(agent_session_id) = codex_session_id_from_transcript_path(&target) else {
             continue;
@@ -311,18 +348,27 @@ pub(crate) fn codex_process_session_identity_from_paths(
         if let Some(parent) = meta.forked_from_id {
             predecessors.insert(parent);
         }
-        identities.entry(agent_session_id).or_insert(target);
+        if let Some(base) = meta.history_base {
+            inherited_rollouts.insert(base.thread_id);
+        }
+        identities
+            .entry(meta.rollout_id)
+            .or_insert((agent_session_id, target));
     }
     // Codex may retain the previous rollout handle after rewinding. Among its
     // open root rollouts, only an unambiguous descendant can be the active branch.
-    identities.retain(|id, _| !predecessors.contains(id));
+    identities.retain(|rollout, (id, _)| {
+        !predecessors.contains(id) && !inherited_rollouts.contains(rollout)
+    });
     if identities.len() != 1 {
         return None;
     }
     identities
         .into_iter()
         .next()
-        .map(|(agent_session_id, path)| (agent_session_id, path.to_string_lossy().into_owned()))
+        .map(|(_, (agent_session_id, path))| {
+            (agent_session_id, path.to_string_lossy().into_owned())
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -379,7 +425,8 @@ pub(crate) fn codex_session_id_from_transcript_path(path: &Path) -> Option<Strin
     if !stem.starts_with("rollout-") || stem.len() < 36 {
         return None;
     }
-    normalize_codex_session_id(&stem[stem.len() - 36..])
+    crate::session_chat_successor::codex_rollout_session_id(stem)
+        .and_then(|id| normalize_codex_session_id(&id))
 }
 
 /// CDXC:SessionIdentity 2026-09-14 WHY:
@@ -523,6 +570,8 @@ fn infer_agent_id_from_process_executable(
             "mastracode" => "mastra",
             "devin" => "devin",
             "droid" => "droid",
+            "empryo" | "em" => "empryo",
+            "freebuff" => "freebuff",
             "gemini" => "gemini",
             "grok" => "grok",
             "hermes" => "hermes-agent",
@@ -574,6 +623,15 @@ fn extract_agent_process_session_id(
         return None;
     }
     if matches!(agent_id, "claude" | "cursor") {
+        /*
+        CDXC:SessionFork 2026-09-21 WHY:
+        An in-app Claude fork leaves the terminal's `claude --resume <parent>` as a viewer and runs the conversation in a daemon-hosted `claude --session-id <fork> --fork-session --resume <parent>` below it. `--session-id` names the process's own conversation even on a fork launch, so it is read before the fork rule; ignoring it made the viewer's stale parent id the terminal's identity and the chat Subagents card refused the session as "a different conversation".
+        */
+        if agent_id == "claude" {
+            if let Some(id) = read_agent_process_flag_value(agent_id, args, "--session-id") {
+                return Some(id);
+            }
+        }
         if args.iter().any(|arg| {
             let token = arg.trim_matches(['"', '\'']);
             token == "--fork-session" || token.starts_with("--fork-session=")
@@ -585,12 +643,24 @@ fn extract_agent_process_session_id(
     if agent_id == "zcode" {
         return read_agent_process_flag_value(agent_id, args, "--resume");
     }
+    if agent_id == "freebuff" {
+        return read_agent_process_flag_value(agent_id, args, "--continue");
+    }
+    if agent_id == "empryo" {
+        return ["--session", "--resume", "-s"]
+            .into_iter()
+            .find_map(|flag| read_agent_process_flag_value(agent_id, args, flag));
+    }
     if agent_id == "opencode" {
         return read_agent_process_flag_value(agent_id, args, "--session")
             .or_else(|| read_agent_process_flag_value(agent_id, args, "-s"));
     }
     if matches!(agent_id, "pi" | "omp") {
-        return read_agent_process_flag_value(agent_id, args, "--session");
+        return read_agent_process_flag_value(agent_id, args, "--session").or_else(|| {
+            (agent_id == "pi")
+                .then(|| read_agent_process_flag_value(agent_id, args, "--session-id"))
+                .flatten()
+        });
     }
     if agent_id == "kiro" {
         return read_agent_process_flag_value(agent_id, args, "--resume-id");

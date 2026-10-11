@@ -32,11 +32,8 @@ byte-for-byte where the daemon or EDITOR callers can observe it.
 
 #[cfg(unix)]
 type DaemonStream = std::os::unix::net::UnixStream;
-/// Never constructed on Windows: connect always fails the way the JS named
-/// pipe path would when no daemon pipe exists. TcpStream only supplies the
-/// Read/Write/try_clone/shutdown surface so the client code compiles.
 #[cfg(windows)]
-type DaemonStream = std::net::TcpStream;
+type DaemonStream = ghostex_editor_client::PipeStream;
 
 // ---------------------------------------------------------------------------
 // Error carrier matching the JS Error shape (name / message / code).
@@ -119,10 +116,13 @@ pub fn floating_editor_command(args: &[String]) -> CliResult<()> {
 // ---------------------------------------------------------------------------
 
 pub fn floating_monaco_editor_command(args: &[String]) -> CliResult<()> {
-    floating_monaco_editor_command_with_trace(args, &json!({}))
+    floating_monaco_editor_command_with_trace(args, &json!({})).map(|_| ())
 }
 
-fn floating_monaco_editor_command_with_trace(args: &[String], trace: &Value) -> CliResult<()> {
+fn floating_monaco_editor_command_with_trace(
+    args: &[String],
+    trace: &Value,
+) -> CliResult<Option<String>> {
     /*
     CDXC:PromptEditor 2026-07-05 (ported): Monaco prompt editing is served by
     the resident GhostexEditor daemon. Keep the EDITOR-facing status-file
@@ -185,7 +185,7 @@ fn floating_monaco_editor_command_with_trace(args: &[String], trace: &Value) -> 
     );
 
     let result = match outcome {
-        Ok(()) => Ok(()),
+        Ok(status) => Ok(Some(status)),
         Err(error) => {
             append_prompt_editor_timeline_log(
                 "cli.monaco.failed",
@@ -207,15 +207,10 @@ fn floating_monaco_editor_command_with_trace(args: &[String], trace: &Value) -> 
             );
             let editor_command = machine_prompt_editor_command_from_environment();
             run_editor_inline(
-                &[
-                    "/bin/zsh".to_string(),
-                    "-lc".to_string(),
-                    format!("exec {editor_command} \"$@\""),
-                    "ghostex-prompt-editor".to_string(),
-                    resolved_file_path.clone(),
-                ],
+                &machine_editor_args(&editor_command, &resolved_file_path),
                 &cwd,
             )
+            .map(|_| None)
         }
     };
 
@@ -238,7 +233,7 @@ fn run_monaco_daemon_session(
     status_file: &str,
     originating_session_id: Option<&str>,
     command_started_at: Instant,
-) -> Result<(), EditorError> {
+) -> Result<String, EditorError> {
     let socket_path = resolve_ghostex_editor_socket_path().map_err(EditorError::new)?;
     let daemon_started_at = Instant::now();
     let daemon = connect_or_start_ghostex_editor_daemon(&socket_path)?;
@@ -292,7 +287,7 @@ fn run_monaco_daemon_session(
         stash_saved_prompt_editor_content(resolved_file_path, originating_session_id, request_id);
     }
     crate::ghostex_cli::set_exit_code(if status == "saved" { 0 } else { 1 });
-    Ok(())
+    Ok(status)
 }
 
 fn stash_saved_prompt_editor_content(
@@ -662,25 +657,9 @@ fn resolve_ghostex_editor_socket_path() -> Result<String, String> {
         }
         return Ok(override_path);
     }
-    if cfg!(windows) {
-        let raw_user = normalized_env("USERNAME")
-            .or_else(|| normalized_env("USER"))
-            .unwrap_or_else(|| "user".to_string());
-        let mut username: String = raw_user
-            .chars()
-            .map(|letter| {
-                if letter.is_ascii_alphanumeric() || matches!(letter, '.' | '_' | '-') {
-                    letter
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        if username.is_empty() {
-            username = "user".to_string();
-        }
-        return Ok(format!("\\\\.\\pipe\\ghostex-editor-{username}"));
-    }
+    #[cfg(windows)]
+    return Ok(ghostex_editor_client::default_pipe_path());
+    #[cfg(not(windows))]
     Ok(rpc::ghostex_runtime_home()
         .join("ghostex-editor.sock")
         .to_string_lossy()
@@ -741,7 +720,7 @@ fn connect_or_start_ghostex_editor_daemon(
                 return Ok(EditorDaemonConnection {
                     launched: true,
                     stream,
-                })
+                });
             }
             Err(error) => last_error = Some(error),
         }
@@ -771,6 +750,13 @@ fn spawn_ghostex_editor_daemon(executable: &str) {
             Ok(())
         });
     }
+    // Its own hidden console, so it outlives the terminal that ran the CLI without opening a window.
+    #[cfg(windows)]
+    {
+        use crate::platform::process::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
     // child.once("error", () => undefined); child.unref();
     let _ = command.spawn();
 }
@@ -788,13 +774,10 @@ fn connect_ghostex_editor_daemon(
 #[cfg(windows)]
 fn connect_ghostex_editor_daemon(
     socket_path: &str,
-    _timeout_ms: u64,
+    timeout_ms: u64,
 ) -> Result<DaemonStream, EditorError> {
-    Err(EditorError {
-        name: "Error",
-        message: format!("connect ENOENT {socket_path}"),
-        code: Some("ENOENT"),
-    })
+    DaemonStream::connect(socket_path, Duration::from_millis(timeout_ms))
+        .map_err(|error| EditorError::from_io(&error))
 }
 
 // -- Save-and-close signal forwarding (process.on SIGTERM/SIGINT) -----------
@@ -1011,8 +994,6 @@ impl EditorDaemonClient {
     fn close(&self) {
         #[cfg(unix)]
         let _ = self.reader.shutdown(std::net::Shutdown::Both);
-        #[cfg(windows)]
-        let _ = self.reader.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -1134,6 +1115,14 @@ fn resolve_ghostex_editor_executable() -> Option<String> {
             None
         };
     }
+    #[cfg(windows)]
+    if let Some(executable) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| ghostex_editor_client::bundled_executable(&executable))
+        .or_else(ghostex_editor_client::installed_executable)
+    {
+        return Some(executable.to_string_lossy().into_owned());
+    }
     let candidates = ghostex_editor_executable_candidates_for_platform(
         current_platform_name(),
         repo_root.as_deref(),
@@ -1225,7 +1214,7 @@ fn ghostex_editor_executable_candidates_for_platform(
         if let Some(repo_root) = repo_root {
             candidates.push(path_string(
                 repo_root
-                    .join("editor")
+                    .join("apps/editor")
                     .join("dist")
                     .join("desktop")
                     .join("GhostexEditor.exe"),
@@ -1253,8 +1242,13 @@ fn ghostex_editor_unavailable_message(detail: Option<&str>) -> String {
     let detail = detail
         .map(|message| format!(" {message}"))
         .unwrap_or_default();
+    let installation = if cfg!(target_os = "macos") {
+        "install /Applications/GhostexEditor.app"
+    } else {
+        "reinstall Ghostex with its bundled editor"
+    };
     format!(
-        "Ghostex standalone editor unavailable; using the machine/default editor. Set GHOSTEX_EDITOR_APP or install /Applications/GhostexEditor.app.{detail}"
+        "Ghostex standalone editor unavailable; using the machine/default editor. Set GHOSTEX_EDITOR_APP or {installation}.{detail}"
     )
 }
 
@@ -1288,7 +1282,12 @@ fn ghostex_editor_executable_candidate(candidate: &str) -> Option<String> {
 fn ghostex_cli_repo_root_from_cli_dir(cli_dir: &Path) -> Option<PathBuf> {
     let mut current = js_path_resolve(&cli_dir.to_string_lossy());
     loop {
-        if file_exists(&current.join("scripts").join("ghostex-cli.mjs")) {
+        let marker = if cfg!(windows) {
+            "apps/editor/desktop/Cargo.toml"
+        } else {
+            "scripts/ghostex-cli.mjs"
+        };
+        if file_exists(&current.join(marker)) {
             return Some(current);
         }
         let Some(parent) = current.parent().map(Path::to_path_buf) else {

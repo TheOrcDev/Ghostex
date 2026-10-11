@@ -22,7 +22,7 @@ pub(crate) fn gpui_sidebar_native_project_path_action_from_json(
     Sidebar-native project path actions intentionally contain no path field. Keep their parsing strict and pathless so renderer compromise cannot turn copy/open project actions into arbitrary filesystem operations; only gxserver project ids may authorize those project-path side effects.
 
     CDXC:Git 2026-06-24-15:43:
-    The same fixed native side-effect bridge now accepts `filePath` only for the changed-file IDE-open action. Treat it as a project-relative candidate to re-validate against gxserver Git state; all project path and PR actions remain pathless, and no renderer URL or absolute path is authoritative.
+    The same fixed native side-effect bridge now accepts `filePath` only for changed-file editor and file-location actions. Treat it as a project-relative candidate to re-validate against gxserver Git state; all project path and PR actions remain pathless, and no renderer URL or absolute path is authoritative.
 
     CDXC:RemoteMachines 2026-06-24-19:06:
     Remote session actions reuse the `projectId` string slot for a machine-scoped remote presentation session id because the bridge remains fixed-shape and pathless. Rust must parse that id before side effects and reject any payload that tries to add SSH details, paths, tokens, URLs, command text, or daemon responses.
@@ -48,9 +48,9 @@ pub(crate) fn gpui_sidebar_native_project_path_action_from_json(
             "action",
             "projectId",
             "filePath",
-            "placement",
             "preferredInterface",
             "keepView",
+            "targetId",
         ]
         .contains(&key.as_str())
     }) {
@@ -92,24 +92,24 @@ pub(crate) fn gpui_sidebar_native_project_path_action_from_json(
     {
         return Err(());
     }
-    let placement = match object.get("placement") {
-        None => GpuiWorkspaceTerminalFocusPlacement::Tab,
-        Some(value) => value
-            .as_str()
-            .and_then(GpuiWorkspaceTerminalFocusPlacement::from_str)
-            .ok_or(())?,
-    };
-    if object.contains_key("placement")
-        && action != GpuiSidebarNativeProjectPathAction::OpenRemoteSessionTerminal
-    {
-        return Err(());
-    }
     let keep_view = match object.get("keepView") {
         None => false,
         Some(value) => value.as_bool().ok_or(())?,
     };
     if object.contains_key("keepView")
         && action != GpuiSidebarNativeProjectPathAction::OpenRemoteSessionTerminal
+    {
+        return Err(());
+    }
+    // CDXC:Bots 2026-09-26 WHY:
+    // A bot row's Open in names its target by id only.
+    // The id is looked up in this app's own Settings before anything runs, so the page still sends no command, app name or path.
+    let target_id = gpui_trimmed_json_string_field(object, "targetId")
+        .filter(|target_id| target_id.chars().count() <= GPUI_PROJECT_CONTRACT_STRING_MAX_CHARS)
+        .map(str::to_string);
+    let opens_in_target =
+        action == GpuiSidebarNativeProjectPathAction::OpenWorkspaceProjectInTarget;
+    if object.contains_key("targetId") != opens_in_target || opens_in_target != target_id.is_some()
     {
         return Err(());
     }
@@ -128,10 +128,10 @@ pub(crate) fn gpui_sidebar_native_project_path_action_from_json(
     Ok(GpuiSidebarNativeProjectPathActionMessage {
         action,
         file_path,
-        placement,
         preferred_interface,
         project_id,
         keep_view,
+        target_id,
     })
 }
 
@@ -282,56 +282,6 @@ pub(crate) fn gpui_sidebar_command_action_from_json(text: &str) -> Result<GpuiTi
     })
 }
 
-pub(crate) fn gpui_sidebar_command_run_end_from_json(text: &str) -> Result<String, ()> {
-    /*
-    CDXC:CommandPane 2026-06-25-10:34:
-    Sidebar command-run-end payloads close the existing live Action tab by command id only. Keep the parser stricter than the launch bridge so closing a run cannot carry command text, URLs, project paths, cwd/env, run ids, status paths, terminal output, persisted shell state, or generic IPC fields.
-    */
-    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|_| ())?;
-    let object = value.as_object().ok_or(())?;
-    if object
-        .keys()
-        .any(|key| !["version", "type", "commandId"].contains(&key.as_str()))
-    {
-        return Err(());
-    }
-    if object.get("version").and_then(serde_json::Value::as_u64)
-        != Some(GPUI_SIDEBAR_COMMAND_RUN_END_MESSAGE_VERSION)
-        || object.get("type").and_then(serde_json::Value::as_str)
-            != Some(GPUI_SIDEBAR_COMMAND_RUN_END_MESSAGE_TYPE)
-    {
-        return Err(());
-    }
-    let command_id = gpui_trimmed_json_string_field(object, "commandId")
-        .filter(|value| value.chars().count() <= GPUI_PROJECT_CONTRACT_STRING_MAX_CHARS)
-        .ok_or(())?
-        .to_string();
-    Ok(command_id)
-}
-
-pub(crate) fn gpui_sidebar_ghostex_hotkey_action_from_json(text: &str) -> Result<String, ()> {
-    /*
-    CDXC:CommandPalette 2026-06-27-08:17:
-    Command-palette hotkey payloads are selector authority only. Accept `type` plus a bounded non-empty `actionId`, then let the existing hotkey dispatcher decide support; reject renderer-owned command text, cwd/env, session ids, paths, URLs, launch metadata, generic IPC fields, and versioned action payloads before they can influence command-pane focus or modal routing.
-    */
-    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|_| ())?;
-    let object = value.as_object().ok_or(())?;
-    if object
-        .keys()
-        .any(|key| !["type", "actionId"].contains(&key.as_str()))
-    {
-        return Err(());
-    }
-    if object.get("type").and_then(serde_json::Value::as_str) != Some("runGhostexHotkeyAction") {
-        return Err(());
-    }
-    let action_id = gpui_trimmed_json_string_field(object, "actionId")
-        .filter(|value| value.chars().count() <= GPUI_PROJECT_CONTRACT_STRING_MAX_CHARS)
-        .ok_or(())?
-        .to_string();
-    Ok(action_id)
-}
-
 pub(crate) fn execute_gpui_sidebar_native_project_path_action(
     message: GpuiSidebarNativeProjectPathActionMessage,
 ) -> Result<GpuiSidebarNativeProjectPathActionResult, String> {
@@ -339,19 +289,37 @@ pub(crate) fn execute_gpui_sidebar_native_project_path_action(
         return gpui_open_existing_project_pull_request_in_browser(&message.project_id)
             .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened);
     }
-    if message.action == GpuiSidebarNativeProjectPathAction::OpenSidebarGitChangedFileInIde {
+    if matches!(
+        message.action,
+        GpuiSidebarNativeProjectPathAction::OpenSidebarGitChangedFileInIde
+            | GpuiSidebarNativeProjectPathAction::RevealSidebarGitChangedFile
+    ) {
         let file_path = message
             .file_path
             .as_deref()
             .ok_or_else(|| "Choose a changed file from the current Git state.".to_string())?;
-        return gpui_open_sidebar_git_changed_file_in_ide(&message.project_id, file_path)
-            .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened);
+        let path = gpui_resolve_sidebar_git_changed_file(&message.project_id, file_path)?;
+        if message.action == GpuiSidebarNativeProjectPathAction::RevealSidebarGitChangedFile {
+            return gpui_reveal_path_in_finder(&path)
+                .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened);
+        }
+        return gpui_open_project_path_in_default_editor(&path)
+            .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened)
+            .map_err(|_| "Configured editor could not open that file.".to_string());
     }
     let path = if message.action.uses_recent_projects() {
         gpui_gxserver_recent_project_path_by_id(&message.project_id)?
     } else {
         gpui_gxserver_workspace_project_path_by_id(&message.project_id)?
     };
+    if let Some(target_id) = message.target_id.as_deref() {
+        let target = gpui_visible_open_targets_from_current_settings()
+            .into_iter()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| "That Open In target is no longer available.".to_string())?;
+        return gpui_launch_open_target(&target, &path)
+            .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened);
+    }
     if message.action.copies_path() {
         return Ok(GpuiSidebarNativeProjectPathActionResult::Copied(
             gpui_path_string(&path),
@@ -363,16 +331,16 @@ pub(crate) fn execute_gpui_sidebar_native_project_path_action(
     }
     gpui_open_path(&path)
         .map(|_| GpuiSidebarNativeProjectPathActionResult::Opened)
-        .map_err(|_| "GPUI could not open that project in Finder.".to_string())
+        .map_err(|_| "Could not open that project location.".to_string())
 }
 
-pub(crate) fn gpui_open_sidebar_git_changed_file_in_ide(
+pub(crate) fn gpui_resolve_sidebar_git_changed_file(
     project_id: &str,
     file_path: &str,
-) -> Result<(), String> {
+) -> Result<std::path::PathBuf, String> {
     /*
     CDXC:Git 2026-06-24-15:43:
-    Changed-file IDE opens resolve project id plus a project-relative file candidate in Rust. Rebuild the current gxserver changed-file set before joining under the project root so CEF cannot open arbitrary absolute paths, sibling paths, URLs, command text, or stale renderer-only filenames.
+    Changed-file editor and file-location actions resolve project id plus a project-relative file candidate in Rust. Rebuild the current gxserver changed-file set before joining under the project root so CEF cannot open arbitrary absolute paths, sibling paths, URLs, command text, or stale renderer-only filenames.
     */
     let relative_file_path = gpui_normalized_relative_git_file_path(file_path)
         .ok_or_else(|| "Choose a changed file from the current Git state.".to_string())?;
@@ -385,6 +353,5 @@ pub(crate) fn gpui_open_sidebar_git_changed_file_in_ide(
     if !path_is_inside_or_equal(&absolute_file_path, &project_path) {
         return Err("Choose a changed file from the current Git state.".to_string());
     }
-    gpui_open_project_path_in_default_editor(&absolute_file_path)
-        .map_err(|_| "Configured editor could not open that file.".to_string())
+    Ok(absolute_file_path)
 }

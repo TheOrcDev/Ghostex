@@ -1,263 +1,283 @@
+<h1 align="center">
+  <a href="https://ghostex.dev"><img src="media/ghostex-marketplace-icon.png" alt="Ghostex" width="72" valign="middle" /></a> Ghostex
+</h1>
+
 <p align="center">
-  <img width="1200" alt="Ghostex workspace" src="media/readme/ghostex-hero.png" />
+  <a href="https://github.com/maddada/Ghostex/stargazers"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/stars/maddada/Ghostex.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/stars/maddada/Ghostex.svg?variant=secondary&mode=light" alt="GitHub stars" /></picture></a>
+  <a href="https://github.com/maddada/Ghostex/releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/release/maddada/Ghostex.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/release/maddada/Ghostex.svg?variant=secondary&mode=light" alt="Latest release" /></picture></a>
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/license/maddada/Ghostex.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/license/maddada/Ghostex.svg?variant=secondary&mode=light" alt="License" /></picture></a>
+  <br />
+  <a href="#install"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20iOS.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20iOS.svg?variant=secondary&mode=light" alt="Supported platforms: macOS, Windows, Linux, Android, iOS" /></picture></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/maddada/Ghostex/releases"><img alt="GitHub Releases" src="https://img.shields.io/badge/Releases-DMG%2C%20EXE%2C%20DEB%2C%20RPM%2C%20AUR%2C%20TAR.ZST%20%26%20APK-111827?logo=github&logoColor=white"></a>
-  <a href="https://discord.gg/df7b3G92CS"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white"></a>
-  <a href="https://ghostex.dev"><img alt="Website" src="https://img.shields.io/badge/Website-ghostex.dev-0EA5E9"></a>
+<a href="https://discord.gg/df7b3G92CS"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Discord-Join%20the%20community.svg?variant=branded&logo=discord&mode=dark" /><img src="https://shieldcn.dev/badge/Discord-Join%20the%20community.svg?variant=branded&logo=discord&mode=light" alt="Join the Discord" /></picture></a>
 </p>
 
-# Ghostex
+<p align="center">
+  <strong>The native desktop app for Claude Code, Codex, OpenCode, and every other coding agent.</strong><br/>
+  Chat with several agents side by side, review their work as they go, and keep steering from your phone.
+</p>
 
-A native desktop app for Claude Code, Codex, OpenCode, and any other CLI agent. Run them side by side, review their work, and keep going from your computer or your phone.
+<h3 align="center"><a href="#install"><ins>Download Ghostex</ins></a> &nbsp;·&nbsp; <a href="https://ghostex.dev">Website</a> &nbsp;·&nbsp; <a href="https://youtu.be/QzjFB4J6-8E">Watch the 3-minute tour</a></h3>
 
-Ghostex is built for developers who keep multiple agents and terminals alive at once. It combines low-RAM Ghostty terminals, a native Rust/GPUI interface, Chromium CEF browser panes, and Mobile (iOS/Android) session access in one workspace.
+<p align="center">
+  <a href="media/readme/gx-hero-dark.jpg"><picture><source media="(prefers-color-scheme: dark)" srcset="media/readme/gx-hero-dark.gif" /><img src="media/readme/gx-hero-light.gif" alt="Ghostex with see-through glass over a moving meadow: projects and agent sessions in the sidebar, a chat in the middle and the view picker on the right" width="960" /></picture></a>
+</p>
 
-> Looking for contributors. Join the Discord if you want to help: https://discord.gg/df7b3G92CS
+Ghostex is built for developers who keep many agents alive at once. A chat view for every agent, a native Rust/GPUI shell, embedded Chromium panes, and a mobile app share one workspace, and every session survives restarts.
+
+## Features
+
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Chat & CLI views
+
+Talk to Claude Code, Codex, or any other agent in a proper chat GUI: clickable images, readable diffs, queued prompts, sub-agents in view, and a full editor for long messages. If you ever need the raw CLI, it is one hotkey away and your draft comes with you.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-diff.jpg" alt="A chat showing the agent's code change as a diff" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### iOS and Android apps with Easy Connect or Tailscale
+
+Your agents in your pocket. Easy Connect pairs your phone with a single scan, no extra accounts needed, or join through your Tailscale tailnet if you already have one. Read transcripts, send follow-ups, preview localhost pages, and get a push when an agent finishes.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-phone.gif" alt="Pairing the phone app, then sessions and a chat on the phone" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Any agent, swap on the fly
+
+Claude Code, Codex, OpenCode, Pi, Gemini, Grok, Cursor, and more. Pick the model and effort from the chat box, or hand a session from one agent to another mid-task.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-agent-picker.gif" alt="The model picker switching between agents" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Embedded Chromium browser
+
+Click any element, type what should change, and the note lands in the agent's prompt. Agents can drive your tabs too, through the built-in browser-use skill.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-browser-pane.jpg" alt="A chat next to the built-in browser" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Kanban board on Beads
+
+Dump your thoughts on the board, then let an agent pick up the tickets. Runs on the [Beads](https://github.com/gastownhall/beads) `bd` CLI, so agents and humans share one backlog.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-kanban-board.jpg" alt="The Kanban board with Backlog, Todo, In Progress and Test lanes" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Find any past session
+
+Fuzzy search every prompt you ever sent, across all your agents, and press Enter to resume the conversation. Star favourites and filter by agent or project. Also available as `gx f` for command-line fans.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-search.gif" alt="Searching every past prompt" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+<br/>
+
+### Agents that run agents
+
+Agents can open sessions, send prompts, and read replies from other agents through the `ghostex` command. Ask Claude Code to spin up Codex sub-agents and steer them, or hand the work to an orchestrator that keeps track of them for you.
+
+<br/>
+
+</td>
+<td width="50%">
+  <img src="media/readme/gx-threads.jpg" alt="An orchestrator with its threads in the sidebar and the Threads panel" width="100%" />
+</td>
+</tr>
+</table>
+
+### Also in the box
+
+- **Docs with annotations**: open Markdown, HTML prototypes, and Excalidraw diagrams next to your agent and leave notes on anything.
+- **Rich prompt editor**: press Ctrl+G to edit any prompt in a full editor.
+- **Built-in IDE**: a VS Code editor that loads on demand and sleeps when you are not using it.
+- **Remote machines**: connect another computer with an Easy Connect code or SSH and it shows up in the sidebar.
+- **Usage and accounts**: Claude and Codex limits at a glance, with automatic account switching.
+- **Worktrees, splits, and spaces**: a worktree per task, split panes, Arc-style spaces.
+- **Automations**: scheduled prompts, plus menu bar and sound notifications.
+- **Optional plugins**: browser, Kanban, IDE, Docs, and more load only when you use them. Or write your own.
+
+---
+
+## Supported agents
+
+Works with **any coding agent**. Bring the one you already use.
+
+<p>
+  <a href="https://docs.anthropic.com/claude/docs/claude-code"><kbd><img src="https://www.google.com/s2/favicons?domain=anthropic.com&sz=64" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
+  <a href="https://github.com/openai/codex"><kbd><img src="https://www.google.com/s2/favicons?domain=openai.com&sz=64" alt="" width="16" valign="middle" /> Codex</kbd></a> &nbsp;
+  <a href="https://opencode.ai"><kbd><img src="https://www.google.com/s2/favicons?domain=opencode.ai&sz=64" alt="" width="16" valign="middle" /> OpenCode</kbd></a> &nbsp;
+  <a href="https://pi.dev"><kbd><img src="https://pi.dev/favicon.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
+  <a href="https://omp.sh"><kbd><img src="https://omp.sh/favicon.svg" alt="" width="16" valign="middle" /> oh-my-pi</kbd></a> &nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><kbd><img src="https://www.google.com/s2/favicons?domain=gemini.google.com&sz=64" alt="" width="16" valign="middle" /> Gemini CLI</kbd></a> &nbsp;
+  <a href="https://x.ai/cli"><kbd><img src="https://www.google.com/s2/favicons?domain=x.ai&sz=64" alt="" width="16" valign="middle" /> Grok</kbd></a> &nbsp;
+  <a href="https://cursor.com/cli"><kbd><img src="https://www.google.com/s2/favicons?domain=cursor.com&sz=64" alt="" width="16" valign="middle" /> Cursor</kbd></a> &nbsp;
+  <a href="https://github.com/features/copilot/cli"><kbd><img src="https://www.google.com/s2/favicons?domain=github.com&sz=64" alt="" width="16" valign="middle" /> Copilot CLI</kbd></a> &nbsp;
+  <kbd>+ many more</kbd>
+</p>
+
+---
 
 ## Install
 
 ### macOS
 
-The official Homebrew cask installs the Apple Silicon build automatically.
-
 ```bash
 brew install ghostex
 ```
 
-Latest download: [macOS Apple Silicon DMG](https://maddada.com/download/macos-arm64).
+Or download the app directly:
 
-If you installed from the old `maddada/tap` tap, the tap keeps receiving updates; to move to the official cask run `brew uninstall --cask maddada/tap/ghostex && brew install ghostex`.
+<p>
+  <a href="https://maddada.com/download/macos-arm64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/macOS-Apple%20Silicon%20DMG.svg?variant=secondary&logo=apple&mode=dark" /><img src="https://shieldcn.dev/badge/macOS-Apple%20Silicon%20DMG.svg?variant=secondary&logo=apple&mode=light" alt="macOS Apple Silicon DMG" /></picture></a>
+</p>
 
-### Windows (WSL2 beta)
+### Windows
 
-> **The Windows app is a beta intended for WSL2 workflows only and may still have bugs.** Install and use it with an existing WSL2 distribution; native Windows shell workflows are not the intended setup yet. Please report problems on the [Ghostex Discord](https://discord.gg/df7b3G92CS).
+<p>
+  <a href="https://maddada.com/download/windows-x64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Windows-x64%20Setup.svg?variant=secondary&logo=windows&mode=dark" /><img src="https://shieldcn.dev/badge/Windows-x64%20Setup.svg?variant=secondary&logo=windows&mode=light" alt="Windows x64 installer" /></picture></a>
+  <a href="https://maddada.com/download/windows-arm64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Windows-ARM64%20Setup.svg?variant=secondary&logo=windows&mode=dark" /><img src="https://shieldcn.dev/badge/Windows-ARM64%20Setup.svg?variant=secondary&logo=windows&mode=light" alt="Windows ARM64 installer" /></picture></a>
+</p>
 
-Latest downloads: [Windows x64](https://maddada.com/download/windows-x64) · [Windows ARM64](https://maddada.com/download/windows-arm64). Ghostex manages its terminals, gxserver, and Source editor inside the selected WSL2 distribution. The Kanban board needs the Beads `bd` CLI installed inside that same distribution (see the Kanban section below).
-
-Starting with 7.0.0, Windows installations receive automatic updates from GitHub Releases. If you installed a 6.x Windows beta, install the 7.0.0 Setup EXE once to move to the new updater; later releases can be downloaded and applied from inside Ghostex.
+Agents run in native PowerShell by default. Prefer Linux? Switch to WSL in Settings > General > Terminal > Windows Environment. Updates arrive automatically.
 
 ### Linux
 
-Latest downloads: [Linux DEB](https://maddada.com/download/linux-deb-x64) · [Linux RPM](https://maddada.com/download/linux-rpm-x64) · [AUR (`ghostex-bin`)](https://aur.archlinux.org/packages/ghostex-bin) · [Linux tarball](https://maddada.com/download/linux-tar-x64).
+<p>
+  <a href="https://maddada.com/download/linux-deb-x64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Linux-.deb.svg?variant=secondary&logo=debian&mode=dark" /><img src="https://shieldcn.dev/badge/Linux-.deb.svg?variant=secondary&logo=debian&mode=light" alt="Linux DEB package" /></picture></a>
+  <a href="https://maddada.com/download/linux-rpm-x64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Linux-.rpm.svg?variant=secondary&logo=redhat&mode=dark" /><img src="https://shieldcn.dev/badge/Linux-.rpm.svg?variant=secondary&logo=redhat&mode=light" alt="Linux RPM package" /></picture></a>
+  <a href="https://aur.archlinux.org/packages/ghostex-bin"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/AUR-ghostex--bin.svg?variant=secondary&logo=archlinux&mode=dark" /><img src="https://shieldcn.dev/badge/AUR-ghostex--bin.svg?variant=secondary&logo=archlinux&mode=light" alt="Arch Linux AUR package" /></picture></a>
+  <a href="https://maddada.com/download/linux-tar-x64"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Linux-tar.zst.svg?variant=secondary&logo=linux&mode=dark" /><img src="https://shieldcn.dev/badge/Linux-tar.zst.svg?variant=secondary&logo=linux&mode=light" alt="Linux tarball" /></picture></a>
+</p>
 
-#### Arch Linux
+```bash
+# Arch Linux
+yay -S ghostex-bin
 
-The official AUR package is [`ghostex-bin`](https://aur.archlinux.org/packages/ghostex-bin).
-It tracks GitHub Releases and installs the same prefix-preserving `/opt/ghostex` tree as the
-tarball, with `ghostex` and `gx` on your `PATH`:
-
-```sh
-yay -S ghostex-bin      # or: paru -S ghostex-bin
-```
-
-Ghostex does not bundle Chromium; the first GUI launch downloads the browser runtime into
-your cache directory.
-
-#### Other distributions
-
-The portable `ghostex-<version>-linux-x64.tar.zst` on the
-[latest release](https://github.com/maddada/Ghostex/releases/latest) works on any x64
-distribution that ships the Chromium runtime libraries. It is a prefix-preserving tree, so
-extract it at the filesystem root — that installs `/opt/ghostex` and puts `ghostex` and `gx`
-on your `PATH`:
-
-```sh
+# Any other x64 distribution: the tarball is a prefix-preserving /opt/ghostex tree
 sudo tar -xpf ghostex-*-linux-x64.tar.zst -C /
-ghostex
 ```
 
-Runtime dependencies match the DEB (GTK3, NSS, Mesa, and related libraries) — most are
-already present on a desktop install. The first GUI launch downloads the browser runtime
-into your cache directory.
+Ghostex offers to install Chromium the first time you open the browser or code editor.
 
-### Android
+### Mobile
 
-Use the Android app to connect live to your Ghostex agent CLI sessions. APKs are in GitHub Releases.
+<p>
+  <a href="https://github.com/maddada/Ghostex/releases/latest/download/ghostex-android.apk"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Android-APK.svg?variant=secondary&logo=android&mode=dark" /><img src="https://shieldcn.dev/badge/Android-APK.svg?variant=secondary&logo=android&mode=light" alt="Android APK" /></picture></a>
+  <a href="https://discord.gg/df7b3G92CS"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/iOS-TestFlight.svg?variant=secondary&logo=apple&mode=dark" /><img src="https://shieldcn.dev/badge/iOS-TestFlight.svg?variant=secondary&logo=apple&mode=light" alt="iOS TestFlight" /></picture></a>
+</p>
 
-#### Click the button to get the app:
-
-[![Download Android APK](https://img.shields.io/badge/Android-APK-3DDC84?logo=android&logoColor=white)](https://github.com/maddada/Ghostex/releases/latest/download/ghostex-android.apk)
-
-### iOS
-
-The testflight for this app is running through our Discord: https://discord.gg/df7b3G92CS
-Please join and post in the iOS channel to get the app.
-
-## Gallery
-
-### Terminal-backed Chat GUI!
-
-You can't click on images in the terminal, editing long prompts really sucks, and typing is slow when you're sshing on a slow connection. But the terminal is more powerful than chat interfaces and gets all the features first.
-
-The Solution is here! Render the same session as a CLI or a Chat GUI.
-Toggle between the two with a single hotkey or click!
-
-<img width="400" alt="48380" src="https://github.com/user-attachments/assets/fc050d47-1627-4d6c-9f17-2175b6412ab4" />
-
-<img width="400" alt="48382" src="https://github.com/user-attachments/assets/6db91470-b859-4a09-873b-45e0947560ac" />
-
-### Built-in IDE (Optional extension)
-
-Loads on demand for working with markdown, reviewing code, and checking PRs. <br/>
-Supports all extensions. Sleeps when not in use to save resources.
-
-<img width="1200" alt="image" src="https://github.com/user-attachments/assets/986fbece-d0de-4739-8515-f3c2a7437b92" />
-
-### Split your terminals and use keyboard hotkeys to jump between them in the Agents view
-
-The same configurable hotkey flow you're used to from terminals like Ghostty and cmux. <br />
-Use Cmd/Ctrl + T for a new terminal, Cmd/Ctrl + D to split, and configurable shortcuts to move between panes.
-
-<img width="1200" alt="image" src="https://github.com/user-attachments/assets/c92c5ec9-0021-42fb-9628-0cee62c48e86" />
-
-### Supports all of the popular Agent CLIs
-
-Ghostex works with Claude Code, Codex CLI, OpenCode, Pi Agent, Gemini, and all other Agent CLIs. <br/>
-
-### Embedded Chromium Browser
-
-Comes with Annotations, Chrome Devtools MCP for Agents, Profiles.<br />
-/ghostex-embedded-browser-use lets the agent control your embedded browser tabs.
-
-<img width="1200" alt="image" src="https://github.com/user-attachments/assets/ce9fbe6b-8c2b-41f1-88f6-67d8254846e5" />
-
-### Rich Prompt Editor with Ctrl+G
-
-Edit your agent prompts with full hotkeys support and image previews! <br />
-No more uneditable "[Pasted 50+ lines]" text! Press F1 for all commands.
-
-<img width="2048" height="1221" alt="2026-06-23_CleanShot_15-47-56" src="https://github.com/user-attachments/assets/6f1db19e-20c2-456c-bb91-8dc3309b4c4b" />
-
-### Kanban board based on beads (Optional extension)
-
-Put all your thoughts here then let an orchestrator agent manage subagents to tackle them<br/>
-(Ghostex supports cross Agent CLI orchestration, your Claude Code can launch and steer Codex agents!)
-
-The board drives the [Beads](https://github.com/gastownhall/beads) `bd` CLI installed on the
-machine that runs the project: macOS, Linux, a remote machine, or your WSL2 distribution.
-Ghostex does not bundle it. Install or update it there with the official installer, or let
-the board's "Install or Update Beads" action run it for you:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
-```
-
-<img width="1200" alt="image" src="https://github.com/user-attachments/assets/85543937-85f1-4171-b2d0-6ee7264beddd" />
-
-### Docs view for working with HTML/MD/Excalidraw! (Optional extension)
-
-#### Collaborate with your agent on HTML prototypes, mockups, and explainers! Annotations system included!
-
-<img width="3456" height="2066" alt="2026-06-30_Ghostex_04-58-31@2x" src="https://github.com/user-attachments/assets/694293c1-139c-4269-8304-21ac561a01fd" />
-
-#### Full markdown editor + annotations that you can send to your agent to collaborate!
-
-<img width="3456" height="2066" alt="2026-06-30_Ghostex_10-03-18@2x" src="https://github.com/user-attachments/assets/41ab6a04-2a99-43d6-a22b-60d824f468fb" />
-
-#### Or even ask the Agent to draw an .excalidraw UI or diagram in the /docs folder:
-
-<img width="3456" height="2066" alt="2026-06-30_Ghostex_03-11-59@2x" src="https://github.com/user-attachments/assets/629ca0bb-b249-49e4-85d6-1834fcea1e88" />
-
-### Search Previous Sessions from All Agent CLIs in 1 place
-
-Fuzzy search in all your previous sessions accross agents by typing a few words from your prompts
-Press enter to resume that session! Lots of filters available. Start it from the sidebar or run `ghostex find / gx f` to start it
-
-<img width="3456" height="2066" alt="image" src="https://github.com/user-attachments/assets/85bfd614-d352-4f30-8501-f2a47d001f88" />
-
-Also see list of all previous sessions from all agents by title/tag/last active so you can resume any of them
-
-<img width="3456" height="2066" alt="2026-06-30_Ghostex_10-53-36@2x" src="https://github.com/user-attachments/assets/1d774329-6a5d-4d8d-98e7-34fd2613dd8b" />
-
-### Cross-agent orchestration built in
-
-Agents can launch other agent session using the "ghostex" cli command.
-You can ask Claude Code to launch Codex sub-agents and send prompts there/read their output.
-Write your own skills that use the /ghostex-cli skill.
-
-<img width="3454" height="2068" alt="image" src="https://github.com/user-attachments/assets/9332bb11-1e99-4be5-9016-e4cc14638cea" />
-
-### Notifications and status
-
-Ghostex supports notification sounds, menu bar indicators (running/done agents), and phone app notifications.<br/>
-See how many agents are running with just a glance at your menu bar. Click to jump to an agent!
-
-<img width="300" alt="2026-06-23_Ghostex_15-37-53@2x" src="https://github.com/user-attachments/assets/91885b03-efc4-40cd-84ad-b33523185322" />
-
-## Highlights
-
-| Feature              | What it gives you                                                  |
-| -------------------- | ------------------------------------------------------------------ |
-| Ghostty terminals    | Lower RAM use, better battery life, and stable agent CLI sessions. |
-| Native desktop shell | Rust/GPUI UI for performance-sensitive desktop behavior.           |
-| Chromium CEF browser | Embedded browser panes with DevTools, profiles, and MCP access.    |
-| Built-in IDE         | VS Code-based editor for Markdown, PR review, files, and git work. |
-| Mobile access        | iOS & Android app for checking and controlling live sessions.      |
-| TUI mode             | Use `ghostex` or `gx` to attach from another machine.              |
+The iOS TestFlight runs through the [Discord](https://discord.gg/df7b3G92CS). Post in the iOS channel to get in.
 
 ## Comparison
 
-| Feature                   | Ghostex | Codex app | cmux |
-| ------------------------- | ------- | --------- | ---- |
-| macOS support             | Yes     | Yes       | Yes  |
-| Windows support           | Yes     | Yes       | No   |
-| Linux support             | Yes     | Yes       | No   |
-| Open source               | Yes     | -         | Yes  |
-| Ghostty terminal          | Yes     | -         | Yes  |
-| Chromium Browser          | Yes     | Yes       | No   |
-| Chat GUI view             | Yes     | Yes       | No   |
-| Fully featured IDE        | Yes     | -         | -    |
-| Built-in Computer use     | Yes     | Yes       | -    |
-| Built-in Browser use      | Yes     | Yes       | Yes  |
-| Use any model             | Yes     | -         | Yes  |
-| Cross Model Orchestration | Yes     | -         | Yes  |
-| Rich Prompt Editor        | Yes     | N/A       | -    |
-| iOS                       | Yes     | Yes       | Yes  |
-| Android                   | Yes     | Yes       | Yes  |
-| Automations               | Yes     | Yes       | -    |
+| Feature                   | Ghostex | ChatGPT app | cmux |
+| ------------------------- | ------- | ----------- | ---- |
+| macOS support             | Yes     | Yes         | Yes  |
+| Windows support           | Yes     | Yes         | No   |
+| Linux support             | Yes     | Yes         | No   |
+| Open source               | Yes     | -           | Yes  |
+| Ghostty terminal          | Yes     | -           | Yes  |
+| Chromium Browser          | Yes     | Yes         | No   |
+| Chat GUI view             | Yes     | Yes         | No   |
+| Fully featured IDE        | Yes     | -           | -    |
+| Built-in Computer use     | Yes     | Yes         | -    |
+| Built-in Browser use      | Yes     | Yes         | Yes  |
+| Use any model             | Yes     | -           | Yes  |
+| Cross Model Orchestration | Yes     | -           | Yes  |
+| Rich Prompt Editor        | Yes     | N/A         | -    |
+| iOS                       | Yes     | Yes         | Yes  |
+| Android                   | Yes     | Yes         | Yes  |
+| Automations               | Yes     | Yes         | -    |
 
-## Main Features
+---
 
-- Git workflows with Sync with Main, split Git menus, prompt-agent PR review, and persistent running toasts.
-- First-prompt title generation for auto-naming new agent sessions.
-- Pinned sessions and assigning tags to sessions.
-- Auto-sleep for unused terminal, browser, and project panes.
-- Live Android access to agent CLI sessions.
-- All sessions are persistant and attachable by default (uses zmx).
-- Rich prompt editor with image insert and preview support.
-- Auto session naming for popular agents.
-- App restart resumes existing agent CLI sessions.
-- Menu bar working/done indicators and notification sounds for most agent CLIs.
-- Multi-pane and multi-group project layouts.
-- Scheduled messages and automation through the Ghostex CLI.
-- Install gxserver daemon on remote. Connect over SSH in settings. Remote machines show in sidebar.
-- Create worktrees and merge them back easily.
-- Find previous threads by keyword and continue with context.
-- Sync session titles and status into the UI.
-- Run multiple panes and multiple groups per project with split and tab layouts.
+## Community
 
-## Contributing
+- **Discord:** [discord.gg/df7b3G92CS](https://discord.gg/df7b3G92CS) for help, TestFlight access, and feature talk.
+- **Issues:** [Report a bug or request a feature](https://github.com/maddada/Ghostex/issues).
+- **Contributing:** Ghostex moves fast and help is welcome on platform ports, agent integrations, docs, and polish. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Ghostex is moving quickly, and help is welcome on platform ports, missing agent CLI integrations, docs, testing, and feature polish.
-
-Join the Discord: https://discord.gg/df7b3G92CS
-
-Please check out: [CONTRIBUTING.md](https://github.com/maddada/Ghostex/tree/main/CONTRIBUTING.md)
+<p align="center">
+  <a href="https://github.com/maddada/Ghostex/graphs/contributors"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/contributors/maddada/Ghostex.svg?bg=transparent&border=false&mode=dark" /><img src="https://shieldcn.dev/contributors/maddada/Ghostex.svg?bg=transparent&border=false&mode=light" alt="Ghostex contributors" /></picture></a>
+</p>
 
 ## Credits
 
 Ghostex builds on open source work from these projects and communities:
 
-- [OpenUsage](https://github.com/robinebers/openusage) - Usage stats for Claude & Codex
-- [CEF Project](https://github.com/chromiumembedded/cef) — embedded Chromium browser panes
-- [Agentation](https://github.com/benjitaylor/agentation) — browser annotation and feedback tooling
-- [CMUX](https://github.com/manaflow-ai/cmux) — agent hook patterns and notification integration
-- [VS Code](https://github.com/microsoft/vscode) and [code-server](https://github.com/coder/code-server) — embedded IDE surfaces
-- [zehn](https://github.com/al3rez/zehn) by [al3erz](https://github.com/al3rez) — searching sessions by prompt
-- [vvterm](https://github.com/vivy-company/vvterm) — source of terminal ideas ported into the mobile app
-- [Termux](https://github.com/termux/termux-app) — Android terminal components ported into the mobile app
-- [Pierre Computer Company](https://github.com/pierrecomputer/pierre) — diffs and file rendering components
-- [Beads](https://github.com/gastownhall/beads) by [Steve Yegge](https://github.com/steveyegge) — kanban project board
-- [Beads Viewer](https://github.com/Dicklesworthstone/beads_viewer) by [doodlestein](https://github.com/Dicklesworthstone) — kanban view reference
+- [Ghostty](https://github.com/ghostty-org/ghostty) and [Zed / GPUI](https://github.com/zed-industries/zed) for the terminal and the native shell
+- [CEF](https://github.com/chromiumembedded/cef) for embedded Chromium panes
+- [Trycua](https://github.com/trycua/cua) for built-in Computer Use
+- [VS Code](https://github.com/microsoft/vscode) and [code-server](https://github.com/coder/code-server) for the embedded IDE
+- [Beads](https://github.com/gastownhall/beads) by [Steve Yegge](https://github.com/steveyegge) and [Beads Viewer](https://github.com/Dicklesworthstone/beads_viewer) for the Kanban board
+- [OpenUsage](https://github.com/robinebers/openusage) for Claude and Codex usage stats
+- [Agentation](https://github.com/benjitaylor/agentation) for browser annotation tooling
+- [cmux](https://github.com/manaflow-ai/cmux) for agent hook and notification patterns
+- [zehn](https://github.com/al3rez/zehn) by [al3rez](https://github.com/al3rez) for prompt-history search
+- [vvterm](https://github.com/vivy-company/vvterm) and [Termux](https://github.com/termux/termux-app) for mobile terminal components
+- [Pierre](https://github.com/pierrecomputer/pierre) for diff and file rendering components
+
+The moving background behind the screenshots is [Time lapse of a green meadow](https://mixkit.co/free-stock-video/time-lapse-of-a-green-meadow-4070/) from Mixkit, used under the Mixkit Stock Video Free License.
+
+## License
+
+Ghostex is free and open source under the [MIT License](LICENSE).

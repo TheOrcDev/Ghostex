@@ -27,8 +27,7 @@ probing per event would spawn a subprocess on macOS.
 use serde_json::{Map, Value};
 
 /// The marketing version baked in by `server/build.rs`, mirroring the desktop
-/// crate. Dev builds report `CARGO_PKG_VERSION`, which is the point: they are
-/// distinguishable from a shipped build.
+/// crate: the release version, or the root `package.json` version for dev builds.
 pub const SERVER_MARKETING_VERSION: &str = env!("GHOSTEX_BUILD_MARKETING_VERSION");
 
 pub fn build_base_properties() -> Map<String, Value> {
@@ -53,10 +52,10 @@ pub fn build_base_properties() -> Map<String, Value> {
 }
 
 /// A dev build is one whose marketing version was never stamped by the release
-/// tooling, i.e. it still reads the crate's own placeholder version. Debug
+/// tooling (`GHOSTEX_BUILD_VERSION_STAMPED=0`, see `server/build.rs`). Debug
 /// profile counts too, since nobody ships one.
 pub fn is_dev_build() -> bool {
-    cfg!(debug_assertions) || SERVER_MARKETING_VERSION == env!("CARGO_PKG_VERSION")
+    cfg!(debug_assertions) || env!("GHOSTEX_BUILD_VERSION_STAMPED") == "0"
 }
 
 /// Major version only — `26`, not `26.1.3` — so the value stays a coarse
@@ -72,7 +71,7 @@ fn read_os_major_version() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn read_raw_os_version() -> Option<String> {
+pub(crate) fn read_raw_os_version() -> Option<String> {
     let output = std::process::Command::new("/usr/bin/sw_vers")
         .arg("-productVersion")
         .output()
@@ -84,7 +83,7 @@ fn read_raw_os_version() -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_raw_os_version() -> Option<String> {
+pub(crate) fn read_raw_os_version() -> Option<String> {
     let output = std::process::Command::new("uname")
         .arg("-r")
         .output()
@@ -96,7 +95,7 @@ fn read_raw_os_version() -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn read_raw_os_version() -> Option<String> {
+pub(crate) fn read_raw_os_version() -> Option<String> {
     let output = crate::platform::process::background_command("cmd")
         .args(["/C", "ver"])
         .output()
@@ -111,6 +110,6 @@ fn read_raw_os_version() -> Option<String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn read_raw_os_version() -> Option<String> {
+pub(crate) fn read_raw_os_version() -> Option<String> {
     None
 }

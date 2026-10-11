@@ -77,6 +77,8 @@ pub(crate) fn gpui_command_action_startup_text(
 }
 
 #[cfg(target_os = "windows")]
+/// CDXC:CommandPane 2026-09-23 WHY:
+/// Action startup and mounted reruns send literal PTY input. Encode the multiline PowerShell wrapper as one interactive statement so PSReadLine cannot submit its lines separately. Finalize the status stamp in finally because Ctrl+C skips the remaining pipeline statements and otherwise leaves the tab marked working. Capture success inside the user script block because invoking that block can reset a nonterminating error's false status.
 pub(crate) fn gpui_powershell_command_action_execution_text(
     command: &str,
     run_id: &str,
@@ -86,27 +88,41 @@ pub(crate) fn gpui_powershell_command_action_execution_text(
     PowerShell command tabs use the same bounded status-file contract as the
     Unix wrapper, but write it with native PowerShell syntax and ASCII output
     so the existing parser never sees a UTF-8 BOM on its first key. The saved
-    command remains visible terminal input and runs in the interactive ConPTY
+    command runs in the interactive ConPTY
     shell; this wrapper does not start a hidden process or persist the command.
     */
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
     let state_file = gpui_powershell_single_quote(status_file_path.to_string_lossy().as_ref());
     let run_id = gpui_powershell_single_quote(run_id);
-    format!(
+    let script = format!(
         r#"$__ghostexStateFile = '{state_file}'
 $__ghostexStateDir = Split-Path -Parent $__ghostexStateFile
 if ($__ghostexStateDir) {{ New-Item -ItemType Directory -Force -Path $__ghostexStateDir | Out-Null }}
 $__ghostexUpdatedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 @('status=working', "statusUpdatedAt=$__ghostexUpdatedAt", 'commandRunId={run_id}', 'commandExitCode=0', "lastActivityAt=$__ghostexUpdatedAt") | Set-Content -LiteralPath $__ghostexStateFile -Encoding Ascii
 $global:LASTEXITCODE = $null
-& {{
+$__ghostexExit = 130
+$__ghostexResult = @{{ Succeeded = $true }}
+try {{
+    & {{
 {command}
+        $__ghostexResult.Succeeded = $?
+    }}
+    $__ghostexExit = if ($null -ne $LASTEXITCODE) {{ [int]$LASTEXITCODE }} elseif ($__ghostexResult.Succeeded) {{ 0 }} else {{ 1 }}
+}} catch {{
+    $__ghostexExit = 1
+    throw
+}} finally {{
+    if ($__ghostexExit -lt 0 -or $__ghostexExit -gt 255) {{ $__ghostexExit = 1 }}
+    $__ghostexUpdatedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    @('status=idle', "statusUpdatedAt=$__ghostexUpdatedAt", 'commandRunId={run_id}', "commandExitCode=$__ghostexExit", "lastActivityAt=$__ghostexUpdatedAt") | Set-Content -LiteralPath $__ghostexStateFile -Encoding Ascii
 }}
-$__ghostexSucceeded = $?
-$__ghostexExit = if ($null -ne $LASTEXITCODE) {{ [int]$LASTEXITCODE }} elseif ($__ghostexSucceeded) {{ 0 }} else {{ 1 }}
-if ($__ghostexExit -lt 0 -or $__ghostexExit -gt 255) {{ $__ghostexExit = 1 }}
-$__ghostexUpdatedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-@('status=idle', "statusUpdatedAt=$__ghostexUpdatedAt", 'commandRunId={run_id}', "commandExitCode=$__ghostexExit", "lastActivityAt=$__ghostexUpdatedAt") | Set-Content -LiteralPath $__ghostexStateFile -Encoding Ascii
 "#
+    );
+    let encoded = STANDARD.encode(script.as_bytes());
+    format!(
+        "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))))"
     )
 }
 
@@ -419,8 +435,9 @@ pub(crate) fn gpui_command_action_status_from_file(
 /*
 CDXC:Browser 2026-08-18:
 The reveal payload names the tab in Rust's own vocabulary (project id + tab id).
-Turning that into the sidebar's session id belongs to the sidebar runtime, which
-is the code that builds those rows in the first place.
+Turning that into the sidebar's session id belongs to the store (gx-core
+`sidebar_view`; the sidebar runtime until 2026-09-25), which is the code that
+builds those rows in the first place.
 */
 pub(crate) fn gpui_remote_attach_session_reference_from_project_id(
     project_id: &str,

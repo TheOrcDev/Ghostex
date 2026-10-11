@@ -1,0 +1,236 @@
+name: GPUI release - Windows native editor component
+
+# CDXC:Release 2026-09-16 DECISION:
+# User: the native Windows editor is cached as a component job with an
+# immutable tag and reuse, like darwin-arm64, not with actions/cache, because
+# the repo cache limit and 7-day eviction can silently miss.
+#
+# CDXC:Release 2026-09-16 WHY:
+# The native Windows editor (VS Code REH for win32, built by
+# apps/desktop/scripts/build-windows-code-server.ps1) used to be compiled from
+# source inside the packaging phase of every Windows release job: two `npm ci`
+# rounds plus the full gulp build, 28 minutes on x64 and 50 minutes on ARM64
+# measured on 9.6.0, the single largest cost of the whole release. The script's
+# only cache was a local fingerprint stamp that included the app version, so it
+# could never hit across releases. This job is the Windows twin of
+# release-gpui-code-server-macos.yml: it probes the immutable component tag for
+# the windows-native-<arch> asset first and finishes in about a minute when the
+# exact asset exists, otherwise it builds and publishes it in parallel with the
+# Windows job, which awaits only the artifact just in time before packaging.
+# SEE-ALSO: apps/desktop/scripts/build-windows-code-server.ps1
+# (GHOSTEX_WINDOWS_CODE_SERVER_COMPONENT_ONLY), release-gpui-windows.yml,
+# tooling/release-gpui/verify-windows-native-code-server-archive.mjs.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+    outputs:
+      component_version:
+        value: ${{ jobs.component.outputs.component_version }}
+      archive_name:
+        value: ${{ jobs.component.outputs.archive_name }}
+      artifact_name:
+        value: ${{ jobs.component.outputs.artifact_name }}
+      action:
+        value: ${{ jobs.component.outputs.action }}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver release version
+        required: true
+        type: string
+      arch:
+        description: Windows architecture
+        required: true
+        default: x64
+        type: choice
+        options: [x64, arm64]
+
+permissions:
+  attestations: write
+  contents: write
+  id-token: write
+
+jobs:
+  component:
+    runs-on: ${{ inputs.arch == 'arm64' && 'windows-11-vs2026-arm' || 'windows-2025' }}
+    # 9.6.0 measured the editor build at 28 minutes on x64 and 50 on ARM64 on
+    # top of about 7 minutes of runner setup; the budget covers a slow run and
+    # a reuse finishes in about a minute.
+    timeout-minutes: ${{ inputs.arch == 'arm64' && 120 || 80 }}
+    outputs:
+      action: ${{ steps.probe.outputs.action }}
+      archive_name: ${{ steps.code_server_identity.outputs.archive_name }}
+      artifact_name: ${{ steps.code_server_identity.outputs.artifact_name }}
+      component_version: ${{ steps.code_server_identity.outputs.component_version }}
+    env:
+      OUTPUT_DIR: build/release-gpui/${{ inputs.version }}/code-server-windows-native-${{ inputs.arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: false
+      - name: Restore the code-server identity input
+        shell: bash
+        run: git submodule update --init --depth=1 -- .dependencies/code-server
+      - name: Resolve immutable code-server component identity
+        id: code_server_identity
+        shell: bash
+        run: node tooling/release-gpui/code-server-component-identity.mjs --root .dependencies/code-server --platform "windows-native-${{ inputs.arch }}" --github-output >> "$GITHUB_OUTPUT"
+      - name: Probe the published component tag
+        id: probe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          ARCHIVE='${{ steps.code_server_identity.outputs.archive_name }}'
+          TAG='${{ steps.code_server_identity.outputs.download_tag }}'
+          COMPONENTS_REPO="$(node tooling/release-gpui/components-repo.mjs)"
+          # Same probe as release-gpui-code-server-macos.yml: retry transient
+          # API failures, treat an unreachable API as "not published" because
+          # that direction is safe (a rebuild, never a mutated immutable asset).
+          ERRLOG="$(mktemp)"
+          ASSETS=""
+          for attempt in 1 2 3; do
+            if ASSETS="$(gh release view "$TAG" --repo "$COMPONENTS_REPO" --json assets 2>"$ERRLOG")"; then
+              break
+            fi
+            ASSETS=""
+            if grep -qiE 'release not found|not found \(HTTP 404\)' "$ERRLOG"; then
+              break
+            fi
+            echo "::warning::Component tag probe attempt ${attempt}/3 failed: $(tr '\n' ' ' <"$ERRLOG")"
+            if [[ $attempt -lt 3 ]]; then
+              sleep $(( attempt * 5 ))
+            fi
+          done
+          if [[ -z "$ASSETS" ]]; then
+            ASSETS='{"assets":[]}'
+          fi
+          rm -f "$ERRLOG"
+          PUBLISHED=0
+          if printf '%s' "$ASSETS" | node -e '
+            const text = require("node:fs").readFileSync(0, "utf8").trim() || "{}";
+            const assets = (JSON.parse(text).assets ?? []).map((asset) => asset.name);
+            const name = process.argv[1];
+            process.exit(assets.includes(name) && assets.includes(`${name}.sha256`) ? 0 : 1);
+          ' "$ARCHIVE"; then
+            PUBLISHED=1
+          fi
+          if [[ "$PUBLISHED" == "1" ]]; then
+            echo "action=reuse" >> "$GITHUB_OUTPUT"
+            echo "::notice::Reusing published component $COMPONENTS_REPO $TAG/$ARCHIVE"
+          else
+            echo "action=build" >> "$GITHUB_OUTPUT"
+            echo "::notice::Component $TAG has no $ARCHIVE in $COMPONENTS_REPO yet; building it"
+          fi
+      # Component tags are published to a separate repository that
+      # github.token cannot write; fail before any build work when the PAT is
+      # missing (see tooling/release-gpui/components-repo-setup.md).
+      - name: Require the components publishing token
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        shell: bash
+        env:
+          COMPONENTS_GITHUB_TOKEN: ${{ secrets.COMPONENTS_GITHUB_TOKEN }}
+        run: |
+          if [[ -z "$COMPONENTS_GITHUB_TOKEN" ]]; then
+            echo "::error::COMPONENTS_GITHUB_TOKEN is not configured; component tags are published to $(node tooling/release-gpui/components-repo.mjs) and github.token cannot write there. See tooling/release-gpui/components-repo-setup.md."
+            exit 1
+          fi
+      - name: Reuse the published component asset
+        if: ${{ steps.probe.outputs.action == 'reuse' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tooling/release-gpui/retry.sh 4 2 -- node tooling/release-gpui/publish-component.mjs \
+            --reuse-published \
+            --metadata-only \
+            --require-sha256-sidecars \
+            --component code-server \
+            --version '${{ steps.code_server_identity.outputs.component_version }}' \
+            --platform "windows-native-${{ inputs.arch }}" \
+            --asset-dir "$OUTPUT_DIR" \
+            --output build/on-demand-components/components.json
+          node tooling/release-gpui/verify-windows-native-code-server-archive.mjs \
+            --archive "$OUTPUT_DIR/${{ steps.code_server_identity.outputs.archive_name }}" \
+            --version '${{ steps.code_server_identity.outputs.component_version }}' \
+            --platform "windows-native-${{ inputs.arch }}"
+      # The toolchain step also restores the pinned VS Code sources, so it runs
+      # before setup-node: the npm cache key below hashes both lock files.
+      - name: Prepare native editor build tools
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        shell: pwsh
+        run: tooling/release-gpui/prepare-windows-editor-tools.ps1 -Arch '${{ inputs.arch }}'
+      # The editor build needs native Windows Node at the version pinned by
+      # code-server, for the requested architecture; the script refuses any
+      # other Node.
+      - name: Set up the pinned native editor Node.js
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .dependencies/code-server/.node-version
+          architecture: ${{ inputs.arch }}
+          cache: npm
+          cache-dependency-path: |
+            .dependencies/code-server/package-lock.json
+            .dependencies/code-server/lib/vscode/package-lock.json
+      - name: Build and package the native Windows editor component
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          GHOSTEX_WINDOWS_ARCH: ${{ inputs.arch }}
+          GHOSTEX_WINDOWS_CODE_SERVER_COMPONENT_ONLY: '1'
+          GHOSTEX_CODE_SERVER_COMPONENT_VERSION: ${{ steps.code_server_identity.outputs.component_version }}
+          GHOSTEX_ON_DEMAND_COMPONENT_ASSET_DIR: ${{ github.workspace }}\${{ env.OUTPUT_DIR }}
+        run: apps/desktop/scripts/build-windows-code-server.ps1
+      - name: Publish the immutable component
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPONENTS_GITHUB_TOKEN: ${{ secrets.COMPONENTS_GITHUB_TOKEN }}
+        run: |
+          ARCHIVE="$OUTPUT_DIR/${{ steps.code_server_identity.outputs.archive_name }}"
+          [[ -f "$ARCHIVE" && -f "$ARCHIVE.sha256" ]]
+          node tooling/release-gpui/verify-windows-native-code-server-archive.mjs \
+            --archive "$ARCHIVE" \
+            --version '${{ steps.code_server_identity.outputs.component_version }}' \
+            --platform "windows-native-${{ inputs.arch }}"
+          tooling/release-gpui/retry.sh 4 2 -- node tooling/release-gpui/publish-component.mjs \
+            --require-sha256-sidecars \
+            --require-platforms "windows-native-${{ inputs.arch }}" \
+            --component code-server \
+            --version '${{ steps.code_server_identity.outputs.component_version }}' \
+            --asset-dir "$OUTPUT_DIR" \
+            --output build/on-demand-components/components.json
+      - name: Attest build provenance
+        if: ${{ steps.probe.outputs.action == 'build' }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ env.OUTPUT_DIR }}/${{ steps.code_server_identity.outputs.archive_name }}
+      - name: Record job observability
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo "### code-server windows-native-${{ inputs.arch }}: ${{ steps.probe.outputs.action }}"
+            echo ""
+            echo "- Component version \`${{ steps.code_server_identity.outputs.component_version }}\`"
+            echo "- Download tag \`${{ steps.code_server_identity.outputs.download_tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.code_server_identity.outputs.artifact_name }}
+          path: ${{ env.OUTPUT_DIR }}/
+          if-no-files-found: error
+          retention-days: 14

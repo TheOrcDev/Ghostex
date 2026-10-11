@@ -15,8 +15,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { NODES, nodeIdsInDependencyOrder, nodePathspecs, nodeValues, nodeDefinition } from './product-inputs.mjs';
 
-/* fp5 (2026-08-27): Linux packages now compose the on-demand code-server component. */
-export const FINGERPRINT_ALGORITHM_REVISION = 'fp5';
+/* fp6 (2026-10-01): the gxserver inputs list tooling/release-shared.mjs instead of the deleted release-ghostex*.mjs family. */
+export const FINGERPRINT_ALGORITHM_REVISION = 'fp6';
 
 const EXCLUDE_PREFIX = ':(exclude)';
 const PROJECTIONS = new Set(['package-json']);
@@ -69,6 +69,11 @@ export function parseTreeEntries(output) {
 export function createGitTreeReader({ repoRoot = process.cwd(), run = spawnSync } = {}) {
   const treeCache = new Map();
   const gitArgs = (args) => ['-C', repoRoot, ...args];
+  /**
+   * @param {string[]} args
+   * @param {{ encoding?: any, maxBuffer?: number }} [options]
+   * @returns {any}
+   */
   const capture = (args, { encoding = 'utf8', maxBuffer = 256 * 1024 * 1024 } = {}) => {
     const result = run('git', gitArgs(args), { encoding, maxBuffer });
     if (result.error) throw result.error;

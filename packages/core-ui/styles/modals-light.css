@@ -12,15 +12,15 @@ body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
     [data-slot='popover-content']
   ) {
   color-scheme: light;
-  --app-modal-background: #ffffff;
-  --gx-modal-surface: #ffffff;
+  --app-modal-background: var(--gx-theme-chrome, #ffffff);
+  --gx-modal-surface: var(--gx-theme-chrome, #ffffff);
   --settings-surface: #ffffff;
   --settings-raised: #f0f0f0;
   --settings-raised-hover: #e5e5e5;
   --settings-hairline: rgba(0, 0, 0, 0.14);
-  --gx-modal-panel: #f5f5f5;
-  --gx-modal-raised: #f0f0f0;
-  --gx-modal-raised-hover: #e5e5e5;
+  --gx-modal-panel: color-mix(in srgb, #000000 3%, var(--gx-modal-surface));
+  --gx-modal-raised: color-mix(in srgb, #000000 5%, var(--gx-modal-surface));
+  --gx-modal-raised-hover: color-mix(in srgb, #000000 9%, var(--gx-modal-surface));
   --gx-modal-hairline: rgba(0, 0, 0, 0.14);
   --background: #ffffff;
   --foreground: #262626;
@@ -263,9 +263,6 @@ body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
 body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']) .git-file-diff-token-comment {
   color: #626262;
 }
-body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']) .add-repository-warning {
-  color: #8a5c16;
-}
 
 body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']) .quick-access-surface {
   /* CDXC:AppModal 2026-09-14 WHY: Commands and Saved Prompts nest this surface inside the dialog, where its dark foreground overrides inherited light tokens. Set the light tokens on the surface itself so switching sections cannot dim the header or segmented controls. */
@@ -301,25 +298,6 @@ body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
   .previous-sessions-tag-filter-menu
   .session-context-menu-divider {
   background: rgba(0, 0, 0, 0.14);
-}
-body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
-  :is(
-    .first-launch-setup-status-badge,
-    .first-launch-setup-step-chip[data-state='done'] .first-launch-setup-step-num,
-    .first-launch-setup-agent-status[data-installed='true']
-  ) {
-  color: #047857;
-}
-
-body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
-  .ghostex-settings-shadcn
-  :is(
-    .first-launch-onb-pill[data-tone='ok'],
-    .first-launch-onb-check-icon,
-    .first-launch-setup-hook-agent-installed .first-launch-setup-hook-agent-icon,
-    .first-launch-setup-step-chip[data-state='done'] .first-launch-setup-step-num
-  ) {
-  color: #047857;
 }
 
 /* CDXC:DesignSystem 2026-09-14 DECISION:

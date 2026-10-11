@@ -38,7 +38,29 @@ impl GhostexGpuiApp {
         through the http/https-only OS open helper after the same toolbar
         normalization as typed addresses.
         */
+        let remote_project = self.active_gpui_remote_project_reference();
         for link in links {
+            // CDXC:RemoteMachines 2026-09-23 WHY:
+            // An Action's localhost belongs to its project host. Opening an external saved link in the OS browser instead reaches the client's own service; keep the same machine-scoped Browser route used by remote chat and terminal links.
+            if gpui_remote_link_is_loopback(&link.url)
+                && let Some(reference) = remote_project.as_ref()
+            {
+                self.open_browser_url_from_renderer_command_with_machine(
+                    GpuiSidebarOpenBrowserUrlMessage {
+                        url: link.url.clone(),
+                        reuse: GpuiBrowserRendererOpenReuse::Similar,
+                        from_quick_header: false,
+                        project_id: Some(gpui_remote_scoped_project_id(
+                            &reference.remote_machine_id,
+                            &reference.project_id,
+                        )),
+                    },
+                    Some(reference.remote_machine_id.clone()),
+                    window,
+                    cx,
+                );
+                continue;
+            }
             match link.target {
                 GpuiTitlebarActionLinkTarget::Integrated => {
                     self.open_browser_url_from_renderer_command(
@@ -79,6 +101,14 @@ impl GhostexGpuiApp {
         */
         if !self.titlebar_mode_available(TitlebarMode::Browser) {
             self.copy_path_for_disabled_project_workarea(&url, "Browser", cx);
+            return;
+        }
+        // Without the web runtime the saved page opens in the system browser, as links do
+        // (CDXC:CefRuntime 2026-09-28 in workspace_events.rs).
+        if !crate::app::helpers::web_runtime::web_runtime_available() {
+            if let Some(url) = normalize_address(&url) {
+                let _ = gpui_open_external_http_url(&url);
+            }
             return;
         }
         self.change_active_mode_with_pane_state(TitlebarMode::Browser, cx);
@@ -202,9 +232,6 @@ impl GhostexGpuiApp {
         CDXC:CommandPane 2026-06-27-01:45:
         Default terminal Actions select and reveal their command tab but keep the current shell first responder, matching native `focusAfterCreate: false`. Only explicit command-pane focus routes and Debug Actions may transfer typing focus.
 
-        CDXC:CommandPane 2026-06-27-02:05:
-        After Action run-start metadata is installed and sidebar run-state feedback is posted, GPUI must immediately refresh the cached sanitized `commandPaneSessions` bridge like native `runNativeSidebarCommand.publish()`. The bridge may carry only session ids, active/focus booleans, sanitized titles, semantic statuses, sleeping/timer fields, and sanitized action command ids; command text, cwd/env, run ids, status-file paths, terminal output, persisted shell data, and project paths must stay out.
-
         CDXC:CommandPane 2026-06-27-07:54:
         Default terminal Action execution is mutually exclusive like native: mounted idle reuse writes the staged wrapper to the exact current command surface and submits Return without enqueueing startup data, while created or unmounted Action tabs receive an exact-slot launch payload for first mount. Do not use a launch payload as fallback for a mounted reused shell.
         */
@@ -234,6 +261,17 @@ impl GhostexGpuiApp {
         }
         let group_id = selection.group_id;
         let session_id = selection.session_id;
+        /*
+        CDXC:CommandPane 2026-09-30 WHY:
+        Clicking a quick action while the command pane is collapsed only expanded the pane and never ran the command. Reveal makes the slot count as mounted, but the surface record left over from before the collapse is stale, so the rerun wrote to it (or found nothing to write to) and skipped the launch payload. Judge mounted reuse by whether the slot was on screen before the reveal; a collapsed pane takes the exact-slot launch payload path, which the remount consumes.
+        */
+        let slot_was_rendered_before_reveal = self
+            .command_pane
+            .is_current_terminal_body_mount_slot(CommandTerminalBodyMountSlotId {
+                group_id,
+                session_id,
+            });
+        self.reveal_command_group_dock(group_id, cx);
         if matches!(
             selection.kind,
             CommandPaneActionSessionSelectionKind::ReusedActive
@@ -256,6 +294,10 @@ impl GhostexGpuiApp {
             session_id,
         };
         let run_id = create_gpui_command_action_run_id();
+        let action_scope = self.gpui_action_scope_for_command(&command_id);
+        if let Some(session) = self.command_pane.session_mut(session_id) {
+            session.action_scope = action_scope;
+        }
         let status_file_path = gpui_command_action_status_file_path(session_id);
         let execution_text = gpui_command_action_execution_text_for_current_backend(
             &command,
@@ -265,8 +307,8 @@ impl GhostexGpuiApp {
         let mounted_reuse_surface_available = matches!(
             selection.kind,
             CommandPaneActionSessionSelectionKind::Reused
-        ) && self
-            .gpui_command_action_mounted_reuse_surface_available(slot_id);
+        ) && slot_was_rendered_before_reveal
+            && self.gpui_command_action_mounted_reuse_surface_available(slot_id);
         let startup_text = if mounted_reuse_surface_available {
             None
         } else {
@@ -300,7 +342,6 @@ impl GhostexGpuiApp {
             &command_id,
             &run_id,
             GpuiSidebarCommandRunState::Running,
-            cx,
         );
         self.refresh_sidebar_command_pane_sessions_if_changed(cx);
         let wrote_to_mounted_reuse = mounted_reuse_surface_available

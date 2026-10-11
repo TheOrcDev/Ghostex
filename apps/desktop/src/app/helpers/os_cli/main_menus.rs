@@ -5,12 +5,30 @@ use gpui::App;
 use crate::app::helpers::*;
 use crate::*;
 
+thread_local! {
+    /// The menu variant last installed, so the Window menu's list of windows can be rebuilt
+    /// without changing it.
+    static MAIN_MENUS_SOURCE_FOCUS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) fn set_ghostex_gpui_main_menus(source_workarea_cef_owns_native_focus: bool, cx: &App) {
+    MAIN_MENUS_SOURCE_FOCUS.set(source_workarea_cef_owns_native_focus);
     cx.set_menus(ghostex_gpui_main_menus_for_source_focus(
         source_workarea_cef_owns_native_focus,
     ));
     #[cfg(target_os = "macos")]
     cef::refresh_application_menu_hooks();
+}
+
+/// The menu variant installed now (`set_ghostex_gpui_main_menus`).
+pub(crate) fn installed_main_menus_source_focus() -> bool {
+    MAIN_MENUS_SOURCE_FOCUS.get()
+}
+
+/// Rebuilds the menu bar after a workspace window opened, closed, was renamed or became the
+/// active one, so the Window menu lists the windows as they are (app/workspace_windows/).
+pub(crate) fn refresh_ghostex_gpui_main_menus(cx: &mut App) {
+    set_ghostex_gpui_main_menus(MAIN_MENUS_SOURCE_FOCUS.get(), cx);
 }
 
 pub(crate) fn register_ghostex_gpui_main_menu_actions(
@@ -43,9 +61,10 @@ pub(crate) fn register_ghostex_gpui_main_menu_actions(
             returns so the main window can be borrowed and Sparkle can present
             its standard user-initiated update or no-update UI.
             */
-            let app = app.clone();
+            let (window, app) = crate::app::workspace_windows::lead_workspace_window(cx)
+                .unwrap_or_else(|| (main_window, app.clone()));
             cx.defer(move |cx| {
-                let _ = main_window.update(cx, |_, window, cx| {
+                let _ = window.update(cx, |_, window, cx| {
                     let _ = app.update(cx, |app, cx| app.check_for_gpui_updates(window, cx));
                 });
             });
@@ -61,9 +80,9 @@ pub(crate) fn register_ghostex_gpui_main_menu_actions(
             cycle returns so the main window can be borrowed normally instead
             of silently rejecting a re-entrant update.
             */
-            let app = app.clone();
+            let (window, app) = menu_target_window(main_window, &app, cx);
             cx.defer(move |cx| {
-                let _ = main_window.update(cx, |_, window, cx| {
+                let _ = window.update(cx, |_, window, cx| {
                     let _ = app.update(cx, |app, cx| {
                         app.open_gpui_app_modal_from_titlebar(
                             GpuiAppModalKind::Settings,
@@ -78,11 +97,24 @@ pub(crate) fn register_ghostex_gpui_main_menu_actions(
     cx.on_action({
         let app = app.clone();
         move |_: &OpenGpuiExtensionsModal, cx| {
-            let app = app.clone();
+            let (window, app) = menu_target_window(main_window, &app, cx);
             cx.defer(move |cx| {
-                let _ = main_window.update(cx, |_, window, cx| {
+                let _ = window.update(cx, |_, window, cx| {
                     let _ = app.update(cx, |app, cx| {
                         app.open_gpui_settings_extensions_page(Some(window), cx);
+                    });
+                });
+            });
+        }
+    });
+    cx.on_action({
+        let app = app.clone();
+        move |_: &OpenGpuiAccountsModal, cx| {
+            let (window, app) = menu_target_window(main_window, &app, cx);
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        app.open_gpui_settings_accounts_page(Some(window), cx);
                     });
                 });
             });
@@ -119,21 +151,39 @@ pub(crate) fn register_ghostex_gpui_main_menu_actions(
         })
         .detach();
     });
-    cx.on_action(move |_: &MinimizeGhostexGpuiWindow, cx| {
-        let _ = main_window.update(cx, |_, window, _cx| window.minimize_window());
+    cx.on_action({
+        let app = app.clone();
+        move |_: &MinimizeGhostexGpuiWindow, cx| {
+            let (window, _) = menu_target_window(main_window, &app, cx);
+            let _ = window.update(cx, |_, window, _cx| window.minimize_window());
+        }
     });
     cx.on_action(move |_: &ZoomGhostexGpuiWindow, cx| {
-        let _ = main_window.update(cx, |_, window, _cx| window.zoom_window());
+        let (window, _) = menu_target_window(main_window, &app, cx);
+        let _ = window.update(cx, |_, window, _cx| window.zoom_window());
     });
+}
+
+/// The window a menu bar command acts in: the workspace window the user is in, since File > New
+/// Window can open several (app/workspace_windows/), else the launch window.
+fn menu_target_window(
+    main_window: gpui::AnyWindowHandle,
+    app: &gpui::WeakEntity<GhostexGpuiApp>,
+    cx: &App,
+) -> (gpui::AnyWindowHandle, gpui::WeakEntity<GhostexGpuiApp>) {
+    crate::app::workspace_windows::active_workspace_window(cx)
+        .unwrap_or_else(|| (main_window, app.clone()))
 }
 
 /// Native app menu bar (macOS `installMainMenu` parity, AppDelegate.swift
 /// :2533-2663): App (About/Check for Updates/Settings/Hide/Restart/Quit),
-/// File → Close Pane ⌘W, the Edit clipboard set (first-responder OS actions so
-/// CEF and Ghostty views handle them natively), and Window → Minimize/Zoom.
+/// File → New Window ⇧⌘N and Close Pane ⌘W, the Edit clipboard set (first-responder OS actions so
+/// CEF and Ghostty views handle them natively), and Window → Minimize/Zoom, Cycle Through Windows
+/// and the open windows.
 /// Undo/Redo are omitted from the GPUI-owned menu because gpui routes them
 /// through app actions instead of first-responder selectors; the macOS CEF hook
-/// installs them after each menu replacement.
+/// installs them after each menu replacement, targeted at an object that picks
+/// the focused web page or [`dispatch_text_input_history_from_edit_menu`].
 pub(crate) fn ghostex_gpui_main_menus_for_source_focus(
     source_workarea_cef_owns_native_focus: bool,
 ) -> Vec<gpui::Menu> {
@@ -174,7 +224,11 @@ pub(crate) fn ghostex_gpui_main_menus_for_source_focus(
                 QuitGhostexGpuiAndBackgroundServices,
             ),
         ]),
-        Menu::new("File").items(vec![close_pane_item]),
+        Menu::new("File").items(vec![
+            MenuItem::action("New Window", NewGhostexGpuiWindow),
+            MenuItem::separator(),
+            close_pane_item,
+        ]),
         Menu::new("Edit").items(vec![
             MenuItem::os_action("Cut", GpuiEditMenuCut, OsAction::Cut),
             MenuItem::os_action("Copy", GpuiEditMenuCopy, OsAction::Copy),
@@ -182,9 +236,69 @@ pub(crate) fn ghostex_gpui_main_menus_for_source_focus(
             MenuItem::separator(),
             MenuItem::os_action("Select All", GpuiEditMenuSelectAll, OsAction::SelectAll),
         ]),
-        Menu::new("Window").items(vec![
-            MenuItem::action("Minimize", MinimizeGhostexGpuiWindow),
-            MenuItem::action("Zoom", ZoomGhostexGpuiWindow),
-        ]),
+        Menu::new("Window").items(ghostex_gpui_window_menu_items()),
     ]
+}
+
+/// Window: Minimize, Zoom, Cycle Through Windows (Cmd+`), and one row per open workspace window
+/// with a tick on the active one (app/workspace_windows/).
+fn ghostex_gpui_window_menu_items() -> Vec<gpui::MenuItem> {
+    use gpui::MenuItem;
+    let mut items = vec![
+        MenuItem::action("Minimize", MinimizeGhostexGpuiWindow),
+        MenuItem::action("Zoom", ZoomGhostexGpuiWindow),
+        MenuItem::separator(),
+        MenuItem::action("Cycle Through Windows", CycleGhostexGpuiWindows),
+    ];
+    let rows = crate::app::workspace_windows::workspace_window_menu_rows();
+    if !rows.is_empty() {
+        items.push(MenuItem::separator());
+        items.extend(rows.into_iter().map(|row| {
+            MenuItem::action(row.label, ActivateGhostexGpuiWindow { number: row.number })
+                .checked(row.active)
+        }));
+    }
+    items
+}
+
+/// Runs Edit > Undo or Redo against the focused text field of the active GPUI window. The macOS
+/// menu target calls this when no web page owns the keyboard; a Cmd+Z the text field already took
+/// never gets here.
+#[cfg(target_os = "macos")]
+pub(crate) fn dispatch_text_input_history_from_edit_menu(
+    gpui_root_view: *mut std::ffi::c_void,
+    redo: bool,
+) -> bool {
+    let async_app = GPUI_KEYBOARD_ROUTER_TARGETS.with(|targets| {
+        let targets = targets.borrow();
+        targets
+            .get(&(gpui_root_view as usize))
+            .or_else(|| targets.values().next())
+            .map(|target| target.async_app.clone())
+    });
+    let Some(async_app) = async_app else {
+        return false;
+    };
+    async_app
+        .foreground_executor()
+        .spawn({
+            let async_app = async_app.clone();
+            async move {
+                async_app.update(|cx| {
+                    let Some(window) = cx.active_window() else {
+                        return;
+                    };
+                    let _ = window.update(cx, |_, window, cx| {
+                        let action: Box<dyn gpui::Action> = if redo {
+                            Box::new(gpui_component::input::Redo)
+                        } else {
+                            Box::new(gpui_component::input::Undo)
+                        };
+                        window.dispatch_action(action, cx);
+                    });
+                });
+            }
+        })
+        .detach();
+    true
 }

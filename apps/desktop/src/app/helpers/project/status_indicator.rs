@@ -64,6 +64,13 @@ pub(crate) fn gpui_add_project_dialog_restore_recent_project(
 }
 
 pub(crate) fn gpui_add_project_dialog_error_message(body: &str) -> String {
+    gpui_gxserver_rejection_message(body)
+        .unwrap_or_else(|| "gxserver rejected the request.".to_string())
+}
+
+/// The structured `message` of a gxserver rejection, without control characters and bounded;
+/// `None` when the body carries none.
+pub(crate) fn gpui_gxserver_rejection_message(body: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .as_ref()
@@ -79,7 +86,6 @@ pub(crate) fn gpui_add_project_dialog_error_message(body: &str) -> String {
                 .collect::<String>()
         })
         .filter(|message| !message.is_empty())
-        .unwrap_or_else(|| "gxserver rejected the request.".to_string())
 }
 
 pub(crate) fn gpui_repository_clone_rpc_result(
@@ -181,6 +187,7 @@ pub(crate) fn gpui_status_indicator_session_from_value(
             "title",
             "sidebarOrder",
             "lastActiveAt",
+            "pendingQuestion",
         ],
     )?;
     Ok(GpuiStatusIndicatorSessionState {
@@ -189,34 +196,14 @@ pub(crate) fn gpui_status_indicator_session_from_value(
             .get("sidebarOrder")
             .and_then(serde_json::Value::as_u64)
             .ok_or(())?,
+        pending_question: match object.get("pendingQuestion") {
+            None => false,
+            Some(value) => value.as_bool().ok_or(())?,
+        },
         session_id: gpui_status_id_field(object, "sessionId")?,
         status: gpui_status_field(object, "status")?,
         title: gpui_status_title_field(object, "title")?,
     })
-}
-
-pub(crate) fn gpui_menu_bar_project_activation_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onMenuBarProjectActivation==='function'){{bridge.onMenuBarProjectActivation(payload);}}else{{const pending=Array.isArray(bridge.pendingMenuBarProjectActivations)?bridge.pendingMenuBarProjectActivations:[];pending.push(payload);bridge.pendingMenuBarProjectActivations=pending;}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_menu_bar_session_activation_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onMenuBarSessionActivation==='function'){{bridge.onMenuBarSessionActivation(payload);}}else{{const pending=Array.isArray(bridge.pendingMenuBarSessionActivations)?bridge.pendingMenuBarSessionActivations:[];pending.push(payload);bridge.pendingMenuBarSessionActivations=pending;}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_command_palette_session_focus_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onCommandPaletteSessionFocus==='function'){{bridge.onCommandPaletteSessionFocus(payload);}}else{{const pending=Array.isArray(bridge.pendingCommandPaletteSessionFocusRequests)?bridge.pendingCommandPaletteSessionFocusRequests:[];pending.push(payload);bridge.pendingCommandPaletteSessionFocusRequests=pending;}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_workspace_tab_session_selected_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onWorkspaceTabSessionSelected==='function'){{bridge.onWorkspaceTabSessionSelected(payload);}}else{{const pending=Array.isArray(bridge.pendingWorkspaceTabSessionSelections)?bridge.pendingWorkspaceTabSessionSelections:[];pending.push(payload);bridge.pendingWorkspaceTabSessionSelections=pending;}}}})(); undefined;"
-    )
 }
 
 pub(crate) fn gpui_workspace_terminal_rename_command_input(

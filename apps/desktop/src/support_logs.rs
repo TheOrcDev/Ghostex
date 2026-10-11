@@ -32,13 +32,11 @@ const MAX_CRASH_MESSAGE_CHARS: usize = 1_000;
 pub enum GpuiSupportLog {
     HostLifecycle,
     RemoteGxserverInstall,
-    SidebarRenderer,
     SidebarRefresh,
     TerminalFocus,
     SessionChat,
     ProjectBoard,
     AppModal,
-    TitlebarPopupRepro,
     CrashReports,
     Performance,
 }
@@ -48,15 +46,11 @@ impl GpuiSupportLog {
         match self {
             Self::HostLifecycle => "gpui-host-lifecycle.log",
             Self::RemoteGxserverInstall => "gpui-remote-gxserver-install-debug.log",
-            Self::SidebarRenderer => "gpui-sidebar-renderer-debug.jsonl",
             Self::SidebarRefresh => "gpui-sidebar-refresh-debug.log",
             Self::TerminalFocus => "gpui-terminal-focus-debug.log",
             Self::SessionChat => "gpui-session-chat-debug.jsonl",
             Self::ProjectBoard => "gpui-project-board-debug.log",
-            // Filename from the shared `gpui.app.modal` scenario definition
-            // (shared/ghostex-settings.ts logFiles).
             Self::AppModal => "gpui-app-modal-debug.jsonl",
-            Self::TitlebarPopupRepro => "gpui-titlebar-popup-repro.jsonl",
             Self::CrashReports => "gpui-crash-reports.log",
             Self::Performance => "gpui-performance.jsonl",
         }
@@ -64,28 +58,24 @@ impl GpuiSupportLog {
 
     fn scenario(self) -> Option<GpuiDiagnosticScenario> {
         match self {
-            Self::Performance => Some(GpuiDiagnosticScenario::Performance),
             Self::HostLifecycle => Some(GpuiDiagnosticScenario::HostLifecycle),
             Self::RemoteGxserverInstall => Some(GpuiDiagnosticScenario::RemoteGxserverInstall),
-            Self::SidebarRenderer => Some(GpuiDiagnosticScenario::SidebarRenderer),
             Self::SidebarRefresh => Some(GpuiDiagnosticScenario::SidebarRefresh),
             Self::TerminalFocus => Some(GpuiDiagnosticScenario::TerminalFocus),
             Self::SessionChat => Some(GpuiDiagnosticScenario::SessionChat),
             Self::ProjectBoard => Some(GpuiDiagnosticScenario::ProjectBoard),
             Self::AppModal => Some(GpuiDiagnosticScenario::AppModal),
-            Self::TitlebarPopupRepro => None,
-            // Crash reports are always-on failure diagnostics.
-            Self::CrashReports => None,
+            // Crash reports are always-on failure diagnostics, and `--profile` is the performance
+            // log's own opt-in (`append_profile_sample`).
+            Self::CrashReports | Self::Performance => None,
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GpuiDiagnosticScenario {
-    Performance,
     HostLifecycle,
     RemoteGxserverInstall,
-    SidebarRenderer,
     SidebarRefresh,
     TerminalFocus,
     SessionChat,
@@ -94,12 +84,12 @@ pub enum GpuiDiagnosticScenario {
 }
 
 impl GpuiDiagnosticScenario {
-    fn scenario_id(self) -> &'static str {
+    /// The id the settings file spells this scenario with, which is also what
+    /// [`append_for_scenario`] takes for a log whose own scenario is a different one.
+    pub fn scenario_id(self) -> &'static str {
         match self {
-            Self::Performance => "gpui.performance",
             Self::HostLifecycle => "native.host.lifecycle",
             Self::RemoteGxserverInstall => "native.remote.gxserver.install",
-            Self::SidebarRenderer => "gpui.sidebar.renderer",
             Self::SidebarRefresh => "native.sidebar.refresh",
             Self::TerminalFocus => "native.terminal.focus",
             Self::SessionChat => "gpui.sessionChat.viewState",
@@ -179,58 +169,18 @@ pub fn append_for_scenario(
     append_unconditionally(log, event, details);
 }
 
-/// Privacy-shaped temporary instrumentation. Routine temporary events follow
-/// the same explicit scenario as their destination log.
-pub fn append_temporary(log: GpuiSupportLog, event: &str, details: serde_json::Value) {
-    append(log, event, details);
-}
-
-/// Always-on, privacy-sanitized breadcrumbs for a user-requested reproduction.
-/// Keep callers narrowly scoped and remove them after the underlying issue is
-/// diagnosed; unlike routine support logs these do not depend on Debugging Mode.
-#[allow(dead_code)] // no live caller: its only caller is the superseded titlebar popup repro logger
-pub fn append_repro(log: GpuiSupportLog, event: &str, details: serde_json::Value) {
-    append_unconditionally(log, event, details);
-}
-
-/// TEMPORARY latency instrumentation helper: wall-clock milliseconds since the
-/// UNIX epoch, so the `TEMP.gpui.sessionSwitchLatency.*` markers can be ordered
-/// against each other and against any other timestamped log. Remove with them.
-pub fn temporary_epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since_epoch| since_epoch.as_millis() as u64)
-        .unwrap_or_default()
+/// Appends one `--profile` timing sample. Launching with `--profile` is this log's only opt-in,
+/// so it skips the Settings switches.
+pub fn append_profile_sample(details: serde_json::Value) {
+    append_unconditionally(
+        GpuiSupportLog::Performance,
+        "gpui.performance.sample",
+        details,
+    );
 }
 
 fn debug_ui_controls_enabled() -> bool {
     shared_settings::shared_sidebar_settings_snapshot().debugging_mode()
-}
-
-pub fn temporary_fluid_voice_text_shape(text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "asciiLowercaseAOnly": !text.is_empty() && text.bytes().all(|byte| byte == b'a'),
-        "byteLength": text.len(),
-        "containsLineBreak": text.contains(['\r', '\n']),
-        "containsNonAscii": !text.is_ascii(),
-        "containsWhitespace": text.chars().any(char::is_whitespace),
-        "unicodeScalarCount": text.chars().count(),
-        "utf16CodeUnitCount": text.encode_utf16().count(),
-    })
-}
-
-pub fn temporary_fluid_voice_bytes_shape(bytes: &[u8]) -> serde_json::Value {
-    let utf8 = std::str::from_utf8(bytes).ok();
-    serde_json::json!({
-        "asciiLowercaseAOnly": !bytes.is_empty() && bytes.iter().all(|byte| *byte == b'a'),
-        "byteLength": bytes.len(),
-        "containsLineBreak": bytes.iter().any(|byte| matches!(*byte, b'\r' | b'\n')),
-        "containsNonAscii": !bytes.is_ascii(),
-        "containsWhitespace": utf8.is_some_and(|text| text.chars().any(char::is_whitespace)),
-        "unicodeScalarCount": utf8.map(|text| text.chars().count()),
-        "utf16CodeUnitCount": utf8.map(|text| text.encode_utf16().count()),
-        "utf8Valid": utf8.is_some(),
-    })
 }
 
 fn is_important_diagnostic(log: GpuiSupportLog, event: &str, details: &serde_json::Value) -> bool {
@@ -313,6 +263,41 @@ pub fn logs_directory() -> PathBuf {
     shared_settings::ghostex_storage_paths().logs_dir.clone()
 }
 
+/// CDXC:SessionChat 2026-09-16 SEE-ALSO:
+/// server/src/session_chat_send_diagnostics.rs records server refusals and the active screen. This file keeps client failures too, including draft saves and requests that never reach gxserver.
+pub fn append_session_chat_send_failure(details: serde_json::Value) {
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITER.lock().unwrap_or_else(|error| error.into_inner());
+    let write = || -> std::io::Result<()> {
+        let directory = logs_directory();
+        fs::create_dir_all(&directory)?;
+        let path = directory.join("gpui-session-chat-send-failures.jsonl");
+        let line = serde_json::json!({
+            "ts": timestamp_now(),
+            "event": "sessionChat.sendFailure",
+            "details": details,
+        })
+        .to_string();
+        rotate_log_if_needed(&path, line.len() as u64 + 1)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        writeln!(options.open(path)?, "{line}")
+    };
+    if let Err(error) = write() {
+        eprintln!("session chat send diagnostic could not be written: {error}");
+        append(
+            GpuiSupportLog::SessionChat,
+            "sessionChat.sendDiagnosticWriteFailed",
+            serde_json::json!({ "error": error.to_string() }),
+        );
+    }
+}
+
 /// Installs the process panic hook writing crash reports to
 /// `gpui-crash-reports.log` before delegating to the previous hook. macOS
 /// counterpart: NativeCrashDiagnostics; GPUI previously lost panics to stderr.
@@ -358,12 +343,10 @@ pub fn prune_gpui_support_logs() {
     for log in [
         GpuiSupportLog::HostLifecycle,
         GpuiSupportLog::RemoteGxserverInstall,
-        GpuiSupportLog::SidebarRenderer,
         GpuiSupportLog::SidebarRefresh,
         GpuiSupportLog::TerminalFocus,
         GpuiSupportLog::ProjectBoard,
         GpuiSupportLog::AppModal,
-        GpuiSupportLog::TitlebarPopupRepro,
         GpuiSupportLog::CrashReports,
     ] {
         let retained = logs_directory.join(log.file_name());

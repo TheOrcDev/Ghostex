@@ -1,0 +1,1 @@
+../../../../desktop/src/app/native_sidebar/hover_actions.rs

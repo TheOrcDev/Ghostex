@@ -224,6 +224,10 @@ fn cef_component_bytes_label(bytes: u64) -> String {
 }
 
 impl GhostexGpuiApp {
+    /// The Linux bootstrap's start: install the component when it is missing, then launch the
+    /// runtime. The app itself starts CEF through `start_web_runtime` (app/web_runtime_install.rs),
+    /// which never downloads on its own (CDXC:CefRuntime 2026-09-28 in app/helpers/web_runtime.rs).
+    #[allow(dead_code)] // the ghostex-gpui-cef-bootstrap binary (Linux) is the only caller
     pub(super) fn begin_cef_startup(&mut self, cx: &mut gpui::Context<Self>) {
         match verified_cef_runtime_readiness() {
             Ok(CefRuntimeReadiness::Ready) => self.initialize_cef(cx),
@@ -245,6 +249,7 @@ impl GhostexGpuiApp {
         }
     }
 
+    #[allow(dead_code)] // the ghostex-gpui-cef-bootstrap binary (Linux) is the only caller
     fn open_cef_component_window(
         &mut self,
         state: CefComponentWindowState,
@@ -316,6 +321,7 @@ impl GhostexGpuiApp {
         );
     }
 
+    #[allow(dead_code)] // the ghostex-gpui-cef-bootstrap binary (Linux) is the only caller
     fn start_cef_component_install(&mut self, cx: &mut gpui::Context<Self>) {
         self.cef_component_install_generation =
             self.cef_component_install_generation.wrapping_add(1);
@@ -386,12 +392,18 @@ impl GhostexGpuiApp {
     }
 }
 
-enum CefRuntimeReadiness {
+pub(crate) enum CefRuntimeReadiness {
     Ready,
-    InstallRequired { version: String },
+    InstallRequired {
+        #[allow(dead_code)] // read by the Linux bootstrap's "Preparing Ghostex" window
+        version: String,
+    },
 }
 
-pub(crate) fn configure_cef_framework_path_for_process() {
+/// Points this process at the CEF runtime to use (the one next to the app, `GHOSTEX_CEF_DIR`, or
+/// the component store's current version) and reports whether one was found. A cheap path check:
+/// the full verification runs in `verified_cef_runtime_readiness` when CEF starts.
+pub(crate) fn configure_cef_framework_path_for_process() -> bool {
     let runtime_dir = bundled_cef_runtime_dir()
         .or_else(|| {
             let configured = env::var_os(CEF_RUNTIME_DIR_ENV).map(PathBuf::from)?;
@@ -407,6 +419,7 @@ pub(crate) fn configure_cef_framework_path_for_process() {
             let installed = store.query_current(CEF_COMPONENT).ok()?;
             installed.installed.then_some(installed.path)
         });
+    let found = runtime_dir.is_some();
     unsafe {
         if let Some(runtime_dir) = runtime_dir {
             env::set_var(CEF_RUNTIME_DIR_ENV, &runtime_dir);
@@ -421,9 +434,10 @@ pub(crate) fn configure_cef_framework_path_for_process() {
             env::remove_var(CEF_FRAMEWORK_EXECUTABLE_ENV);
         }
     }
+    found
 }
 
-fn verified_cef_runtime_readiness() -> Result<CefRuntimeReadiness, String> {
+pub(crate) fn verified_cef_runtime_readiness() -> Result<CefRuntimeReadiness, String> {
     if let Some(runtime_dir) = bundled_cef_runtime_dir() {
         verify_cef_runtime_dir(&runtime_dir)?;
         return Ok(CefRuntimeReadiness::Ready);
@@ -486,14 +500,21 @@ fn install_and_verify_cef_component(
     verify_cef_runtime_dir(&installed.path)
 }
 
-pub(super) fn reinstall_and_verify_cef_component(
+/// Installs the CEF component for the app's Install / Reinstall (web views and Plugins). A plain
+/// install keeps a current copy that still verifies and replaces a broken one; `reinstall` always
+/// downloads a fresh copy.
+#[allow(dead_code)] // not used by the ghostex-gpui-cef-bootstrap binary
+pub(crate) fn install_and_verify_cef_component_phases(
+    reinstall: bool,
     progress_tx: mpsc::UnboundedSender<component_store::ComponentStoreProgressPhase>,
 ) -> Result<(), String> {
-    let store = on_demand_component_store()?
-        .ok_or_else(|| "The sealed CEF component manifest is unavailable.".to_string())?;
-    let component = store.component(CEF_COMPONENT).ok_or_else(|| {
-        "The sealed manifest does not define the required CEF component.".to_string()
+    let store = on_demand_component_store()?.ok_or_else(|| {
+        "This build has no sealed component manifest, so the web runtime cannot be downloaded."
+            .to_string()
     })?;
+    let component = store
+        .component(CEF_COMPONENT)
+        .ok_or_else(|| "The sealed manifest does not define the CEF component.".to_string())?;
     let expected_version = expected_cef_component_version();
     if component.component_version != expected_version {
         return Err(format!(
@@ -502,7 +523,7 @@ pub(super) fn reinstall_and_verify_cef_component(
         ));
     }
     let current = store.query_current(CEF_COMPONENT)?;
-    if current.installed {
+    if current.installed && (reinstall || verify_cef_runtime_dir(&current.path).is_err()) {
         store.uninstall(CEF_COMPONENT, &current.version)?;
     }
     let mut report_progress = |progress: component_store::ComponentStoreProgress| {
@@ -510,6 +531,28 @@ pub(super) fn reinstall_and_verify_cef_component(
     };
     let installed = store.install(CEF_COMPONENT, &mut report_progress)?;
     verify_cef_runtime_dir(&installed.path)
+}
+
+/// Removes the component store's copy of the CEF component. A runtime bundled next to the app
+/// (development builds, Linux packages) is not a component and stays.
+#[allow(dead_code)] // not used by the ghostex-gpui-cef-bootstrap binary
+pub(crate) fn uninstall_cef_component() -> Result<bool, String> {
+    let store = on_demand_component_store()?.ok_or_else(|| {
+        "This build has no sealed component manifest, so the web runtime is not a removable component."
+            .to_string()
+    })?;
+    let current = store.query_current(CEF_COMPONENT)?;
+    if !current.installed {
+        return Ok(false);
+    }
+    store.uninstall(CEF_COMPONENT, &current.version)
+}
+
+/// Whether this app carries its own CEF runtime next to the executable (development builds and
+/// bundles made without on-demand components), which Uninstall cannot remove.
+#[allow(dead_code)] // not used by the ghostex-gpui-cef-bootstrap binary
+pub(crate) fn cef_runtime_is_bundled() -> bool {
+    bundled_cef_runtime_dir().is_some()
 }
 
 fn bundled_cef_runtime_dir() -> Option<PathBuf> {

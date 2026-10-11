@@ -45,8 +45,9 @@ pub(crate) enum WorkspaceDropZone {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkspaceDropTarget {
-    TabStrip(usize),
     PaneBody(WorkspaceDropZone),
+    /// The pane cannot take what is dragged over it; the text says why.
+    Refused(&'static str),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,17 +77,6 @@ pub(crate) struct WorkspaceCloseFocusRect {
 pub(crate) struct DraggedWorkspaceTab {
     pub(crate) source_pane_id: WorkspacePaneId,
     pub(crate) session_id: TerminalSessionId,
-    pub(crate) title: String,
-    pub(crate) presentation_state: TerminalSessionPresentationState,
-    pub(crate) tab_status: AgentTerminalTabStatus,
-    pub(crate) agent_icon: Option<&'static str>,
-}
-
-pub(crate) struct WorkspaceTabDragPreview {
-    pub(crate) title: String,
-    pub(crate) presentation_state: TerminalSessionPresentationState,
-    pub(crate) tab_status: AgentTerminalTabStatus,
-    pub(crate) agent_icon: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

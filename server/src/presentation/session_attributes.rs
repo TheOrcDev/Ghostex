@@ -95,15 +95,14 @@ pub(crate) fn presentation_actions(session: &Value, activity: &str) -> Value {
 }
 
 pub(crate) fn presentation_activity(session: &Value, generated_at: &str) -> String {
-    // CDXC:SessionStatus 2026-09-06 DECISION:
-    // User: a Claude Code or Codex thread with active subagents must stay working everywhere, including the sidebar and chat.
-    if effective_lifecycle_state(session) == "running"
-        && (crate::session_chat_compacting::session_chat_fleet_detected_at(session).is_some()
-            || crate::session_chat_compacting::session_chat_monitor_detected_at(session).is_some())
+    let running = effective_lifecycle_state(session) == "running";
+    // CDXC:SessionStatus 2026-09-28 DECISION:
+    // User: a Claude Code or Codex thread with active subagents must stay working everywhere, including the sidebar and chat (2026-09-06), and a Hermes one too ("when delegating tasks doesn't show working").
+    if running && crate::session_chat_compacting::session_chat_fleet_detected_at(session).is_some()
     {
         return "working".to_string();
     }
-    if effective_lifecycle_state(session) == "running"
+    if running
         && crate::session_chat_compacting::session_chat_compacting_detected_at(session).is_some()
     {
         // A whole live-screen capture is stronger evidence than a stale hook
@@ -121,6 +120,8 @@ pub(crate) fn presentation_activity(session: &Value, generated_at: &str) -> Stri
         .as_object()
         .and_then(|activity| activity.get("activity"))
         .and_then(Value::as_str);
+    // CDXC:SessionStatus 2026-09-22 DECISION:
+    // User: a background shell or monitor still running after the turn is NOT working. It is published separately as `backgroundWorkDetectedAt` and the sidebar draws it as a grey dot; the hook status (attention, working, idle) is untouched by it. This supersedes the 2026-09-06 rule that a running monitor meant working; subagents (the fleet marker above) still do.
     match activity {
         Some("attention" | "working") => activity.unwrap().to_string(),
         _ => "idle".to_string(),

@@ -43,12 +43,12 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -60,6 +60,11 @@ use child_lifecycle::TerminalChild;
 mod viewer_detach;
 pub(crate) use viewer_detach::ViewerDetachPreparation;
 use viewer_detach::{ViewerDetachParser, ViewerDetachState};
+#[cfg(windows)]
+#[path = "terminal_model/zmx_control.rs"]
+pub(crate) mod zmx_control;
+#[cfg(windows)]
+pub(crate) use zmx_control::WMX_ATTACH_CONTROL_ENV;
 
 use crate::ghostty_vt::{
     self, VtCellWide, VtClearScreen, VtDirty, VtError, VtHostCallbacks, VtKeyEncoder, VtKeyInput,
@@ -79,16 +84,8 @@ const CLIPBOARD_WRITE_QUEUE_LIMIT: usize = 16;
 /// PTY read buffer size per read call.
 const PTY_READ_BUFFER_LEN: usize = 64 * 1024;
 
-/// Process-local correlation id for temporary paste diagnostics. It connects
-/// the main-thread encode/channel handoff to the background PTY write without
-/// recording clipboard contents.
-static NEXT_PASTE_TRACE_ID: AtomicU64 = AtomicU64::new(1);
-
-static PASTE_DIAGNOSTIC_SINK: OnceLock<TerminalPasteDiagnosticSink> = OnceLock::new();
-
 struct PtyWriteRequest {
     bytes: Vec<u8>,
-    paste_trace_id: Option<u64>,
 }
 
 pub type Rgb = ffi::GhosttyColorRgb;
@@ -125,53 +122,6 @@ pub enum TerminalEvent {
     ClipboardWriteRequested,
     /// Child process exited. Terminal contents stay readable afterwards.
     Exited(TerminalExit),
-}
-
-/// Content-free stages of a clipboard paste moving from VT encoding to the
-/// background PTY writer. The GPUI host may install a sink; standalone model
-/// consumers intentionally run without one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalPasteDiagnostic {
-    Encoded {
-        trace_id: u64,
-        child_pid: Option<u32>,
-        bracketed_paste: bool,
-        source_byte_length: usize,
-        source_contains_line_break: bool,
-        source_contains_non_ascii: bool,
-        encoded_byte_length: usize,
-    },
-    ChannelQueued {
-        trace_id: u64,
-        child_pid: Option<u32>,
-        success: bool,
-        error_kind: Option<std::io::ErrorKind>,
-    },
-    PtyWriteStarted {
-        trace_id: u64,
-        child_pid: Option<u32>,
-        encoded_byte_length: usize,
-    },
-    PtyWriteCompleted {
-        trace_id: u64,
-        child_pid: Option<u32>,
-        duration_micros: u128,
-        stage: &'static str,
-        success: bool,
-        error_kind: Option<std::io::ErrorKind>,
-    },
-}
-
-pub type TerminalPasteDiagnosticSink = Arc<dyn Fn(TerminalPasteDiagnostic) + Send + Sync>;
-
-pub fn install_paste_diagnostic_sink(sink: TerminalPasteDiagnosticSink) {
-    let _ = PASTE_DIAGNOSTIC_SINK.set(sink);
-}
-
-fn emit_paste_diagnostic(diagnostic: TerminalPasteDiagnostic) {
-    if let Some(sink) = PASTE_DIAGNOSTIC_SINK.get() {
-        sink(diagnostic);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +292,8 @@ pub struct TerminalSnapshot {
     pub cursor_color: Option<Rgb>,
     /// Active viewport scrollbar state in rows.
     pub scrollbar: VtScrollbar,
+    /// The alternate screen (a full-screen TUI's own buffer) is the active screen.
+    pub alternate_screen: bool,
     /// Active 256-color palette (for palette-indexed consumers).
     #[allow(dead_code)]
     // snapshot shape: mirrors the libghostty-vt palette even where the gpui renderer resolves colours itself
@@ -350,7 +302,7 @@ pub struct TerminalSnapshot {
 
 /// Mirrors `RESTING_GRID_COLS` in `.dependencies/zmx` and must stay equal:
 /// it is the column count the zmx daemon rests at while no attached client
-/// is displaying, and the width a hidden client keeps its local grid at.
+/// is displaying, and the width a chat client keeps its local grid at.
 pub const ZMX_RESTING_GRID_COLS: u16 = 200;
 
 /// In-band sequence the zmx attach client consumes from its stdin (never
@@ -365,6 +317,10 @@ pub fn zmx_client_visible_sequence(rows: u16, cols: u16) -> String {
 pub fn zmx_client_chat_sequence(rows: u16, cols: u16) -> String {
     format!("\x1b]1337;ZMX_CHAT={rows},{cols}\x07")
 }
+
+/// The prefix every Ghostex attach-client control sequence starts with.
+#[cfg(windows)]
+const ZMX_CONTROL_PREFIX: &[u8] = b"\x1b]1337;ZMX_";
 
 /// In-band parked claim: retain the daemon grid unless another client needs it.
 pub fn zmx_client_hidden_sequence(rows: u16, cols: u16) -> String {
@@ -382,6 +338,9 @@ pub struct TerminalModel {
     wakeup_tx: mpsc::Sender<Option<()>>,
     pending_input: Arc<AtomicU64>,
     viewer_detach: Arc<Mutex<ViewerDetachState>>,
+    /// Windows: the control pipe of a local `wmx attach` viewer (`zmx_control.rs`).
+    #[cfg(windows)]
+    zmx_control: Option<zmx_control::ZmxControl>,
     event_sink: Arc<Mutex<Option<TerminalEventSink>>>,
     master: Box<dyn MasterPty + Send>,
     child: TerminalChild,
@@ -456,35 +415,27 @@ impl TerminalModel {
         let (write_tx, write_rx) = mpsc::channel::<Option<PtyWriteRequest>>();
         let pending_input = Arc::new(AtomicU64::new(0));
         let viewer_detach = Arc::new(Mutex::new(ViewerDetachState::default()));
+        #[cfg(windows)]
+        let zmx_control = config
+            .env
+            .iter()
+            .find(|(key, _)| key == WMX_ATTACH_CONTROL_ENV)
+            .and_then(|(_, name)| {
+                zmx_control::ZmxControl::start(
+                    name.clone(),
+                    Arc::clone(&viewer_detach),
+                    Arc::clone(&events),
+                )
+                .ok()
+            });
         let writer_pending_input = Arc::clone(&pending_input);
         let writer_events = Arc::clone(&events);
-        let writer_child_pid = child_pid;
         thread::Builder::new()
             .name("ghostex-terminal-pty-write".into())
             .spawn(move || {
                 while let Ok(Some(request)) = write_rx.recv() {
-                    let started_at = Instant::now();
-                    if let Some(trace_id) = request.paste_trace_id {
-                        emit_paste_diagnostic(TerminalPasteDiagnostic::PtyWriteStarted {
-                            trace_id,
-                            child_pid: writer_child_pid,
-                            encoded_byte_length: request.bytes.len(),
-                        });
-                    }
-
-                    let (stage, result) = match pty_writer.write_all(&request.bytes) {
-                        Ok(()) => ("flush", pty_writer.flush()),
-                        Err(error) => ("write", Err(error)),
-                    };
-                    if let Some(trace_id) = request.paste_trace_id {
-                        emit_paste_diagnostic(TerminalPasteDiagnostic::PtyWriteCompleted {
-                            trace_id,
-                            child_pid: writer_child_pid,
-                            duration_micros: started_at.elapsed().as_micros(),
-                            stage,
-                            success: result.is_ok(),
-                            error_kind: result.as_ref().err().map(std::io::Error::kind),
-                        });
+                    if pty_writer.write_all(&request.bytes).is_ok() {
+                        let _ = pty_writer.flush();
                     }
                     if writer_pending_input.fetch_sub(1, Ordering::AcqRel) == 1 {
                         writer_events(TerminalEvent::Wakeup);
@@ -520,7 +471,6 @@ impl TerminalModel {
                     if reply_tx
                         .send(Some(PtyWriteRequest {
                             bytes: bytes.to_vec(),
-                            paste_trace_id: None,
                         }))
                         .is_err()
                     {
@@ -628,6 +578,8 @@ impl TerminalModel {
             wakeup_tx: model_wakeup_tx,
             pending_input,
             viewer_detach,
+            #[cfg(windows)]
+            zmx_control,
             event_sink,
             master: pair.master,
             child,
@@ -664,9 +616,18 @@ impl TerminalModel {
         self.pending_input.load(Ordering::Acquire) != 0
     }
 
+    /// Whether a detach handshake can reach this viewer's attach client: its PTY on Unix, the
+    /// wmx control pipe on Windows (ConPTY drops `ZMX_DETACH`).
+    fn viewer_detach_has_route(&self) -> bool {
+        #[cfg(windows)]
+        return self.zmx_control.is_some();
+        #[cfg(not(windows))]
+        return cfg!(unix);
+    }
+
     /// Read-only preflight before creating a replacement display claim.
     pub fn viewer_detach_supported(&self) -> bool {
-        if !cfg!(unix) {
+        if !self.viewer_detach_has_route() {
             return false;
         }
         let detach = self
@@ -681,8 +642,9 @@ impl TerminalModel {
 
     /// Begin ordered retirement after a replacement display claim is ready.
     pub fn prepare_viewer_detach(&mut self) -> ViewerDetachPreparation {
-        #[cfg(not(unix))]
-        return ViewerDetachPreparation::Unsupported;
+        if !self.viewer_detach_has_route() {
+            return ViewerDetachPreparation::Unsupported;
+        }
         if self.has_pending_input() {
             return if self
                 .viewer_detach
@@ -716,15 +678,19 @@ impl TerminalModel {
             return ViewerDetachPreparation::Unsupported;
         };
         detach.retiring = true;
+        // The request travels on the control pipe; wmx answers once the console input before it
+        // has gone to the daemon (`DETACH_QUIET` in wmx attachment.rs).
+        #[cfg(windows)]
+        if let Some(control) = &self.zmx_control {
+            if !control.send(&bytes) {
+                detach.nonce = None;
+                detach.retiring = false;
+                return ViewerDetachPreparation::Unsupported;
+            }
+            return ViewerDetachPreparation::Pending;
+        }
         self.pending_input.fetch_add(1, Ordering::AcqRel);
-        if self
-            .write_tx
-            .send(Some(PtyWriteRequest {
-                bytes,
-                paste_trace_id: None,
-            }))
-            .is_err()
-        {
+        if self.write_tx.send(Some(PtyWriteRequest { bytes })).is_err() {
             self.pending_input.fetch_sub(1, Ordering::AcqRel);
             detach.nonce = None;
             detach.retiring = false;
@@ -755,7 +721,7 @@ impl TerminalModel {
         if self.child.is_detached() {
             return Ok(());
         }
-        if !cfg!(unix) {
+        if !self.viewer_detach_has_route() {
             return Err(std::io::ErrorKind::Unsupported.into());
         }
         let detach = self
@@ -796,9 +762,19 @@ impl TerminalModel {
     /// actual write happens on the pty-write thread, so callers (main-thread
     /// input handlers) never block on a stalled PTY.
     pub fn write_input(&self, bytes: &[u8]) -> std::io::Result<()> {
+        // A whole Ghostex claim (`zmx_client_*_sequence`) goes around ConPTY, which would drop it.
+        #[cfg(windows)]
+        if let Some(control) = &self.zmx_control
+            && bytes.starts_with(ZMX_CONTROL_PREFIX)
+        {
+            return if control.send(bytes) {
+                Ok(())
+            } else {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            };
+        }
         self.queue_input(PtyWriteRequest {
             bytes: bytes.to_vec(),
-            paste_trace_id: None,
         })
     }
 
@@ -807,6 +783,17 @@ impl TerminalModel {
     /// caller should treat the key as handled), false when the encoder had
     /// nothing to send (bare modifiers, unbound cmd shortcuts, ...).
     pub fn send_key(&mut self, input: &VtKeyInput<'_>) -> bool {
+        self.send_key_repeat(input, 1)
+    }
+
+    /// Send the same key `count` times as one PTY write, the way ghostty
+    /// queues a wheel notch's worth of cursor keys onto a single io write:
+    /// the program reads the whole burst in one go instead of repainting
+    /// between rows.
+    pub fn send_key_repeat(&mut self, input: &VtKeyInput<'_>, count: usize) -> bool {
+        if count == 0 {
+            return false;
+        }
         {
             let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
             let Some(terminal) = terminal.as_mut() else {
@@ -819,7 +806,7 @@ impl TerminalModel {
         if self.key_encoder.encode(input, &mut bytes).is_err() || bytes.is_empty() {
             return false;
         }
-        let _ = self.write_input(&bytes);
+        let _ = self.write_input(&bytes.repeat(count));
         true
     }
 
@@ -860,6 +847,21 @@ impl TerminalModel {
     /// Positions are DEVICE pixels relative to the grid origin, matching the
     /// cell pixel sizes given to [`resize`](Self::resize).
     pub fn send_mouse(&mut self, input: &VtMouseInput, any_button_pressed: bool) -> bool {
+        self.send_mouse_repeat(input, any_button_pressed, 1)
+    }
+
+    /// Send the same mouse event `count` times as one PTY write. Wheel
+    /// reports are the only repeated event, and ghostty likewise queues a
+    /// notch's reports together.
+    pub fn send_mouse_repeat(
+        &mut self,
+        input: &VtMouseInput,
+        any_button_pressed: bool,
+        count: usize,
+    ) -> bool {
+        if count == 0 {
+            return false;
+        }
         {
             let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
             let Some(terminal) = terminal.as_mut() else {
@@ -881,7 +883,7 @@ impl TerminalModel {
         if self.mouse_encoder.encode(input, &mut bytes).is_err() || bytes.is_empty() {
             return false;
         }
-        let _ = self.write_input(&bytes);
+        let _ = self.write_input(&bytes.repeat(count));
         true
     }
 
@@ -890,27 +892,7 @@ impl TerminalModel {
         let bracketed = self.mode_active(ffi::GHOSTTY_MODE_BRACKETED_PASTE);
         let bytes = ghostty_vt::encode_paste(text, bracketed)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let trace_id = NEXT_PASTE_TRACE_ID.fetch_add(1, Ordering::Relaxed);
-        emit_paste_diagnostic(TerminalPasteDiagnostic::Encoded {
-            trace_id,
-            child_pid: self.child_pid,
-            bracketed_paste: bracketed,
-            source_byte_length: text.len(),
-            source_contains_line_break: text.contains(['\r', '\n']),
-            source_contains_non_ascii: !text.is_ascii(),
-            encoded_byte_length: bytes.len(),
-        });
-        let result = self.queue_input(PtyWriteRequest {
-            bytes,
-            paste_trace_id: Some(trace_id),
-        });
-        emit_paste_diagnostic(TerminalPasteDiagnostic::ChannelQueued {
-            trace_id,
-            child_pid: self.child_pid,
-            success: result.is_ok(),
-            error_kind: result.as_ref().err().map(std::io::Error::kind),
-        });
-        result
+        self.queue_input(PtyWriteRequest { bytes })
     }
 
     /// Report a focus change to the PTY when focus reporting (mode 1004) is
@@ -1112,12 +1094,6 @@ impl TerminalModel {
         self.size
     }
 
-    /// Spawned child pid used only to correlate content-free runtime
-    /// diagnostics across the terminal view and PTY writer.
-    pub fn diagnostic_child_pid(&self) -> Option<u32> {
-        self.child_pid
-    }
-
     /// Exit status once the child has exited.
     pub fn exit_status(&self) -> Option<TerminalExit> {
         self.child.exit_status()
@@ -1143,6 +1119,18 @@ impl TerminalModel {
         let target = row.min(scrollbar.total.saturating_sub(scrollbar.len));
         let delta = i128::from(target) - i128::from(scrollbar.offset);
         scroll_terminal_delta(terminal, delta);
+    }
+
+    /// Current scrollbar state (viewport position, in rows) without consuming
+    /// snapshot dirty state.
+    pub fn scrollbar(&mut self) -> Result<VtScrollbar, VtError> {
+        let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
+        let Some(terminal) = terminal.as_mut() else {
+            return Err(VtError {
+                code: ffi::GHOSTTY_INVALID_VALUE,
+            });
+        };
+        terminal.scrollbar()
     }
 
     /// Read every scrollback row without changing the user's final viewport.
@@ -1234,13 +1222,16 @@ impl TerminalModel {
         let render_state = self.render_state.as_mut().ok_or(VtError {
             code: ffi::GHOSTTY_INVALID_VALUE,
         })?;
-        let scrollbar = {
+        let (scrollbar, alternate_screen) = {
             let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
             let terminal = terminal.as_mut().ok_or(VtError {
                 code: ffi::GHOSTTY_INVALID_VALUE,
             })?;
             render_state.update(terminal)?;
-            terminal.scrollbar()?
+            (
+                terminal.scrollbar()?,
+                terminal.alternate_screen_active().unwrap_or(false),
+            )
         };
 
         let (cols, rows) = render_state.size()?;
@@ -1314,6 +1305,7 @@ impl TerminalModel {
             foreground: colors.foreground,
             cursor_color: colors.cursor_has_value.then_some(colors.cursor),
             scrollbar,
+            alternate_screen,
             palette: colors.palette,
         })
     }

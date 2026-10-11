@@ -37,57 +37,11 @@
 .session-context-menu {
   position: fixed;
   z-index: var(--sidebar-context-menu-z-index);
-  min-width: 156px;
-  /*
-   * CDXC:ContextMenus 2026-05-27-06:19:
-   * Right-click menus near the bottom of the sidebar must remain fully usable
-   * inside the webview. Pair the portal's rendered-size coordinate clamp with
-   * an internal scroll cap for menus taller than the available viewport.
-   */
-  box-sizing: border-box;
-  display: grid;
-  gap: 2px;
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
-  padding: 6px;
-  /*
-   * CDXC:Docs 2026-09-05 DECISION:
-   * User: the Docs files context menu must match the existing app sidebar menu.
-   * Keep the shared menu appearance here because Docs imports this sheet without the sidebar shell stylesheet.
-   */
-  border: 1px solid var(--ghostex-tooltip-border, rgba(255, 255, 255, 0.12));
-  border-radius: 8px;
-  background: var(--app-dropdown-background);
-  box-shadow:
-    0 14px 28px color-mix(in srgb, #000000 32%, transparent),
-    0 0 0 1px color-mix(in srgb, #ffffff 4%, transparent);
-  backdrop-filter: blur(12px);
 }
 
 .session-context-menu-section {
   display: grid;
   gap: 2px;
-}
-
-.session-context-menu-item {
-  /*
-   * CDXC:Workarea 2026-05-04-08:22
-   * Project context menus include selected-IDE labels such as "VS Code
-   * Insiders"; keep command labels on one line so menu sizing and pointer
-   * targeting remain predictable.
-   */
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: default;
-  color: inherit;
-  text-align: left;
-  white-space: nowrap;
 }
 
 .session-context-menu-trailing-icon {
@@ -212,35 +166,13 @@
 }
 
 .session-context-menu-split-item:hover,
-.session-context-menu-split-item:focus-visible,
-.session-context-menu-item:hover,
-.session-context-menu-item:focus-visible {
+.session-context-menu-split-item:focus-visible {
   background: var(--app-context-menu-hover-background, #202020);
   outline: none;
 }
 
-.session-context-menu-item:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.session-context-menu-divider {
-  height: 1px;
-  margin: 6px 4px;
-  background: color-mix(in srgb, var(--app-border) 70%, transparent);
-}
-
 .session-context-menu-spacer {
   height: 6px;
-}
-
-.session-context-menu-item-danger {
-  color: #ff7b72;
-}
-
-.session-context-menu-item-danger:hover,
-.session-context-menu-item-danger:focus-visible {
-  background: color-mix(in srgb, #ff7b72 18%, transparent);
 }
 
 .tooltip-positioner {
@@ -281,7 +213,7 @@
 .session-local-tooltip-popup {
   background: var(--ghostex-tooltip-background, rgba(24, 24, 24, 0.98));
   border: 1px solid var(--ghostex-tooltip-border, rgba(255, 255, 255, 0.12));
-  border-radius: var(--ghostex-tooltip-radius, 5px);
+  border-radius: var(--ghostex-tooltip-radius, 8px);
   box-sizing: border-box;
   box-shadow: var(--ghostex-tooltip-shadow, 0 12px 30px rgba(0, 0, 0, 0.35));
   color: var(--ghostex-tooltip-foreground, rgba(255, 255, 255, 0.78));
@@ -326,7 +258,7 @@
   padding: 5px 8px;
   max-width: 90vw;
   border: 1px solid var(--ghostex-tooltip-border, rgba(255, 255, 255, 0.12));
-  border-radius: var(--ghostex-tooltip-radius, 5px);
+  border-radius: var(--ghostex-tooltip-radius, 8px);
   background: var(--ghostex-tooltip-background, rgba(24, 24, 24, 0.98));
   color: var(--ghostex-tooltip-foreground, rgba(255, 255, 255, 0.78));
   font: var(--ghostex-tooltip-font, 500 12px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif);

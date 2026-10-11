@@ -1,10 +1,6 @@
-use super::{
-    helpers, launch,
-    model::{Provider, ResetCredit},
-    store,
-};
-use crate::{domain::DomainStateError, server::AppState};
+use super::{helpers, model::ResetCredit, reset_claim::Outcome};
 use serde_json::{json, Value};
+use std::{collections::HashMap, sync::Mutex};
 
 /// CDXC:AgentProviders 2026-09-11 WHY:
 /// The usage response includes only a reset count. Expiry dates require the separate read-only credit list; failure to read that list must not hide account limits.
@@ -56,6 +52,9 @@ fn parse(value: &Value, now: chrono::DateTime<chrono::Utc>) -> Result<Vec<ResetC
         credits.push(ResetCredit {
             id: id.to_string(),
             expires_at: expires.map(|date| date.to_rfc3339()),
+            note: None,
+            paused: false,
+            requires_limit: false,
         });
     }
     credits.sort_by(|a, b| match (&a.expires_at, &b.expires_at) {
@@ -67,53 +66,68 @@ fn parse(value: &Value, now: chrono::DateTime<chrono::Utc>) -> Result<Vec<ResetC
     Ok(credits)
 }
 
-pub(crate) fn prepare(state: &AppState, id: &str) -> Result<Value, DomainStateError> {
-    let _gate = state.accounts.mutations.lock().map_err(store::error)?;
-    let db = crate::storage::open_gxserver_database(&state.paths).map_err(store::error)?;
-    let registry = store::read(&db)?;
-    let account = registry
-        .accounts
-        .iter()
-        .find(|a| a.id == id && a.provider == Provider::Codex)
-        .ok_or_else(|| DomainStateError::bad_request("Choose a saved Codex account."))?;
-    launch::validate_identity(&state.paths.home_dir, account)?;
-    let accounts = helpers::json_command(&state.paths.home_dir, "xswap", &["list", "--json"])
-        .map_err(DomainStateError::bad_request)?;
-    let row = accounts["accounts"]
-        .as_array()
-        .and_then(|rows| {
-            rows.iter().find(|row| {
-                row["number"].as_u64().map(|n| n.to_string()).as_deref()
-                    == Some(account.selector.as_str())
-            })
-        })
-        .ok_or_else(|| {
-            DomainStateError::bad_request("The selected account is no longer available.")
-        })?;
-    if row["accountId"].as_str() != Some(account.identity.as_str()) {
-        return Err(DomainStateError::bad_request(
-            "The saved account changed. Refresh Accounts before redeeming a reset.",
-        ));
+/// CDXC:AgentProviders 2026-09-24 WHY:
+/// A retried idempotency key replays the credit it first matched instead of re-reading the list: after a consume whose reply was lost the credit is already gone from the list, and only the replay lets the server answer `already_redeemed`.
+static MATCHED: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Claims one Codex reset credit, the protocol the Codex CLI uses: a fresh read of the credit list confirms the chosen credit is still available, then the consume targets exactly that credit under the caller's idempotency key.
+pub(crate) fn claim(row: &Value, credit_id: &str, request_id: &str) -> Outcome {
+    let replay = MATCHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .get(request_id)
+        .cloned();
+    let credit_id = match replay {
+        Some(id) => id,
+        None => {
+            let credits = match read(row) {
+                Ok(credits) => credits,
+                Err(error) => return Outcome::failed(&error),
+            };
+            if !credits.iter().any(|credit| credit.id == credit_id) {
+                return Outcome::no_credit("That reset is no longer available.");
+            }
+            MATCHED
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(HashMap::new)
+                .insert(request_id.to_string(), credit_id.to_string());
+            credit_id.to_string()
+        }
+    };
+    let request = match helpers::codex_request(row, "POST", "rate-limit-reset-credits/consume") {
+        Ok(request) => request,
+        Err(error) => return Outcome::failed(&error),
+    };
+    let response = match request
+        .set("Content-Type", "application/json")
+        .send_json(json!({"redeem_request_id":request_id,"credit_id":credit_id}))
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(401 | 403, _)) => {
+            return Outcome::failed("Sign in again to use this reset.")
+        }
+        Err(_) => {
+            return Outcome::failed(
+                "The reset could not be confirmed. Check your limits before trying again.",
+            )
+        }
+    };
+    let code = response
+        .into_json::<Value>()
+        .ok()
+        .and_then(|body| body["code"].as_str().map(str::to_string));
+    match code.as_deref() {
+        Some("reset" | "already_redeemed") => Outcome::success(),
+        Some("nothing_to_reset") => {
+            Outcome::nothing_to_reset("Your usage doesn't need a reset yet. Nothing was used.")
+        }
+        Some("no_credit") => Outcome::no_credit("That reset is no longer available."),
+        _ => Outcome::failed(
+            "The reset could not be confirmed. Check your limits before trying again.",
+        ),
     }
-    let credits = read(row).map_err(DomainStateError::bad_request)?;
-    let credits: Vec<_> = credits
-        .iter()
-        .map(|credit| {
-            let picker_expiry = credit
-                .expires_at
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|date| {
-                    format!(
-                        "Expires {}.",
-                        date.with_timezone(&chrono::Local)
-                            .format("%H:%M on %-d %b %Y")
-                    )
-                });
-            json!({"id":credit.id,"expiresAt":credit.expires_at,"pickerExpiry":picker_expiry})
-        })
-        .collect();
-    Ok(json!({"accountId":account.id,"credits":credits}))
 }
 
 #[cfg(test)]

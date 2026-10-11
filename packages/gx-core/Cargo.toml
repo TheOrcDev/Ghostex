@@ -1,0 +1,18 @@
+# CDXC:StateSync 2026-09-19 DECISION:
+# User: the desktop app stops running product logic in QuickJS; one Rust state store owns projects, sessions, tabs, panes, focus, and chat state, and every interaction is a local state change plus one redraw.
+# This crate is that store's platform-neutral core. Inputs are events (wire frames, user intents, clock ticks); outputs are state plus effects the host performs. It must stay free of gpui, threads, sockets, the file system, and clock reads (the host passes `now_ms`), and must build for wasm32-unknown-unknown, because the mobile app (UniFFI) and the web build embed it next.
+[package]
+name = "ghostex-gx-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ghostex_gx_core"
+path = "src/lib.rs"
+
+[dependencies]
+ghostex-gx-protocol = { path = "../gx-protocol" }
+ghostex-settings-catalog = { path = "../settings-catalog" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

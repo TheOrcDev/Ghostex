@@ -1,38 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
-const releaseGhostexSource = readFileSync(new URL('../../../tooling/release-ghostex.mjs', import.meta.url), 'utf8');
+// The cask renderer went with the local release driver (deleted 2026-10-01); release-final-verify still
+// checks the published tap cask with validateGhostexCask in tooling/release-shared.mjs.
+const releaseSharedSource = readFileSync(new URL('../../../tooling/release-shared.mjs', import.meta.url), 'utf8');
 
-function sourceBetween(source: string, start: string, end: string): string {
+function sourceFrom(source: string, start: string): string {
   const startIndex = source.indexOf(start);
-  const endIndex = source.indexOf(end, startIndex + start.length);
   expect(startIndex).toBeGreaterThanOrEqual(0);
-  expect(endIndex).toBeGreaterThan(startIndex);
-  return source.slice(startIndex, endIndex);
+  return source.slice(startIndex);
 }
 
 describe('Ghostex CLI command wrappers', () => {
-  test('Homebrew cask generation installs wrappers instead of CLI binary aliases', () => {
+  test('the published Homebrew cask check requires wrappers instead of CLI binary aliases', () => {
     /*
      * CDXC:Cli 2026-06-12-09:31:
      * Release automation must not reintroduce Homebrew binary stanzas for
      * ghostex/gx, because those stanzas create symlinks back into Ghostex.app.
      */
-    const renderer = sourceBetween(releaseGhostexSource, 'function renderGhostexCaskForTap', 'async function main');
+    const validator = sourceFrom(releaseSharedSource, 'export function validateGhostexCask');
 
-    expect(renderer).toContain('function renderGhostexCask');
-    expect(renderer).toContain('function validateGhostexCask');
-    expect(renderer).toContain('postflight do');
-    expect(renderer).toContain('command_path.write <<~EOS');
-    expect(renderer).toContain('exec "#{cli_binary}" "$@"');
-    expect(renderer).toContain('system "/usr/bin/xattr", "-d", attribute, command_path.to_s');
-    expect(renderer).toContain('uninstall_preflight do');
-    expect(renderer).toContain('Ghostex cask must install wrapper files, not Homebrew binary aliases.');
-    expect(releaseGhostexSource).not.toContain('--except-cops Homebrew/OSDependsOn');
-    expect(releaseGhostexSource).toContain('HOMEBREW_NO_INSTALL_FROM_API=1 brew style --fix');
-    expect(releaseGhostexSource).toContain('depends_on macos: :ventura');
-    expect(releaseGhostexSource).not.toContain('depends_on macos: ">= :ventura"');
-    expect(renderer).not.toContain('const ghostexBinary');
-    expect(renderer).not.toContain('const gxBinary');
+    // Homebrew 7.0.6 shape (CDXC:Release 2026-09-21): command_wrapper stanzas and *_steps blocks.
+    expect(validator).toContain('\'command_wrapper "ghostex", content:\'');
+    expect(validator).toContain('\'command_wrapper "gx", content:\'');
+    expect(validator).toContain('\'exec "#{appdir}/ghostex.app/Contents/Resources/CLI/ghostex" "$@"\'');
+    expect(validator).toContain("'depends_on macos: :ventura'");
+    expect(validator).toContain("['preflight_steps', 'postflight_steps', 'uninstall_preflight_steps']");
+    expect(validator).toContain('Ghostex cask must install wrapper files, not Homebrew binary aliases.');
   });
 });

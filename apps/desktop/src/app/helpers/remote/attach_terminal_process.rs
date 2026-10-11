@@ -17,6 +17,7 @@ pub(crate) fn gpui_remote_shell_command_arg(value: &str) -> String {
     }
 }
 
+#[cfg(not(windows))]
 pub(crate) fn gpui_remote_attach_terminal_process_command(
     ssh_command: &str,
     ssh_host: &str,
@@ -166,5 +167,10 @@ pub(crate) fn gpui_remote_attach_terminal_process_command(
         body.push_str(line);
         body.push('\n');
     }
-    format!("/bin/zsh -c {}", gpui_shell_single_quote(body.trim_end()))
+    let shell = if cfg!(target_os = "linux") {
+        "/bin/bash"
+    } else {
+        "/bin/zsh"
+    };
+    format!("{shell} -c {}", gpui_shell_single_quote(body.trim_end()))
 }

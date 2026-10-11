@@ -13,22 +13,27 @@ use crate::ghostex_cli::output::{normalize_js_numbers, print_json};
 use crate::ghostex_cli::rpc::{self, CliError, CliResult};
 use crate::ghostex_cli::usage;
 
-/// The agent-facing settings catalog generated from the Settings modal's own
-/// search rows by `tooling/ghostex-help/generate.ts`. Embedded so the installed
-/// CLI validates against the catalog that matches its own build.
-const SETTINGS_CATALOG_JSON: &str =
-    include_str!("../../../skills/ghostex-help/references/settings-catalog.json");
+/// The agent-facing settings catalog, rendered from the Settings catalog crate
+/// (`packages/settings-catalog`), the same text `cargo xtask help-generate` writes to
+/// skills/ghostex-help/references/settings-catalog.json. Built in, so the installed CLI
+/// validates against the catalog of its own build.
+pub(super) fn settings_catalog_json() -> &'static str {
+    static JSON: OnceLock<String> = OnceLock::new();
+    JSON.get_or_init(ghostex_settings_catalog::help::catalog_json)
+}
 
 const SETTINGS_FILE_NAME: &str = "native-sidebar-settings.json";
 const SETTINGS_WRITE_CONFIRM_TIMEOUT: Duration = Duration::from_secs(3);
 const SETTINGS_WRITE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SETTINGS_UPDATE_SOURCE: &str = "cli:settings";
+pub(super) const SETTINGS_UPDATE_SOURCE: &str = "cli:settings";
 
 /// Mirrors `SETTINGS_MODAL_NAVIGATION_TABS` in
-/// packages/shared/ghostex-settings/settings-modal-navigation.ts.
+/// packages/shared/ghostex-settings/settings-modal-navigation.ts (deleted 2026-10-01).
 const SETTINGS_MODAL_TABS: &[&str] = &[
     "settings",
+    "theme",
     "integrations",
+    "cloudBoxes",
     "extensions",
     "osIntegration",
     "remote",
@@ -38,6 +43,7 @@ const SETTINGS_MODAL_TABS: &[&str] = &[
     "actions",
     "openTargets",
     "hotkeys",
+    "debugging",
     "about",
 ];
 
@@ -88,7 +94,7 @@ fn catalog() -> CliResult<&'static SettingsCatalog> {
     static CATALOG: OnceLock<Result<SettingsCatalog, String>> = OnceLock::new();
     CATALOG
         .get_or_init(|| {
-            serde_json::from_str::<SettingsCatalog>(SETTINGS_CATALOG_JSON)
+            serde_json::from_str::<SettingsCatalog>(settings_catalog_json())
                 .map_err(|error| format!("Bundled settings catalog is invalid: {error}"))
         })
         .as_ref()
@@ -147,10 +153,35 @@ pub(super) fn read_settings_file() -> CliResult<Map<String, Value>> {
     }
 }
 
+/// The catalog default of `entry` on this computer: a platform default (Enable transparency is
+/// Never on Windows) wins over the shared one the catalog JSON carries.
+fn effective_default(entry: &CatalogEntry) -> Option<Value> {
+    ghostex_settings_catalog::availability::platform_default(
+        ghostex_settings_catalog::Platform::current(),
+        &entry.key,
+    )
+    .map(|value| ghostex_settings_catalog::ToJson::to_json(value).to_value())
+    .or_else(|| entry.default.clone())
+}
+
+/// Whether Settings leaves the row out on this computer for the saved values (Blur on Windows
+/// while the glass shows the desktop, Menu blur off macOS), or the page is one a built-in extension
+/// this platform does not have owns (Cloud Boxes on Windows).
+fn hidden_here(entry: &CatalogEntry, file: &Map<String, Value>) -> bool {
+    !ghostex_settings_catalog::built_in_extensions::page_available_on(
+        &entry.tab,
+        ghostex_settings_catalog::Platform::current(),
+    ) || ghostex_settings_catalog::availability::row_hidden(
+        ghostex_settings_catalog::Platform::current(),
+        &entry.key,
+        |key| file.get(key).and_then(Value::as_str).map(str::to_string),
+    )
+}
+
 fn current_value(entry: &CatalogEntry, file: &Map<String, Value>) -> (Value, &'static str) {
     match file.get(&entry.key) {
         Some(value) if !value.is_null() => (value.clone(), "file"),
-        _ => (entry.default.clone().unwrap_or(Value::Null), "default"),
+        _ => (effective_default(entry).unwrap_or(Value::Null), "default"),
     }
 }
 
@@ -226,8 +257,8 @@ fn entry_json(entry: &CatalogEntry, file: &Map<String, Value>) -> Value {
     object.insert("section".into(), json!(entry.section));
     object.insert("sectionTitle".into(), json!(entry.section_title));
     object.insert("type".into(), json!(entry.value_type));
-    if let Some(default) = &entry.default {
-        object.insert("default".into(), default.clone());
+    if let Some(default) = effective_default(entry) {
+        object.insert("default".into(), default);
     }
     if let Some(options) = &entry.options {
         object.insert(
@@ -284,6 +315,7 @@ pub fn settings_command(args: &[String]) -> CliResult<()> {
         "set" => set_command(&rest),
         "reset" => reset_command(&rest),
         "open" => open_command(&rest),
+        "hotkeys" | "hotkey" => super::settings_hotkeys::hotkeys_command(&rest),
         other => Err(CliError::Other(format!(
             "Unknown settings command: {other}\n\n{}",
             usage::settings_usage()
@@ -312,6 +344,7 @@ fn list_command(args: &[String]) -> CliResult<()> {
     let entries: Vec<&CatalogEntry> = catalog
         .settings
         .iter()
+        .filter(|entry| !hidden_here(entry, &file))
         .filter(|entry| !writable_only || entry.agent_writable)
         .filter(|entry| tab_filter.as_deref().is_none_or(|tab| entry.tab == tab))
         .collect();
@@ -397,8 +430,11 @@ fn get_command(args: &[String]) -> CliResult<()> {
         println!("  about:     {}", entry.subtitle);
     }
     println!("  type:      {}", type_summary(entry));
-    if let Some(default) = &entry.default {
-        println!("  default:   {}", format_value(default));
+    if let Some(default) = effective_default(entry) {
+        println!("  default:   {}", format_value(&default));
+    }
+    if hidden_here(entry, &file) {
+        println!("  note:      Settings does not show this row on this computer right now.");
     }
     println!(
         "  source:    {}",
@@ -443,6 +479,11 @@ fn get_command(args: &[String]) -> CliResult<()> {
 }
 
 fn not_writable_error(entry: &CatalogEntry) -> CliError {
+    if entry.key == "hotkeys" {
+        return CliError::Other(
+            "Hotkeys are changed one at a time: `ghostex settings hotkeys list`, `ghostex settings hotkeys set <id> <keys>`, `ghostex settings hotkeys reset <id>|--all`.".to_string(),
+        );
+    }
     let reason = match entry.value_type.as_str() {
         "json" => "it is a structured value that only the Settings UI can edit".to_string(),
         "ui" => "it is a Settings UI action, not a stored value".to_string(),
@@ -590,7 +631,7 @@ fn app_not_running_error(error: CliError, entry: &CatalogEntry) -> CliError {
 
 /// CDXC:Settings 2026-09-09 DECISION:
 /// User: agent settings writes go through the running desktop app (renderer command -> the Settings modal's own save path), not a direct file write, so every save gets the same normalization and fan-out; when the app is not running the command fails instead of writing the file.
-/// SEE-ALSO: apps/desktop/sidebar/gxserver-runtime/app-shot-and-misc.ts, tooling/ghostex-help/generate.ts.
+/// SEE-ALSO: packages/gx-core/src/renderer_commands/verbs.rs (`updateSettingsPatch`), apps/desktop/src/app/gx_store/renderer_commands/perform.rs, packages/settings-catalog/src/help/ (the catalog this validates against).
 fn apply_setting(entry: &CatalogEntry, value: Value, flags: &Flags, verb: &str) -> CliResult<()> {
     if !entry.agent_writable {
         return Err(not_writable_error(entry));
@@ -670,7 +711,7 @@ fn reset_command(args: &[String]) -> CliResult<()> {
     if !entry.agent_writable {
         return Err(not_writable_error(entry));
     }
-    let default = entry.default.clone().ok_or_else(|| {
+    let default = effective_default(entry).ok_or_else(|| {
         CliError::Other(format!(
             "\"{}\" has no catalog default to reset to.",
             entry.key
@@ -706,7 +747,23 @@ fn open_command(args: &[String]) -> CliResult<()> {
     let tab = explicit_tab
         .or_else(|| entry.map(|entry| entry.tab.clone()))
         .unwrap_or_else(|| "settings".to_string());
-    let search_query = entry.map(|entry| entry.title.clone());
+    // A page of a built-in extension that is off (Actions, Open In) is not in Settings to open.
+    if let Some(feature) = ghostex_settings_catalog::built_in_extensions::feature_owning_page(&tab)
+    {
+        super::built_in_extensions::require_built_in_extension(feature)?;
+    }
+    /*
+    CDXC:Settings 2026-10-05 WHY:
+    Settings searches only its own rows. A key the Help catalog adds without one (a supplemental row such as `hideAccountEmails`, or app state) was opened with its title searched, which matched nothing and showed "No settings match your search" over a page that has the setting. Those keys open on their page without a search.
+    */
+    let search_query = entry
+        .filter(|entry| {
+            ghostex_settings_catalog::has_search_row(
+                ghostex_settings_catalog::Platform::current(),
+                &entry.key,
+            )
+        })
+        .map(|entry| entry.title.clone());
     let mut payload = Map::new();
     payload.insert("tab".into(), json!(tab));
     if let Some(query) = &search_query {
@@ -738,6 +795,10 @@ fn open_command(args: &[String]) -> CliResult<()> {
             (Some(query), Some(entry)) => println!(
                 "Opened Settings > {} with \"{query}\" searched ({}).",
                 entry.tab_title, entry.key
+            ),
+            (None, Some(entry)) => println!(
+                "Opened Settings > {}; \"{}\" is on that page ({}).",
+                entry.tab_title, entry.title, entry.key
             ),
             _ => println!("Opened Settings tab {tab}."),
         }

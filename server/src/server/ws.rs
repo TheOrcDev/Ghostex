@@ -115,6 +115,13 @@ pub(crate) async fn handle_event_socket(socket: WebSocket, state: Arc<AppState>,
     {
         return;
     }
+    // The connecting client gets the effective lineup from boot, not only
+    // after the first poll succeeds (agent_model_catalog.rs).
+    if let Some(event) = crate::agent_model_catalog::connect_event(&state.metadata.server_id) {
+        if outbound_tx.try_send(event).is_err() {
+            return;
+        }
+    }
     /*
     Direct client events (including the subscription snapshot) and hub
     broadcasts must enter one FIFO before socket delivery. A separate unbiased
@@ -291,6 +298,13 @@ pub(crate) async fn handle_event_client_message(
 /// Dedicated chat brokers opt into `stream=sessionChat` so unrelated transcripts and presentation events never enter their socket queue.
 /// Legacy event sockets retain their full stream; a chat filter is installed before starting its snapshot-first follower.
 fn chat_event_matches(filter: &RwLock<HashSet<(String, String)>>, event: &Value) -> bool {
+    // The catalog is not a session's frame, and a chat-only socket is exactly
+    // the client that renders model pickers.
+    if event.get("type").and_then(Value::as_str)
+        == Some(crate::agent_model_catalog::AGENT_MODEL_CATALOG_CHANGED_EVENT_TYPE)
+    {
+        return true;
+    }
     if !matches!(
         event.get("type").and_then(Value::as_str),
         Some(
@@ -432,6 +446,7 @@ pub(crate) fn send_presentation_snapshot_for_subscription(
     */
     let auto_settle_after_days = session_lifecycle::read_sweep_auto_settle_after_days(&state.paths);
     let sidebar_v2_selected = session_lifecycle::read_sidebar_v2_selected(&state.paths);
+    let sidebar_spaces_enabled = crate::sidebar_spaces::read_sidebar_spaces_enabled(&state.paths);
     let Ok(_event_sequence) = lock_presentation_event_sequence(state) else {
         return true;
     };
@@ -440,6 +455,7 @@ pub(crate) fn send_presentation_snapshot_for_subscription(
         &state.metadata.server_id,
         auto_settle_after_days,
         sidebar_v2_selected,
+        sidebar_spaces_enabled,
         sessions,
     ) else {
         return true;

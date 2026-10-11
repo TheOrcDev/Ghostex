@@ -1,0 +1,345 @@
+use std::{
+    env, fs,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
+
+use sha2::{Digest as _, Sha256};
+
+use super::*;
+#[cfg(target_os = "linux")]
+use std::io::Write as _;
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
+
+pub(crate) fn emit(
+    progress: &mut dyn FnMut(ComponentStoreProgress),
+    component: &ComponentDefinition,
+    platform: &str,
+    size_bytes: u64,
+    phase: ComponentStoreProgressPhase,
+) {
+    progress(ComponentStoreProgress {
+        component: component.name.clone(),
+        component_version: component.component_version.clone(),
+        downloaded_bytes: 0,
+        platform: platform.to_string(),
+        phase,
+        size_bytes,
+    });
+}
+
+pub(crate) fn emit_download_progress(
+    progress: &mut dyn FnMut(ComponentStoreProgress),
+    component: &ComponentDefinition,
+    platform: &str,
+    size_bytes: u64,
+    downloaded_bytes: u64,
+) {
+    progress(ComponentStoreProgress {
+        component: component.name.clone(),
+        component_version: component.component_version.clone(),
+        downloaded_bytes: downloaded_bytes.min(size_bytes),
+        platform: platform.to_string(),
+        phase: ComponentStoreProgressPhase::Downloading,
+        size_bytes,
+    });
+}
+
+pub(crate) fn component_store_root() -> Result<PathBuf, String> {
+    if let Some(override_root) = env::var_os("GHOSTEX_COMPONENT_STORE_DIR") {
+        return Ok(PathBuf::from(override_root));
+    }
+    #[cfg(target_os = "windows")]
+    /*
+    CDXC:PlatformSupport 2026-08-16:
+    Velopack owns %LOCALAPPDATA%\Ghostex and transactionally replaces that
+    entire directory during reinstall/update. Keep large on-demand runtimes in
+    a sibling data root so the installer cannot discard a verified CEF payload
+    and force every downloaded upgrade to fetch Chromium again.
+    */
+    return env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("GhostexData/components"))
+        .ok_or_else(|| {
+            "LOCALAPPDATA is unavailable; cannot locate the Ghostex component store".to_string()
+        });
+    #[cfg(not(target_os = "windows"))]
+    return ghostex_paths::GhostexPaths::resolve_and_migrate()
+        .map(|paths| paths.data_dir.join("components"))
+        .map_err(|error| format!("Could not migrate Ghostex component storage: {error}"));
+}
+
+pub(crate) fn legacy_asset_cache_root() -> Result<PathBuf, String> {
+    if let Some(override_root) = env::var_os("GHOSTEX_ON_DEMAND_CACHE_DIR") {
+        return Ok(PathBuf::from(override_root));
+    }
+    #[cfg(target_os = "windows")]
+    return env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("GhostexData/on-demand"))
+        .ok_or_else(|| {
+            "LOCALAPPDATA is unavailable; cannot locate the Ghostex release asset cache".to_string()
+        });
+    #[cfg(not(target_os = "windows"))]
+    return ghostex_paths::GhostexPaths::resolve_and_migrate()
+        .map(|paths| paths.data_dir.join("on-demand"))
+        .map_err(|error| format!("Could not migrate Ghostex release asset storage: {error}"));
+}
+
+pub(crate) fn current_platform() -> Result<String, String> {
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        return Err(
+            "This operating system is unsupported by the Ghostex component store".to_string(),
+        );
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x64"
+    } else {
+        return Err(
+            "This CPU architecture is unsupported by the Ghostex component store".to_string(),
+        );
+    };
+    Ok(format!("{os}-{arch}"))
+}
+
+pub(crate) fn download_url(repo: &str, tag: &str, asset_name: &str) -> String {
+    let base = env::var("GHOSTEX_ON_DEMAND_BASE_URL")
+        .unwrap_or_else(|_| format!("https://github.com/{repo}/releases/download"));
+    format!("{}/{tag}/{asset_name}", base.trim_end_matches('/'))
+}
+
+pub(crate) fn download(
+    url: &str,
+    destination: &Path,
+    expected_size: u64,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        /*
+        CDXC:PlatformSupport 2026-08-16:
+        Do not resolve and launch an arbitrary curl.exe from the customer's
+        PATH. Windows installations already carry Velopack's in-process HTTPS
+        stack for signed application updates; use that same deterministic
+        downloader for sealed CEF/code-server assets so a broken or shadowed
+        system curl cannot strand Ghostex during first launch. The component
+        store still owns exact-size and SHA-256 verification after download.
+        */
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            let result = velopack::download::download_url_to_file(url, destination, |percent| {
+                if expected_size > 0 {
+                    let downloaded =
+                        expected_size.saturating_mul(percent.clamp(0, 100) as u64) / 100;
+                    progress(downloaded);
+                }
+            });
+            match result {
+                Ok(()) => {
+                    if expected_size > 0 {
+                        progress(expected_size);
+                    }
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    if attempt < 3 {
+                        thread::sleep(Duration::from_millis(500 * attempt));
+                    }
+                }
+            }
+        }
+        return Err(format!(
+            "Could not download component asset from {url}: {}",
+            last_error.unwrap_or_else(|| "the HTTPS request failed".to_string())
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        /*
+        CDXC:PlatformSupport 2026-08-16:
+        Installed Ghostex must not depend on a PATH-resolved curl process for
+        its first-launch CEF download. Stream through an in-process HTTPS
+        client using the Linux system certificate verifier, keep the existing
+        bounded retries, and surface the actual request/read/write error. The
+        component store still verifies the exact byte count and sealed SHA-256
+        before the archive can become an installed runtime.
+        */
+        let tls_config = ureq::tls::TlsConfig::builder()
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(900)))
+            .tls_config(tls_config)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let mut last_error = None;
+
+        for attempt in 1..=3 {
+            let result = (|| -> Result<(), String> {
+                let mut response = agent
+                    .get(url)
+                    .call()
+                    .map_err(|error| format!("HTTPS request failed: {error}"))?;
+                let mut file = File::create(destination).map_err(|error| {
+                    format!(
+                        "Could not create component download {}: {error}",
+                        destination.display()
+                    )
+                })?;
+                let mut reader = response.body_mut().as_reader();
+                let mut buffer = [0_u8; 64 * 1024];
+                let mut downloaded_bytes = 0_u64;
+
+                loop {
+                    let count = reader
+                        .read(&mut buffer)
+                        .map_err(|error| format!("HTTPS response read failed: {error}"))?;
+                    if count == 0 {
+                        break;
+                    }
+                    file.write_all(&buffer[..count])
+                        .map_err(|error| format!("Component download write failed: {error}"))?;
+                    downloaded_bytes = downloaded_bytes.saturating_add(count as u64);
+                    progress(downloaded_bytes);
+                }
+                file.sync_all()
+                    .map_err(|error| format!("Could not finish component download: {error}"))?;
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt < 3 {
+                        thread::sleep(Duration::from_millis(500 * attempt));
+                    }
+                }
+            }
+        }
+
+        return Err(format!(
+            "Could not download component asset from {url}: {}",
+            last_error.unwrap_or_else(|| "the HTTPS request failed".to_string())
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("/usr/bin/curl");
+
+        command
+            .args([
+                "--fail",
+                "--location",
+                "--retry",
+                "2",
+                "--max-time",
+                "900",
+                "--silent",
+                "--show-error",
+                "--output",
+            ])
+            .arg(destination)
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("Could not launch component downloader for {url}: {error}"))?;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if expected_size > 0 {
+                        let downloaded_bytes = fs::metadata(destination)
+                            .map(|metadata| metadata.len())
+                            .unwrap_or(0);
+                        progress(downloaded_bytes);
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "Could not monitor component downloader for {url}: {error}"
+                    ));
+                }
+            }
+        };
+        if expected_size > 0 {
+            let downloaded_bytes = fs::metadata(destination)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            progress(downloaded_bytes);
+        }
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Could not download component asset from {url}: downloader exited with {status}"
+            ))
+        }
+    }
+}
+
+pub(crate) fn verify_file(
+    path: &Path,
+    expected_sha256: &str,
+    expected_size: u64,
+) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "Could not inspect downloaded component asset {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.len() != expected_size {
+        return Err(format!(
+            "Downloaded component asset size mismatch: expected {expected_size} bytes, received {} bytes",
+            metadata.len()
+        ));
+    }
+    let mut file = File::open(path).map_err(|error| {
+        format!(
+            "Could not open downloaded component asset {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "Could not hash downloaded component asset {}: {error}",
+                path.display()
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if actual != expected_sha256 {
+        return Err("Downloaded component asset failed SHA-256 verification against the app's sealed manifest".to_string());
+    }
+    Ok(())
+}

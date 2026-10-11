@@ -4,9 +4,11 @@ use serde_json::{json, Value};
 use crate::domain::{now_iso, sql_error, DomainResult, DomainStateError};
 
 /// Newest rows the read endpoint returns. Mirrors NOTIFICATION_FEED_READ_LIMIT in the shared contract.
-pub(crate) const NOTIFICATION_FEED_READ_LIMIT: usize = 200;
-/// Rows kept before the oldest read rows are pruned. Mirrors NOTIFICATION_FEED_RETENTION_LIMIT in the shared contract.
-pub(crate) const NOTIFICATION_FEED_RETENTION_LIMIT: usize = 500;
+pub(crate) const NOTIFICATION_FEED_READ_LIMIT: usize = 40;
+/// CDXC:Notifications 2026-09-30 DECISION:
+/// User: "make notifications dropdown show max of 40 last notifications please and clear after that". Only the 40 newest rows are kept; anything older is deleted, read or unread, so the unread count and the jump keys never point at a row the panel cannot show. Supersedes the 500-row retention that only pruned read rows.
+/// Mirrors NOTIFICATION_FEED_RETENTION_LIMIT in the shared contract.
+pub(crate) const NOTIFICATION_FEED_RETENTION_LIMIT: usize = 40;
 /// Longest stored body, in characters. Mirrors NOTIFICATION_FEED_BODY_MAX_CHARS in the shared contract.
 pub(crate) const NOTIFICATION_FEED_BODY_MAX_CHARS: usize = 280;
 
@@ -14,6 +16,20 @@ pub(crate) const NOTIFICATION_FEED_KIND_FINISHED: &str = "finished";
 pub(crate) const NOTIFICATION_FEED_KIND_NEEDS_INPUT: &str = "needsInput";
 pub(crate) const NOTIFICATION_FEED_KIND_BELL: &str = "bell";
 pub(crate) const NOTIFICATION_FEED_KIND_CUSTOM: &str = "custom";
+/// A banked usage reset of a saved account expires soon; clients draw it red.
+pub(crate) const NOTIFICATION_FEED_KIND_RESET_EXPIRING: &str = "resetExpiring";
+/// Ghostex used an expiring banked reset on its own.
+pub(crate) const NOTIFICATION_FEED_KIND_RESET_REDEEMED: &str = "resetRedeemed";
+
+/// CDXC:Notifications 2026-10-05 WHY:
+/// Account rows (banked reset warnings) belong to no session, but the feed's one-live-row-per-session rule is exactly what they need per account: the 24-hour warning replaces the unread 3-day one, and an automatic redeem replaces both. Their `sessionId` is this prefix plus the saved account id, which no real session id can collide with; the orphan sweep and the read-acknowledges-the-thread rule skip them, and every row carries `accountId` so a client opens the account instead of a session.
+pub(crate) const ACCOUNT_NOTIFICATION_SESSION_PREFIX: &str = "account:";
+/// The `projectId` account rows are stored under.
+pub(crate) const ACCOUNT_NOTIFICATION_PROJECT_ID: &str = "accounts";
+
+pub(crate) fn account_notification_session_id(account_id: &str) -> String {
+    format!("{ACCOUNT_NOTIFICATION_SESSION_PREFIX}{account_id}")
+}
 
 pub(crate) struct NewNotificationFeedRow {
     pub project_id: String,
@@ -40,7 +56,7 @@ pub(crate) fn bounded_notification_body(text: &str) -> String {
     truncated
 }
 
-/// Insert a row, superseding the session's unread rows first, then prune old read rows.
+/// Insert a row, superseding the session's unread rows first, then prune rows past the retention limit.
 /// One live row per session keeps the unread count equal to the number of sessions waiting, not the number of events.
 pub(crate) fn insert_notification_feed_row(
     db: &Connection,
@@ -78,24 +94,15 @@ pub(crate) fn insert_notification_feed_row(
         .ok_or_else(|| DomainStateError::not_found("Notification was not stored."))
 }
 
-/// Keep at most the retention limit, dropping the oldest READ rows first and never an unread row.
+/// Keep only the newest retention-limit rows and delete everything older.
 fn prune_notification_feed(db: &Connection) -> DomainResult<()> {
-    let total: i64 = db
-        .query_row("SELECT COUNT(*) FROM notification_feed", [], |row| {
-            row.get(0)
-        })
-        .map_err(sql_error)?;
-    let excess = total - NOTIFICATION_FEED_RETENTION_LIMIT as i64;
-    if excess <= 0 {
-        return Ok(());
-    }
     db.execute(
         r#"
-        DELETE FROM notification_feed WHERE id IN (
-          SELECT id FROM notification_feed WHERE readAt IS NOT NULL ORDER BY createdAt ASC LIMIT ?1
+        DELETE FROM notification_feed WHERE id NOT IN (
+          SELECT id FROM notification_feed ORDER BY createdAt DESC, id DESC LIMIT ?1
         )
         "#,
-        params![excess],
+        params![NOTIFICATION_FEED_RETENTION_LIMIT as i64],
     )
     .map_err(sql_error)?;
     Ok(())
@@ -104,8 +111,8 @@ fn prune_notification_feed(db: &Connection) -> DomainResult<()> {
 /// Rows whose session was deleted have nothing to open; drop them before listing.
 fn drop_orphaned_notification_feed_rows(db: &Connection) -> DomainResult<()> {
     db.execute(
-        "DELETE FROM notification_feed WHERE sessionId NOT IN (SELECT sessionId FROM sessions)",
-        [],
+        "DELETE FROM notification_feed WHERE sessionId NOT IN (SELECT sessionId FROM sessions) AND substr(sessionId, 1, length(?1)) <> ?1",
+        params![ACCOUNT_NOTIFICATION_SESSION_PREFIX],
     )
     .map_err(sql_error)?;
     Ok(())
@@ -124,6 +131,26 @@ pub(crate) fn mark_session_notifications_read(
     };
     db.execute(sql, params![now_iso(), session_id])
         .map_err(sql_error)
+}
+
+/// Sessions of the unread rows, of one row when `id` is given; read before a mark-read so the caller knows which threads it read.
+pub(crate) fn unread_notification_session_ids(
+    db: &Connection,
+    id: Option<&str>,
+) -> DomainResult<Vec<String>> {
+    let mut statement = db
+        .prepare(
+            "SELECT DISTINCT sessionId FROM notification_feed WHERE readAt IS NULL AND (?1 IS NULL OR id = ?1) AND substr(sessionId, 1, length(?2)) <> ?2",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map(params![id, ACCOUNT_NOTIFICATION_SESSION_PREFIX], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_error)?;
+    Ok(rows)
 }
 
 pub(crate) fn mark_notification_read(db: &Connection, id: &str) -> DomainResult<usize> {
@@ -201,6 +228,12 @@ fn item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     if let Some(agent_name) = agent_name.filter(|value| !value.trim().is_empty()) {
         item["agentName"] = Value::String(agent_name);
     }
+    if let Some(account_id) = item["sessionId"]
+        .as_str()
+        .and_then(|id| id.strip_prefix(ACCOUNT_NOTIFICATION_SESSION_PREFIX))
+    {
+        item["accountId"] = Value::String(account_id.to_string());
+    }
     Ok(item)
 }
 
@@ -220,6 +253,7 @@ pub(crate) fn read_notification_feed_item(
 /// The full feed state every endpoint returns: newest first, unread count, and the jump target.
 pub(crate) fn read_notification_feed_state(db: &Connection) -> DomainResult<Value> {
     drop_orphaned_notification_feed_rows(db)?;
+    prune_notification_feed(db)?;
     let mut statement = db
         .prepare(&format!(
             "SELECT {ITEM_COLUMNS} FROM notification_feed ORDER BY createdAt DESC, id DESC LIMIT ?1"

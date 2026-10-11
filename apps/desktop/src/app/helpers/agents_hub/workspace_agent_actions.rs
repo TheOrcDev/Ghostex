@@ -62,7 +62,7 @@ pub(crate) fn gpui_create_local_project_workspace_agent_record(
     }
     let result = gpui_gxserver_rpc_result(
         "/api/createAgentSession",
-        &serde_json::json!({
+        &ghostex_gx_core::replacing_empty_sessions(serde_json::json!({
             "agentId": agent_id,
             "runtimeSettings": account_id.map(|id| serde_json::json!({"accountId": id})).unwrap_or_else(|| serde_json::json!({})),
             /*
@@ -77,7 +77,7 @@ pub(crate) fn gpui_create_local_project_workspace_agent_record(
             "projectId": project_id,
             "requireLaunchCommand": true,
             "surface": "workspace",
-        }),
+        })),
         Duration::from_secs(15),
     )?;
     let session = result
@@ -105,15 +105,29 @@ pub(crate) fn gpui_create_local_project_workspace_agent_record(
 pub(crate) fn gpui_workspace_attach_agent_icon(
     attach: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<&'static str> {
+    /*
+    CDXC:SessionChat 2026-09-21 WHY:
+    `attach.session` is gxserver's stored session record, which keeps an agent's icon in `launchSettings.icon` and has no `agentIcon` of its own, so for a custom agent the first name present was its id (`custom-claude-…`), which is no icon at all.
+    The attach then overwrote the tab's projected icon with none, and since the icon is what decides Chat View support, a restored custom-agent session dropped its Default Agent View intent, stayed in Terminal and drew Chat View disabled until some later sidebar change put the icon back.
+    Read the icon where the daemon stores it (or the daemon-resolved `attach.agentIcon`, which also covers the project's custom agent list) and take the first name that is an icon, not the first name present.
+    */
     let session = attach.get("session").and_then(serde_json::Value::as_object);
-    let candidate = session
-        .and_then(|session| json_string_field(session, "agentIcon"))
-        .or_else(|| session.and_then(|session| json_string_field(session, "agentName")))
-        .or_else(|| session.and_then(|session| json_string_field(session, "agentId")))
-        .or_else(|| json_string_field(attach, "agentIcon"))
-        .or_else(|| json_string_field(attach, "agentName"))
-        .or_else(|| json_string_field(attach, "agentId"));
-    gpui_sidebar_agent_icon(candidate)
+    let stored_icon = session
+        .and_then(|session| session.get("launchSettings"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|launch_settings| json_string_field(launch_settings, "icon"));
+    [
+        json_string_field(attach, "agentIcon"),
+        session.and_then(|session| json_string_field(session, "agentIcon")),
+        stored_icon,
+        session.and_then(|session| json_string_field(session, "agentName")),
+        session.and_then(|session| json_string_field(session, "agentId")),
+        json_string_field(attach, "agentName"),
+        json_string_field(attach, "agentId"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|candidate| gpui_sidebar_agent_icon(Some(candidate)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

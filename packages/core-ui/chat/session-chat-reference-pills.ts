@@ -7,6 +7,7 @@ export interface SessionChatComposerReference {
   label: string;
   path: string;
   start: number;
+  revealed?: boolean;
 }
 
 export const SESSION_CHAT_REFERENCE_REVEAL_MARKER = '·';
@@ -17,6 +18,34 @@ const REFERENCE_PILL_TRAILING_SPACE = '\u2009';
 const REFERENCE_LABEL_PATTERN = /\[((?:\\.|[^\]\\\r\n])+)]\(/g;
 const IMAGE_PATH_PATTERN = /\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)(?:[?#].*)?$/i;
 const FILE_EXTENSION_PATTERN = /\.[A-Za-z][A-Za-z0-9_+-]*$/;
+const VIDEO_PATH_PATTERN = /\.(?:3gp|avi|flv|m2ts|m4v|mkv|mov|mp4|mpe?g|mts|ogv|webm|wmv)(?::\d+(?::\d+)?)?$/i;
+const AUDIO_PATH_PATTERN = /\.(?:aac|aiff?|flac|m4a|mp3|oga|ogg|opus|wav|wma)(?::\d+(?::\d+)?)?$/i;
+const PDF_PATH_PATTERN = /\.pdf(?::\d+(?::\d+)?)?$/i;
+
+/** Files that only a system app can play or show; opening them in Code is never right. */
+export type SessionChatMediaKind = 'audio' | 'pdf' | 'video';
+
+/**
+ * CDXC:SessionChat 2026-09-24 DECISION:
+ * User: a pasted video reads "Video #1" instead of "File #1", its menu names what it is, and clicking it opens it normally with the OS default app on macOS, Windows, and Linux instead of the code editor. Audio and PDFs follow the same rule.
+ * SEE-ALSO: `open_session_chat_file_for_session` in `apps/desktop/src/app/session_chat/file_open.rs` keeps the same extension list for the click.
+ */
+export function sessionChatMediaKind(path: string): SessionChatMediaKind | null {
+  if (VIDEO_PATH_PATTERN.test(path)) return 'video';
+  if (AUDIO_PATH_PATTERN.test(path)) return 'audio';
+  if (PDF_PATH_PATTERN.test(path)) return 'pdf';
+  return null;
+}
+
+const MEDIA_NOUNS: Record<SessionChatMediaKind, string> = { audio: 'Audio', pdf: 'PDF', video: 'Video' };
+
+/** The noun a reference to `path` is named with: `Video` in "[Video #1](clip.mp4)", "Open Video Location". */
+export function sessionChatPathNoun(path: string): string {
+  const media = sessionChatMediaKind(path);
+  if (media) return MEDIA_NOUNS[media];
+  const kind = sessionChatReferenceKind('', path);
+  return kind === 'image' ? 'Image' : kind === 'folder' ? 'Folder' : 'File';
+}
 const EXTENSIONLESS_FILE_NAMES = new Set([
   'AGENTS',
   'AUTHORS',
@@ -46,9 +75,10 @@ function unescapeMarkdown(value: string): string {
 function explicitReferenceKind(label: string): SessionChatReferenceKind | null {
   if (label.endsWith(SESSION_CHAT_REFERENCE_REVEAL_MARKER)) return null;
   if (/^Image #\d+$/.test(label)) return 'image';
-  if (/^File #\d+$/.test(label)) return 'file';
+  if (/^(?:Audio|File|PDF|Video) #\d+$/.test(label)) return 'file';
   if (/^Folder #\d+$/.test(label)) return 'folder';
-  if (label.startsWith('$')) return 'skill';
+  // `/name` is a Claude Code skill pill (`gx-chat-core` `composer/skill_invocation.rs`); one segment, so a path label stays a file.
+  if (label.startsWith('$') || /^\/[^\s/\\]+$/.test(label)) return 'skill';
   return null;
 }
 
@@ -146,7 +176,7 @@ function linkedDestination(text: string, destinationStart: number): { end: numbe
 }
 
 /** Finds file, skill, image, and HTTP(S) links for every composer backend. */
-export function sessionChatComposerReferences(text: string): SessionChatComposerReference[] {
+export function sessionChatComposerReferences(text: string, includeRevealed = false): SessionChatComposerReference[] {
   const references: SessionChatComposerReference[] = [];
   for (const match of text.matchAll(REFERENCE_LABEL_PATTERN)) {
     const sourceLabel = match[1];
@@ -154,8 +184,10 @@ export function sessionChatComposerReferences(text: string): SessionChatComposer
     if (sourceLabel === undefined || start === undefined) {
       continue;
     }
-    const label = unescapeMarkdown(sourceLabel);
-    if (label.endsWith(SESSION_CHAT_REFERENCE_REVEAL_MARKER) || text[start - 1] === '!') continue;
+    const source = unescapeMarkdown(sourceLabel);
+    const revealed = source.endsWith(SESSION_CHAT_REFERENCE_REVEAL_MARKER);
+    if ((revealed && !includeRevealed) || text[start - 1] === '!') continue;
+    const label = revealed ? source.slice(0, -SESSION_CHAT_REFERENCE_REVEAL_MARKER.length) : source;
     const destinationStart = start + match[0].length;
     const destination = linkedDestination(text, destinationStart);
     if (!destination || destination.path === '') {
@@ -180,6 +212,7 @@ export function sessionChatComposerReferences(text: string): SessionChatComposer
       label,
       path: destination.path,
       start,
+      ...(revealed ? { revealed: true } : {}),
     });
   }
   return references;

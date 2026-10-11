@@ -146,6 +146,8 @@ jobs:
       job_android: ${{ steps.plan.outputs.job_android }}
       job_code_server_arm64: ${{ steps.plan.outputs.job_code_server_arm64 }}
       job_code_server_darwin_arm64: ${{ steps.plan.outputs.job_code_server_darwin_arm64 }}
+      job_code_server_windows_arm64: ${{ steps.plan.outputs.job_code_server_windows_arm64 }}
+      job_code_server_windows_x64: ${{ steps.plan.outputs.job_code_server_windows_x64 }}
       job_code_server_x64: ${{ steps.plan.outputs.job_code_server_x64 }}
       job_gxserver_arm64: ${{ steps.plan.outputs.job_gxserver_arm64 }}
       job_gxserver_x64: ${{ steps.plan.outputs.job_gxserver_x64 }}
@@ -202,6 +204,7 @@ jobs:
           GHOSTEX_MOBILE_DEPLOY_KEY: ${{ secrets.GHOSTEX_MOBILE_DEPLOY_KEY }}
           WINDOWS_CODE_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODE_SIGN_PFX_BASE64 }}
           WINDOWS_CODE_SIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGN_PFX_PASSWORD }}
+          COMPONENTS_GITHUB_TOKEN: ${{ secrets.COMPONENTS_GITHUB_TOKEN }}
         run: node tooling/release-gpui/preflight.mjs "${{ inputs.version }}"
       - name: Verify clean GPUI release reference contract
         if: ${{ inputs.macos || inputs.linux_deb || inputs.linux_rpm || inputs.linux_tar || inputs.windows_x64 || inputs.windows_arm64 }}
@@ -273,19 +276,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      # The root typecheck covers packages/core-ui, whose modal-gallery stories
-      # render the web app's Find and Machines surfaces. apps/web became its own
-      # submodule, so the skipped checkout leaves those modules unresolvable.
-      # release:test also reads zmx's build.zig.zon for the Zig pin assertion.
+      # release:test reads zmx's build.zig.zon for the Zig pin assertion.
       - name: Restore release-test prerequisites
         run: |
           git submodule update --init --depth 1 .dependencies/code-server
           git submodule update --init --depth 1 .dependencies/zmx
-          git submodule update --init --depth 1 apps/web
       - name: Install and typecheck
         run: |
           bun install --frozen-lockfile
-          bun run typecheck
+          cargo xtask typecheck
           bun run release:test
 
   # CDXC:WindowsValidationIsNotAGate 2026-09-01:
@@ -349,6 +348,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       arch: x64
+    secrets: inherit
 
   code_server_arm64:
     if: ${{ needs.prepare.outputs.job_code_server_arm64 != 'skip' }}
@@ -361,6 +361,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       arch: arm64
+    secrets: inherit
 
   # The macOS Code-tab component, built off the macOS job's critical path.
   # The macOS job awaits this job's artifact just in time before staging.
@@ -374,6 +375,36 @@ jobs:
     uses: ./.github/workflows/release-gpui-code-server-macos.yml
     with:
       version: ${{ inputs.version }}
+    secrets: inherit
+
+  # The native Windows editor component (VS Code REH for win32), one job per
+  # architecture, built off the Windows jobs' critical path. Each Windows job
+  # awaits its architecture's artifact just in time before packaging.
+  code_server_windows_x64:
+    if: ${{ needs.prepare.outputs.job_code_server_windows_x64 != 'skip' }}
+    needs: prepare
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release-gpui-code-server-windows.yml
+    with:
+      version: ${{ inputs.version }}
+      arch: x64
+    secrets: inherit
+
+  code_server_windows_arm64:
+    if: ${{ needs.prepare.outputs.job_code_server_windows_arm64 != 'skip' }}
+    needs: prepare
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release-gpui-code-server-windows.yml
+    with:
+      version: ${{ inputs.version }}
+      arch: arm64
+    secrets: inherit
 
   reuse:
     if: ${{ needs.prepare.outputs.reuse_count != '0' }}
@@ -416,6 +447,7 @@ jobs:
       packages: ${{ needs.prepare.outputs.linux_packages }}
       runtime_artifacts_ready: true
       plan: ${{ needs.prepare.outputs.plan }}
+    secrets: inherit
 
   gxserver_wsl_windows_x64:
     if: ${{ needs.prepare.outputs.job_wsl_x64 == 'build' }}
@@ -445,10 +477,10 @@ jobs:
 
   windows_x64:
     if: ${{ needs.prepare.outputs.job_windows_x64 == 'build' }}
-    # `prepare` only. The gxserver tarball and the code-server component are
-    # real data dependencies, but they are awaited just in time inside the job
-    # (await-run-artifacts.mjs), after ~7 minutes of runner setup, so they are
-    # not a `needs:` edge and do not delay the job's start.
+    # `prepare` only. The gxserver tarball, the code-server component, and the
+    # native editor component are real data dependencies, but they are awaited
+    # just in time inside the job (await-run-artifacts.mjs), after the Rust
+    # compile, so they are not a `needs:` edge and do not delay the job's start.
     needs: prepare
     permissions:
       attestations: write

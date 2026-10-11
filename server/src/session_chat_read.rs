@@ -5,7 +5,8 @@ use crate::server::{
     RoutedResponse,
 };
 use crate::session_chat_follower::{
-    is_session_chat_followable_session, session_chat_agent_for_session, session_chat_hook_working,
+    is_session_chat_followable_session, session_chat_display_agent_for_session,
+    session_chat_hook_working,
 };
 use crate::session_chat_options::{
     cached_session_chat_screen_state, cached_session_chat_terminal_notice,
@@ -63,6 +64,8 @@ pub(crate) struct SessionChatReadResolution {
     client learns about a project agent edit through the long-polled read.
     */
     switchable_agents: Option<Value>,
+    /// Whether the session runs on its own login, so the chat offers no account (CDXC:AgentProviders 2026-10-09 in accounts/launch.rs).
+    uses_own_login: bool,
     fingerprint: String,
 }
 
@@ -83,7 +86,7 @@ pub(crate) fn resolve_session_chat_read_state(
             code: "notFound",
             message: "The session no longer exists.".to_string(),
         })?;
-    let agent = session_chat_agent_for_session(&session);
+    let agent = session_chat_display_agent_for_session(&session);
     /*
     CDXC:Drafts 2026-08-28:
     The session's OWN launch agent id, which `agent` above is not: that one is
@@ -117,10 +120,16 @@ pub(crate) fn resolve_session_chat_read_state(
     } else {
         None
     };
-    let switchable_agents = repository
-        .get_project(project_id)?
+    let project = repository.get_project(project_id)?;
+    let switchable_agents = project
         .as_ref()
         .and_then(|project| crate::agents::switchable_session_agents_value(project, &session));
+    let uses_own_login = project
+        .as_ref()
+        .and_then(|project| crate::accounts::launch::provider(project, &session))
+        .is_some_and(|provider| {
+            crate::accounts::launch::session_uses_own_login(provider, &session)
+        });
     drop(session);
     drop(repository);
     drop(db);
@@ -285,6 +294,10 @@ pub(crate) fn resolve_session_chat_read_state(
         .as_ref()
         .map(Value::to_string)
         .hash(&mut hasher);
+    // Hashed only when set, so an ordinary session keeps the fingerprint it had.
+    if uses_own_login {
+        uses_own_login.hash(&mut hasher);
+    }
     let fingerprint = format!("{:016x}", hasher.finish());
 
     Ok(SessionChatReadResolution {
@@ -300,6 +313,7 @@ pub(crate) fn resolve_session_chat_read_state(
         queue,
         available_agents,
         switchable_agents,
+        uses_own_login,
         fingerprint,
     })
 }
@@ -381,22 +395,24 @@ pub(crate) async fn handle_read_session_chat_http(
             Ok(resolution) => resolution,
             Err(error) => return domain_error_response(endpoint_path, request_id, error),
         };
-    if let Some(mode) = params.get("historyMode").and_then(Value::as_str) {
-        if !matches!(mode, "turns" | "detail") || before_offset.is_none() {
+    // CDXC:SessionChat 2026-09-16 WHY:
+    // A live read collapses older turns (see `collapse_snapshot_messages`); `historyMode: "detail"` without a cursor keeps the verbatim tail for the CLI and agents that read a transcript's rows.
+    let history_mode = params.get("historyMode").and_then(Value::as_str);
+    let verbatim_tail = history_mode == Some("detail") && before_offset.is_none();
+    if let Some(mode) = history_mode.filter(|_| !verbatim_tail) {
+        if !matches!(mode, "turns" | "detail") {
             return domain_error_response(
                 endpoint_path,
                 request_id,
                 DomainStateError {
                     code: "invalidParams",
-                    message: "History reads require historyMode turns/detail and beforeOffset."
-                        .to_string(),
+                    message: "historyMode must be turns or detail.".to_string(),
                 },
             );
         }
         let history_agent =
             crate::session_chat::resolve_session_chat_transcript_agent(resolution.agent.as_deref());
         let path = resolution.transcript_path.clone();
-        let before = before_offset.unwrap();
         let detail = mode == "detail";
         let preserve = params
             .get("preserveNewest")
@@ -404,11 +420,16 @@ pub(crate) async fn handle_read_session_chat_http(
             .unwrap_or(false);
         let history_project = project_id.clone();
         let history_session = session_id.clone();
+        // CDXC:SessionChat 2026-09-24 DECISION:
+        // The user asked that reading a whole thread not need a live read first, so a history read without a cursor starts at the transcript's end (the newest turn).
         let history = tokio::task::spawn_blocking(move || match (history_agent, path) {
             (Some(agent), Some(path)) => crate::session_chat_history::read_history(
                 agent,
                 &path,
-                before,
+                match before_offset {
+                    Some(before) => before,
+                    None => std::fs::metadata(&path)?.len(),
+                },
                 limit,
                 detail,
                 preserve,
@@ -475,6 +496,7 @@ pub(crate) async fn handle_read_session_chat_http(
         queue,
         available_agents,
         switchable_agents,
+        uses_own_login,
         fingerprint,
     } = resolution;
 
@@ -520,6 +542,8 @@ pub(crate) async fn handle_read_session_chat_http(
     if let Some(switchable_agents) = switchable_agents.clone() {
         result.insert("switchableAgents".to_string(), switchable_agents);
     }
+    // On every answer, so a client tells "this daemon says no" from an older daemon that never sends it.
+    result.insert("usesOwnLogin".to_string(), json!(uses_own_login));
     if let Some(session_agent_id) = session_agent_id.as_deref() {
         result.insert("sessionAgentId".to_string(), json!(session_agent_id));
     }
@@ -529,6 +553,8 @@ pub(crate) async fn handle_read_session_chat_http(
     if let Some(agent_session_id) = agent_session_id.as_deref() {
         result.insert("agentSessionId".to_string(), json!(agent_session_id));
     }
+    // CDXC:Coordinators 2026-09-30 WHY: outside the running gate, because a sleeping coordinator's threads keep working and its panel must still show them.
+    crate::coordinators::insert_coordinator_threads(&mut result, &project_id, &session_id);
     let mut screen_prompt = None;
     /*
     The pills' "what is the agent ACTUALLY running" value. Structured
@@ -558,17 +584,48 @@ pub(crate) async fn handle_read_session_chat_http(
         not settle and "still pending" is the honest answer. The watchdog
         notice merge below still runs on its own cached inputs.
         */
-        let detection = tokio::time::timeout(
+        // CDXC:AgentProviders 2026-10-07 WHY: a missed deadline answers with the last settled
+        // reading, however old, instead of none. Leaving it out drew the loading skeleton over a
+        // chat whose model gxserver knew seconds earlier (a reopened Cursor chat sat 3.6s on it).
+        let detector = SessionChatOptionDetector::new(state);
+        let detection = match tokio::time::timeout(
             crate::session_chat::SEED_OPTION_DETECTION_DEADLINE,
-            SessionChatOptionDetector::new(state).detect(
-                &project_id,
-                &session_id,
-                terminal_agent.as_deref(),
-                false,
-            ),
+            detector.detect(&project_id, &session_id, terminal_agent.as_deref(), false),
         )
         .await
-        .unwrap_or_default();
+        {
+            Ok(detection) => detection,
+            Err(_) => {
+                let mut cached = detector.cached(&project_id, &session_id);
+                if cached.options.is_none() {
+                    // Nothing cached yet (the first read after a gxserver start): the launch
+                    // flags and the session's last reading are on disk.
+                    let paths = state.paths.clone();
+                    let server_id = state.metadata.server_id.clone();
+                    let hook_state_directory =
+                        crate::session_chat_options::session_chat_hook_state_directory(
+                            &state.paths,
+                        );
+                    let (stored_project, stored_session) = (project_id.clone(), session_id.clone());
+                    let stored_agent = terminal_agent.clone();
+                    cached.options = tokio::task::spawn_blocking(move || {
+                        let db = open_gxserver_database(&paths).ok()?;
+                        let repository = DomainRepository::new(&db, server_id.as_str());
+                        crate::session_chat_options::detect_session_chat_stored_options(
+                            &repository,
+                            &hook_state_directory,
+                            &stored_project,
+                            &stored_session,
+                            stored_agent.as_deref(),
+                        )
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                }
+                cached
+            }
+        };
         let current_working = open_gxserver_database(&state.paths).ok().and_then(|db| {
             DomainRepository::new(&db, state.metadata.server_id.as_str())
                 .get_session(&project_id, &session_id)
@@ -596,6 +653,27 @@ pub(crate) async fn handle_read_session_chat_http(
             &session_id,
             detection.notice,
         ) {
+            /*
+            CDXC:AgentScreenDetection 2026-10-06 WHY:
+            A zcode exit screen names its conversation in the resume hint, so
+            the same capture that classified the death can bind the session's
+            identity — without it, a session whose hooks never reported an id
+            keeps the "hasn't reported its session" Chat View gate forever.
+            */
+            if notice.kind == crate::session_chat_notice::SESSION_CHAT_NOTICE_AGENT_EXITED
+                && crate::session_chat::resolve_session_chat_transcript_agent(
+                    terminal_agent.as_deref(),
+                ) == Some(crate::session_chat::SessionChatTranscriptAgent::Zcode)
+            {
+                if let Some(tail) = notice.screen_tail.as_deref() {
+                    crate::session_chat_zcode::bind_zcode_conversation_from_exit_screen_tail(
+                        state,
+                        tail,
+                        &project_id,
+                        &session_id,
+                    );
+                }
+            }
             result.insert("terminalNotice".to_string(), notice.to_value());
         }
         /*
@@ -656,7 +734,32 @@ pub(crate) async fn handle_read_session_chat_http(
         has no screen, so detection is skipped entirely above — but the answer
         ("nothing to read") is settled, not pending. Saying so keeps a stopped
         session's pills from sitting under a loading skeleton forever.
+        The values the session last ran with are still on disk, so they are
+        reported (see `detect_session_chat_stored_options`).
         */
+        let paths = state.paths.clone();
+        let server_id = state.metadata.server_id.clone();
+        let hook_state_directory =
+            crate::session_chat_options::session_chat_hook_state_directory(&state.paths);
+        let (stored_project, stored_session) = (project_id.clone(), session_id.clone());
+        let stored_agent = terminal_agent.clone();
+        let stored = tokio::task::spawn_blocking(move || {
+            let db = open_gxserver_database(&paths).ok()?;
+            let repository = DomainRepository::new(&db, server_id.as_str());
+            crate::session_chat_options::detect_session_chat_stored_options(
+                &repository,
+                &hook_state_directory,
+                &stored_project,
+                &stored_session,
+                stored_agent.as_deref(),
+            )
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(stored) = stored {
+            result.insert("selectedOptions".to_string(), stored.to_value());
+        }
         result.insert("screenProbed".to_string(), json!(true));
     }
     let stored_prompt = stored_prompt
@@ -843,10 +946,15 @@ pub(crate) async fn handle_read_session_chat_http(
                 messages,
                 &local_commands,
             );
-            result.insert(
-                "messages".to_string(),
-                serde_json::to_value(&messages).unwrap_or(json!([])),
-            );
+            let messages_value = if before_offset.is_none() && !verbatim_tail {
+                Value::Array(crate::session_chat_history::collapse_snapshot_messages(
+                    &messages,
+                    page_before_offset,
+                ))
+            } else {
+                serde_json::to_value(&messages).unwrap_or(json!([]))
+            };
+            result.insert("messages".to_string(), messages_value);
             if let Some(lifecycle) = lifecycle.as_ref() {
                 if let Ok(value) = serde_json::to_value(lifecycle) {
                     result.insert("lifecycle".to_string(), value);

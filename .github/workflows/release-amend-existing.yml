@@ -100,6 +100,8 @@ jobs:
       job_android: ${{ steps.plan.outputs.job_android }}
       job_code_server_arm64: ${{ steps.plan.outputs.job_code_server_arm64 }}
       job_code_server_darwin_arm64: ${{ steps.plan.outputs.job_code_server_darwin_arm64 }}
+      job_code_server_windows_arm64: ${{ steps.plan.outputs.job_code_server_windows_arm64 }}
+      job_code_server_windows_x64: ${{ steps.plan.outputs.job_code_server_windows_x64 }}
       job_code_server_x64: ${{ steps.plan.outputs.job_code_server_x64 }}
       job_gxserver_arm64: ${{ steps.plan.outputs.job_gxserver_arm64 }}
       job_gxserver_x64: ${{ steps.plan.outputs.job_gxserver_x64 }}
@@ -188,17 +190,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      # The root typecheck covers packages/core-ui, whose modal-gallery stories
-      # render the web app's Find and Machines surfaces. apps/web became its own
-      # submodule, so the skipped checkout leaves those modules unresolvable.
       - name: Restore release-test prerequisites
         run: |
           git submodule update --init --depth 1 .dependencies/code-server
-          git submodule update --init --depth 1 apps/web
       - name: Install and typecheck
         run: |
           bun install --frozen-lockfile
-          bun run typecheck
+          cargo xtask typecheck
           bun run release:test
       - name: Resolve the change-aware release plan
         id: plan
@@ -329,6 +327,30 @@ jobs:
     uses: ./.github/workflows/release-gpui-code-server-macos.yml
     with:
       version: ${{ inputs.version }}
+
+  code_server_windows_x64:
+    if: ${{ needs.prepare.outputs.job_code_server_windows_x64 != 'skip' }}
+    needs: prepare
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release-gpui-code-server-windows.yml
+    with:
+      version: ${{ inputs.version }}
+      arch: x64
+
+  code_server_windows_arm64:
+    if: ${{ needs.prepare.outputs.job_code_server_windows_arm64 != 'skip' }}
+    needs: prepare
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release-gpui-code-server-windows.yml
+    with:
+      version: ${{ inputs.version }}
+      arch: arm64
 
   reuse:
     if: ${{ needs.prepare.outputs.reuse_count != '0' }}

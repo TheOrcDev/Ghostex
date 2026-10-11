@@ -1,0 +1,119 @@
+use axum::{
+    body::Body,
+    http::{Request, Response, StatusCode},
+};
+use serde_json::{json, Map, Value};
+use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Instant};
+
+use crate::{
+    constants::GXSERVER_PROTOCOL_VERSION,
+    domain::{read_domain_rpc_params, DomainRepository, DomainStateError},
+    logging::{log_level_from_status, DiagnosticLogScenario, GxserverLogInput},
+    protocol::rpc_success,
+    storage::open_gxserver_database,
+};
+
+use super::*;
+
+pub(super) async fn handle_http_request(
+    state: Arc<AppState>,
+    request: Request<Body>,
+) -> std::result::Result<Response<Body>, Infallible> {
+    let started_at = Instant::now();
+    let client = request
+        .extensions()
+        .get::<SocketAddr>()
+        .map(|address| address.ip().to_string());
+    let headers = request.headers().clone();
+    let request_id = request_id(&headers);
+    let mut routed = route_http(state.clone(), request, request_id.clone()).await;
+    apply_cors_headers(&headers, &mut routed.response, &state.config);
+    let status = routed.response.status().as_u16();
+    let _ = state.logger.log_routine(
+        DiagnosticLogScenario::ApiRequests,
+        GxserverLogInput {
+            level: log_level_from_status(status),
+            event: "apiRequest".to_string(),
+            server_id: Some(state.metadata.server_id.clone()),
+            request_id: None,
+            client,
+            duration_ms: Some(started_at.elapsed().as_millis()),
+            error: None,
+            // The API route under `route`: the log sanitizer redacts every `path` field as a file path,
+            // which hid which endpoint was failing.
+            details: Some(json!({
+                "method": "http",
+                "route": routed.endpoint_path,
+                "statusCode": status,
+            })),
+        },
+    );
+    if let Some(endpoint_path) = routed.endpoint_path.clone() {
+        state.event_hub.broadcast(json!({
+            "path": endpoint_path,
+            "protocolVersion": GXSERVER_PROTOCOL_VERSION,
+            "requestId": request_id,
+            "serverId": state.metadata.server_id.clone(),
+            "type": "apiRequestHandled",
+        }));
+    }
+    Ok(routed.response)
+}
+
+/// True at most once per five seconds across every snapshot read.
+pub(super) fn presentation_snapshot_sync_due() -> bool {
+    static LAST_SYNC: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let Ok(mut last) = LAST_SYNC.lock() else {
+        return true;
+    };
+    let now = std::time::Instant::now();
+    if last.is_some_and(|at| now.duration_since(at) < std::time::Duration::from_secs(5)) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+pub(super) fn handle_domain_http<F>(
+    state: &AppState,
+    endpoint_path: String,
+    request_id: String,
+    body: &Value,
+    handler: F,
+) -> RoutedResponse
+where
+    F: FnOnce(
+        &DomainRepository<'_>,
+        &rusqlite::Connection,
+        &Map<String, Value>,
+        &str,
+    ) -> std::result::Result<Value, DomainStateError>,
+{
+    let params = match read_domain_rpc_params(body) {
+        Ok(params) => params,
+        Err(error) => return domain_error_response(endpoint_path, request_id, error),
+    };
+    let db = match open_gxserver_database(&state.paths) {
+        Ok(db) => db,
+        Err(error) => {
+            return domain_error_response(
+                endpoint_path,
+                request_id,
+                DomainStateError {
+                    code: "internalError",
+                    message: format!("SQLite gxserver state error: {error}"),
+                },
+            );
+        }
+    };
+    let server_id = state.metadata.server_id.as_str();
+    let repository = DomainRepository::new(&db, server_id);
+    match handler(&repository, &db, &params, server_id) {
+        Ok(result) => routed_json(
+            Some(endpoint_path),
+            StatusCode::OK,
+            rpc_success(request_id, result),
+        ),
+        Err(error) => domain_error_response(endpoint_path, request_id, error),
+    }
+}

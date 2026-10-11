@@ -12,7 +12,14 @@ pub struct SessionChatQuestionOption {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The mockup or code Claude shows beside this option (AskUserQuestion's `preview`), which the
+    /// card draws under it; capped at [`SESSION_CHAT_OPTION_PREVIEW_MAX_CHARS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
+
+/// A preview is a small mockup; anything longer is cut, since the card only has room for a glance.
+const SESSION_CHAT_OPTION_PREVIEW_MAX_CHARS: usize = 4000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionChatQuestion {
@@ -34,13 +41,20 @@ pub struct SessionChatQuestion {
     #[serde(rename = "toolName", skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     /// omp's `recommended` option index: its ask dialog opens with the cursor
-    /// on this row (default 0), so arrow-key answer plans start counting here.
+    /// on this row (default 0). Answer plans read the live highlight instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended: Option<usize>,
+    /// CDXC:SessionChat 2026-09-23 WHY: an AskUserQuestion option with a `preview` makes Claude Code draw the question as an option list beside a preview pane, with no "Type something" row: a digit only moves the highlight, Enter commits it, and typed text can only be a note on the highlighted option (`n`). The answer plan needs this layout before the screen shows it, so it is read from the tool input.
+    #[serde(
+        rename = "previewLayout",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub preview_layout: bool,
     pub options: Vec<SessionChatQuestionOption>,
 }
 
-/// Rust mirror of packages/shared/session-chat.ts `SessionChatInteractivePrompt`.
+/// Rust mirror of packages/shared/session-chat-transcript.ts `SessionChatInteractivePrompt`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SessionChatInteractivePrompt {
@@ -82,7 +96,7 @@ impl SessionChatInteractivePrompt {
     }
 }
 
-/// Rust mirror of packages/shared/session-chat.ts `SessionChatQuestionSelection`.
+/// Rust mirror of packages/shared/session-chat-transcript.ts `SessionChatQuestionSelection`.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct SessionChatQuestionSelection {
     #[serde(default)]
@@ -124,7 +138,8 @@ fn normalize_hook_event_name(value: &str) -> String {
 pub fn is_post_tool_hook_event(event_name: Option<&str>) -> bool {
     matches!(
         normalize_hook_event_name(event_name.unwrap_or_default()).as_str(),
-        "post_tool_use" | "post_tool_use_failure"
+        // `post_tool_call` is Hermes' spelling.
+        "post_tool_use" | "post_tool_use_failure" | "post_tool_call"
     )
 }
 
@@ -141,7 +156,7 @@ pub fn normalize_session_chat_tool_name(tool_name: &str) -> String {
 /// Upstream `isAskUserQuestionTool`: match AskUserQuestion (Claude) /
 /// request_user_input (Codex 0.145) / AskQuestion (Cursor Agent) /
 /// cursor_ask_question (Pi's pi-cursor-sdk bridge) / clarify (Hermes Agent) /
-/// ask (oh-my-pi) spellings.
+/// ask (oh-my-pi) / ask_user (Freebuff) spellings.
 pub fn is_ask_user_question_tool(tool_name: &str) -> bool {
     matches!(
         normalize_session_chat_tool_name(tool_name).as_str(),
@@ -151,7 +166,13 @@ pub fn is_ask_user_question_tool(tool_name: &str) -> bool {
             | "cursoraskquestion"
             | "clarify"
             | "ask"
+            | "askuser"
     )
+}
+
+/// CDXC:SessionChat 2026-10-01 WHY: Antigravity's `ask_question` normalizes to the same name as Cursor Agent's `AskQuestion`, whose panel is always a checkbox list, so it read every Antigravity question as multi-select. Antigravity's own spelling is snake_case and carries its own `is_multi_select` flag.
+pub fn is_antigravity_ask_question_tool(tool_name: &str) -> bool {
+    tool_name == "ask_question"
 }
 
 fn truncate_approval_summary(value: &str) -> String {
@@ -208,8 +229,10 @@ pub fn parse_session_chat_questions(
         input
     };
     let record = input.as_object()?;
-    let is_cursor_ask_question = tool_name
-        .is_some_and(|tool_name| normalize_session_chat_tool_name(tool_name) == "askquestion");
+    let is_cursor_ask_question = tool_name.is_some_and(|tool_name| {
+        normalize_session_chat_tool_name(tool_name) == "askquestion"
+            && !is_antigravity_ask_question_tool(tool_name)
+    });
     let is_hermes_clarify =
         tool_name.is_some_and(|tool_name| normalize_session_chat_tool_name(tool_name) == "clarify");
     let raw_questions: Vec<&Value> = match record.get("questions").and_then(Value::as_array) {
@@ -237,20 +260,31 @@ pub fn parse_session_chat_questions(
                     .map(str::to_string)
             })
             .unwrap_or_default();
-        let mut options = parse_session_chat_question_options(
-            record.get("options").or_else(|| record.get("choices")),
-        );
+        let raw_options = record.get("options").or_else(|| record.get("choices"));
+        let mut options = parse_session_chat_question_options(raw_options);
+        let has_preview = raw_options
+            .and_then(Value::as_array)
+            .is_some_and(|options| {
+                options.iter().any(|option| {
+                    option
+                        .get("preview")
+                        .and_then(Value::as_str)
+                        .is_some_and(|preview| !preview.trim().is_empty())
+                })
+            });
         if is_hermes_clarify {
             options.truncate(HERMES_CLARIFY_MAX_CHOICES);
         }
         if !text.is_empty() || !options.is_empty() {
             // The spec uses strict === true; anything else is single-select.
-            // `multi_select` is Hermes' spelling, `multi` is omp's; Hermes
-            // additionally honors it only when choices exist.
+            // `multi_select` is Hermes' spelling, `multi` is omp's,
+            // `is_multi_select` Antigravity's; Hermes additionally honors it
+            // only when choices exist.
             let multi_select = is_cursor_ask_question
                 || record
                     .get("multiSelect")
                     .or_else(|| record.get("multi_select"))
+                    .or_else(|| record.get("is_multi_select"))
                     .or_else(|| record.get("multi"))
                     .and_then(Value::as_bool)
                     == Some(true)
@@ -268,6 +302,7 @@ pub fn parse_session_chat_questions(
                     .get("recommended")
                     .and_then(Value::as_u64)
                     .map(|index| index as usize),
+                preview_layout: has_preview && !multi_select,
                 options,
             });
         }
@@ -285,6 +320,7 @@ fn parse_session_chat_question_options(raw: Option<&Value>) -> Vec<SessionChatQu
             Value::String(label) => Some(SessionChatQuestionOption {
                 label: label.clone(),
                 description: None,
+                preview: None,
             }),
             // Pi options carry `{label, value}`; the label is what its select
             // renders, with `value` as the fallback the bridge also uses.
@@ -298,6 +334,17 @@ fn parse_session_chat_question_options(raw: Option<&Value>) -> Vec<SessionChatQu
                     .get("description")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                preview: record
+                    .get("preview")
+                    .and_then(Value::as_str)
+                    .map(str::trim_end)
+                    .filter(|preview| !preview.trim().is_empty())
+                    .map(|preview| {
+                        preview
+                            .chars()
+                            .take(SESSION_CHAT_OPTION_PREVIEW_MAX_CHARS)
+                            .collect()
+                    }),
             }),
             _ => None,
         })
@@ -377,7 +424,13 @@ pub fn detect_cursor_question_prompt(
     let mut options = Vec::new();
     let mut allow_custom = false;
     for line in lines.iter().take(footer).skip(question_index + 1) {
-        let Some((_, after_checkbox)) = line.split_once("[ ]") else {
+        // A row the user already ticked in the terminal still counts, or every
+        // later option index would point one row too high.
+        let Some((_, after_checkbox)) = line
+            .split_once("[ ]")
+            .or_else(|| line.split_once("[x]"))
+            .or_else(|| line.split_once("[X]"))
+        else {
             continue;
         };
         let label = after_checkbox.trim();
@@ -387,6 +440,7 @@ pub fn detect_cursor_question_prompt(
             options.push(SessionChatQuestionOption {
                 label: label.to_string(),
                 description: None,
+                preview: None,
             });
         }
     }
@@ -410,6 +464,7 @@ pub fn detect_cursor_question_prompt(
             allow_custom: Some(allow_custom),
             tool_name: Some("AskQuestion".to_string()),
             recommended: None,
+            preview_layout: false,
             options,
         }],
         tool_use_id: None,
@@ -548,9 +603,10 @@ pub fn session_chat_prompt_clear_decision(
     if event.next_activity == Some("idle") {
         return true;
     }
+    // A new prompt reached the agent, which it cannot take while a question or approval owns its input: whatever the card asked is over (answered in the terminal, or its tool call interrupted, which no hook reports).
     matches!(
         normalize_hook_event_name(event.event_name.unwrap_or_default()).as_str(),
-        "stop" | "session_end" | "idle"
+        "stop" | "session_end" | "idle" | "user_prompt_submit"
     )
 }
 
@@ -607,6 +663,11 @@ pub struct SessionChatTranscriptPromptState {
     pending: Option<SessionChatInteractivePrompt>,
     last_question: Option<SessionChatInteractivePrompt>,
     answered: bool,
+    /// The question the hooks last stored, while they still store it.
+    hook_question: Option<SessionChatInteractivePrompt>,
+    /// The question the hooks stored and then retired (its PostToolUse, an
+    /// answer, an interrupt), which the transcript must not bring back.
+    hook_retired: Option<SessionChatInteractivePrompt>,
 }
 
 impl SessionChatTranscriptPromptState {
@@ -631,16 +692,21 @@ impl SessionChatTranscriptPromptState {
             }
             for block in &message.blocks {
                 match block {
-                    SessionChatBlock::ToolCall { name, input }
-                        if is_ask_user_question_tool(name) =>
-                    {
+                    SessionChatBlock::ToolCall {
+                        name,
+                        input,
+                        call_id,
+                    } if is_ask_user_question_tool(name) => {
                         self.answered = false;
+                        // The call's own id, the one the hooks report as `tool_use_id`, so a
+                        // card read from the transcript is the same prompt as the hook's.
                         self.pending =
                             parse_session_chat_questions(Some(name), input).map(|questions| {
                                 SessionChatInteractivePrompt::Question {
                                     questions,
                                     tool_use_id: None,
                                 }
+                                .with_tool_use_id(call_id.clone())
                             });
                         self.last_question = self.pending.clone();
                     }
@@ -658,6 +724,47 @@ impl SessionChatTranscriptPromptState {
 
     pub fn pending(&self) -> Option<&SessionChatInteractivePrompt> {
         self.pending.as_ref()
+    }
+
+    /// CDXC:SessionChat 2026-10-06 WHY: Claude's PostToolUse hook retires the stored question about half a second before the tool result reaches the transcript, and in that gap the transcript still reads the call as pending. Falling back to it re-published the question the user had just answered, so every chat drew the answerable card again until the result landed. A follower reports the stored prompt here on every pass, and a pending transcript question the hooks already retired is not a card.
+    pub fn observe_stored(&mut self, stored: Option<&SessionChatInteractivePrompt>) {
+        match stored {
+            Some(SessionChatInteractivePrompt::Question { .. }) => {
+                self.hook_question = stored.cloned();
+                self.hook_retired = None;
+            }
+            Some(_) => {}
+            None => {
+                if let Some(question) = self.hook_question.take() {
+                    self.hook_retired = Some(question);
+                }
+            }
+        }
+    }
+
+    /// Restarts the fold over a new tail window of the same conversation,
+    /// keeping what the hooks stored and retired.
+    pub fn restart(&mut self) {
+        *self = Self {
+            hook_question: self.hook_question.take(),
+            hook_retired: self.hook_retired.take(),
+            ..Self::default()
+        };
+    }
+
+    /// The pending question, unless it is the call the hooks already retired.
+    fn unretired_pending(&self) -> Option<&SessionChatInteractivePrompt> {
+        let pending = self.pending.as_ref()?;
+        let retired = self.hook_retired.as_ref().is_some_and(|retired| {
+            match (retired.tool_use_id(), pending.tool_use_id()) {
+                (Some(retired_id), Some(pending_id)) => retired_id == pending_id,
+                _ => {
+                    session_chat_prompt_question_texts(retired)
+                        == session_chat_prompt_question_texts(pending)
+                }
+            }
+        });
+        (!retired).then_some(pending)
     }
 
     /// True once the most recent AskUserQuestion call has its tool result.
@@ -730,7 +837,7 @@ pub fn resolve_session_chat_prompt(
                 Some(prompt)
             }
         }
-        None => transcript.pending().cloned(),
+        None => transcript.unretired_pending().cloned(),
     }
 }
 
@@ -796,6 +903,74 @@ pub fn build_session_chat_prompt_state_frame(
 // ---------------------------------------------------------------------------
 // Inline sanity tests (real transcript files are skipped when absent)
 // ---------------------------------------------------------------------------
+
+/// CDXC:SessionChat 2026-09-25 WHY:
+/// Deny answers an approval card with Escape, and Claude Code reports that interrupted tool call through no hook: no PostToolUse (the tool never ran) and no Stop (interrupts skip it). The stored card therefore outlived the answer until the next finished turn, and every client that opened the chat in between (the phone reopening it, a second window) drew a live Allow/Deny card for a command that was already refused. The daemon sent that Escape itself, so it retires the card itself, only when the stored card is still the approval that was answered.
+pub(crate) fn retire_denied_session_chat_approval(
+    state: &AppState,
+    project_id: &str,
+    session_id: &str,
+    answered: &SessionChatInteractivePrompt,
+) {
+    retire_stored_session_chat_prompt(state, project_id, session_id, Some(answered));
+}
+
+/// CDXC:SessionChat 2026-09-26 WHY: the chat's Stop is the same daemon-sent Escape as Deny, and it ends the tool call a card was asking about just as silently, so a card answered Yes and then stopped came back as a live Allow/Deny on the next open.
+pub(crate) fn retire_interrupted_session_chat_prompt(
+    state: &AppState,
+    project_id: &str,
+    session_id: &str,
+) {
+    retire_stored_session_chat_prompt(state, project_id, session_id, None);
+}
+
+/// Drops the stored card, or only the one `answered` names.
+fn retire_stored_session_chat_prompt(
+    state: &AppState,
+    project_id: &str,
+    session_id: &str,
+    answered: Option<&SessionChatInteractivePrompt>,
+) {
+    let Ok(db) = crate::storage::open_gxserver_database(&state.paths) else {
+        return;
+    };
+    let repository = crate::domain::DomainRepository::new(&db, state.metadata.server_id.as_str());
+    let Ok(Some(session)) = repository.get_session(project_id, session_id) else {
+        return;
+    };
+    let stored = crate::agents::session_chat_prompt_setting(&session);
+    let Some(stored) = stored else {
+        return;
+    };
+    if answered.is_some_and(|answered| {
+        parse_stored_session_chat_prompt(&stored).as_ref() != Some(answered)
+    }) {
+        return;
+    }
+    let mut runtime = session
+        .get("runtimeSettings")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let Some(activity) = runtime
+        .get_mut("agentActivity")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    activity.remove("sessionChatPrompt");
+    let update = json!({
+        "projectId": project_id,
+        "sessionId": session_id,
+        "runtimeSettings": runtime,
+    });
+    let Some(update) = update.as_object() else {
+        return;
+    };
+    if let Ok(updated) = repository.update_session(update) {
+        emit_session_chat_prompt_state_frame(state, &updated);
+    }
+}
 
 /*
 CDXC:SessionChat 2026-07-31:

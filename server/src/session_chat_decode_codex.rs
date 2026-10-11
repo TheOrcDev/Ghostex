@@ -81,19 +81,24 @@ fn codex_response_item(
                 vec![SessionChatBlock::ToolCall {
                     name,
                     input: codex_call_input(payload),
+                    call_id: extract_string(payload.get("call_id")),
                 }],
             ))
         }
-        Some("function_call_output" | "custom_tool_call_output") => Some(transcript_message(
-            SessionChatRole::Tool,
-            vec![codex_tool_result(payload.get("output"))],
-        )),
+        Some("function_call_output" | "custom_tool_call_output") => {
+            let mut result = codex_tool_result(payload.get("output"));
+            if let SessionChatBlock::ToolResult { call_id, .. } = &mut result {
+                *call_id = extract_string(payload.get("call_id"));
+            }
+            Some(transcript_message(SessionChatRole::Tool, vec![result]))
+        }
         // Hosted-tool lanes: the call carries no name field of its own.
         Some("web_search_call") => Some(transcript_message(
             SessionChatRole::Assistant,
             vec![SessionChatBlock::ToolCall {
                 name: "web_search".to_string(),
                 input: codex_call_input(payload),
+                call_id: None,
             }],
         )),
         Some("tool_search_call") => Some(transcript_message(
@@ -101,6 +106,7 @@ fn codex_response_item(
             vec![SessionChatBlock::ToolCall {
                 name: "tool_search".to_string(),
                 input: codex_call_input(payload),
+                call_id: None,
             }],
         )),
         Some("tool_search_output") => Some(transcript_message(
@@ -108,6 +114,7 @@ fn codex_response_item(
             vec![SessionChatBlock::ToolResult {
                 output: codex_tool_search_output(payload.get("tools")),
                 is_error: None,
+                call_id: None,
             }],
         )),
         /*
@@ -185,8 +192,12 @@ fn codex_event_message(
             SessionChatRole::System,
             vec![text_block(INTERRUPTED_STATUS_TEXT)],
         )),
-        Some("user_message") => extract_string(payload.get("message"))
-            .map(|text| transcript_message(SessionChatRole::User, vec![text_block(text)])),
+        Some("user_message") => extract_string(payload.get("message")).map(|text| {
+            transcript_message(
+                SessionChatRole::User,
+                vec![text_block(codex_question_reply_text(&text).unwrap_or(text))],
+            )
+        }),
         Some("agent_message") => extract_string(payload.get("message"))
             .map(|text| transcript_message(SessionChatRole::Assistant, vec![text_block(text)])),
         /*
@@ -281,6 +292,7 @@ fn codex_event_message(
                 blocks.push(SessionChatBlock::ToolCall {
                     name: "Generated Image".to_string(),
                     input: Value::String(detail),
+                    call_id: None,
                 });
                 return Some(SessionChatMessage {
                     id: generation_id,
@@ -320,12 +332,37 @@ fn codex_event_message(
                     queued: false,
                 });
             }
+            // CDXC:SessionChat 2026-09-29 WHY:
+            // Plan mode ends its turn with a `Plan` item instead of an AgentMessage (the `<proposed_plan>` message lane stays undecoded), so without this arm the chat showed "Implement this plan?" with no plan above it while the TUI printed `• Proposed Plan`.
+            if item_type == Some("Plan") {
+                let text = extract_string(item.get("text"))?;
+                return Some(SessionChatMessage {
+                    id: extract_string(item.get("id")).unwrap_or(id),
+                    role: SessionChatRole::Assistant,
+                    blocks: vec![text_block(text.trim_end().to_string())],
+                    timestamp,
+                    source: SessionChatSource::Transcript,
+                    turn_id: None,
+                    byte_offset: None,
+                    async_questions: None,
+                    queued: false,
+                });
+            }
             let role = match item_type {
                 Some("UserMessage") => SessionChatRole::User,
                 Some("AgentMessage") => SessionChatRole::Assistant,
                 _ => return None,
             };
-            let blocks = codex_item_content_blocks(item.get("content"));
+            let mut blocks = codex_item_content_blocks(item.get("content"));
+            if role == SessionChatRole::User {
+                for block in &mut blocks {
+                    if let SessionChatBlock::Text { text } = block {
+                        if let Some(framed) = codex_question_reply_text(text) {
+                            *text = framed;
+                        }
+                    }
+                }
+            }
             if blocks.is_empty() {
                 return None;
             }
@@ -365,6 +402,28 @@ fn codex_event_message(
         }
         _ => None,
     }
+}
+
+/// CDXC:SessionChat 2026-09-24 WHY:
+/// Codex 0.156 records an answer to an asynchronous question as a `<send_user_message_question_reply>` JSON envelope instead of 0.154's `> title\n\nanswer` text. Reframing it here keeps the chat bubble readable and lets every client retire the answered question by the same prefix.
+fn codex_question_reply_text(text: &str) -> Option<String> {
+    let body = text
+        .trim()
+        .strip_prefix("<send_user_message_question_reply>")?
+        .strip_suffix("</send_user_message_question_reply>")?;
+    let replies: Vec<Value> = serde_json::from_str(body.trim()).ok()?;
+    let framed: Vec<String> = replies
+        .iter()
+        .filter_map(|reply| {
+            let question = reply.get("question")?.as_str()?;
+            let answer = reply.get("answer")?.as_str()?;
+            Some(format!(
+                "{}{answer}",
+                crate::session_chat_async_questions::answer_prefix(question)
+            ))
+        })
+        .collect();
+    (!framed.is_empty()).then(|| framed.join("\n\n"))
 }
 
 fn codex_user_shell_marker(tag: &str, body: &str) -> String {
@@ -504,6 +563,7 @@ fn codex_tool_result(output: Option<&Value>) -> SessionChatBlock {
     SessionChatBlock::ToolResult {
         output: tool_result_output(content),
         is_error: if is_error { Some(true) } else { None },
+        call_id: None,
     }
 }
 

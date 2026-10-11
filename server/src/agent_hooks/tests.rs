@@ -5,7 +5,10 @@ use serde_json::{json, Value};
 
 use crate::paths::get_gxserver_paths;
 
-use super::api::{install_agent_hooks, read_agent_hook_status, uninstall_agent_hooks};
+use super::api::{
+    install_agent_hooks, read_agent_hook_status, repair_installed_agent_hook_paths,
+    uninstall_agent_hooks,
+};
 use super::config::{
     all_hook_events, HookDefinition, HookPaths, AMP_PLUGIN_MARKER, NOTIFY_HOOK_MARKER,
     NOTIFY_HOOK_VERSION, OPENCODE_PLUGIN_MARKER, PI_EXTENSION_MARKER,
@@ -66,7 +69,8 @@ fn hook_status_reports_profile_only_provider_hook_paths() {
         .map(|event_name| {
             (
                 event_name.to_string(),
-                json!([{ "hooks": [{ "type": "command", "command": command }] }]),
+                json!([{ "hooks": [{ "type": "command", "command": command,
+                    "timeout": super::config::nested_event_timeout("claude", event_name) }] }]),
             )
         })
         .collect::<serde_json::Map<String, Value>>();
@@ -184,13 +188,13 @@ fn hook_status_uses_pi_agent_extension_before_legacy_root_paths() {
     write_test_file(
         &agent_extension_path,
         &format!(
-            "// {PI_EXTENSION_MARKER} v4\nconst hook = \"{}\";\n",
+            "// {PI_EXTENSION_MARKER} v5\nconst hook = \"{}\";\n",
             path_string(&hook_paths.notify_hook_path)
         ),
     );
     write_test_file(
         &legacy_root_extension_path,
-        &format!("// {PI_EXTENSION_MARKER} v4\n"),
+        &format!("// {PI_EXTENSION_MARKER} v5\n"),
     );
 
     let provider_paths = provider_hook_paths("pi", &hook_paths);
@@ -358,8 +362,8 @@ fn install_writes_notify_hook_without_payload_content() {
         .get("installedPaths")
         .and_then(Value::as_array)
         .expect("installed paths");
-    // The shared notify hook and the shared Claude statusline script.
-    assert_eq!(installed.len(), 2);
+    // The shared notify hook and the Claude and Cursor statusline scripts.
+    assert_eq!(installed.len(), 3);
     let hook_text = fs::read_to_string(installed[0].as_str().expect("path")).expect("hook");
     assert!(hook_text.contains(NOTIFY_HOOK_MARKER));
     assert!(!hook_text.contains("firstUserMessage"));
@@ -371,19 +375,23 @@ fn notify_hook_helper_records_working_status_and_first_prompt() {
     let temp = tempfile::tempdir().expect("tempdir");
     let state_path = temp.path().join("session.state");
     let hook_store = temp.path().join("hook-store");
-    run_notify_hook(vec![
-        path_string(&state_path),
-        json!({
-            "agent": "codex",
-            "event": "UserPromptSubmit",
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "Please fix flaky tests",
-            "session_id": "codex-session-1"
-        })
-        .to_string(),
-        path_string(&hook_store),
-    ])
-    .expect("notify helper");
+    assert!(
+        run_notify_hook(vec![
+            path_string(&state_path),
+            json!({
+                "agent": "codex",
+                "event": "UserPromptSubmit",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "Please fix flaky tests",
+                "session_id": "codex-session-1"
+            })
+            .to_string(),
+            path_string(&hook_store),
+        ])
+        .expect("notify helper")
+        .is_none(),
+        "a codex event never answers with coordinator context"
+    );
     let state = read_hook_state(&state_path);
     assert_eq!(
         read_state_string(&state, "status").as_deref(),
@@ -708,6 +716,86 @@ fn command_exists_uses_typescript_default_tool_paths() {
     );
 
     assert!(command_exists(&command, temp.path()));
+}
+
+#[test]
+fn hermes_hooks_cover_every_profile_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths = get_gxserver_paths(Some(temp.path().to_path_buf()));
+    let hook_paths = HookPaths::from_paths(&paths);
+    let hermes = HookDefinition {
+        agent_id: "hermes-agent",
+        cli_command: "hermes",
+    };
+    let hermes_home = temp.path().join(".hermes");
+    let root = hermes_home.join("config.yaml");
+    let content = hermes_home.join("profiles/content/config.yaml");
+    let dobby = hermes_home.join("profiles/dobby/config.yaml");
+    write_test_file(&root, "model:\n  provider: openai-codex\n");
+    write_test_file(&content, "model:\n  provider: openai-codex\n");
+    fs::create_dir_all(hermes_home.join("profiles/no-config")).expect("profile without config");
+    // A hand-copied, unmarked hook as the agent's own YAML writer leaves it:
+    // the plain scalar folded onto a second line, beside the user's own hook.
+    let shell_command = format!(
+        "sh -c {}",
+        shell_quote(&command_for_agent(&hermes, &hook_paths.notify_hook_path))
+    );
+    let (head, tail) = shell_command.split_at(shell_command.rfind(' ').expect("space"));
+    write_test_file(
+        &dobby,
+        &format!(
+            "model:\n  provider: openai-codex\nhooks:\n  on_session_start:\n    - command: {head} \n        {}\n      timeout: 5\n  pre_tool_call:\n    - command: my-audit-hook\n      timeout: 3\n",
+            tail.trim_start()
+        ),
+    );
+
+    let hermes_paths = provider_hook_paths("hermes-agent", &hook_paths);
+    assert_eq!(
+        hermes_paths,
+        vec![root.clone(), content.clone(), dobby.clone()]
+    );
+
+    let notify_path = path_string(&hook_paths.notify_hook_path);
+    let repaired = repair_installed_agent_hook_paths(&paths).expect("repair");
+    for config in &hermes_paths {
+        assert!(
+            repaired.contains(&path_string(config)),
+            "{config:?} repaired"
+        );
+        let text = read_file_text(config);
+        assert!(text.contains("# ghostex hooks hermes-agent begin"));
+        assert_eq!(
+            text.matches(&notify_path).count(),
+            10,
+            "{config:?}: one hook per event"
+        );
+        let allowlist = read_json_object(&read_file_text(
+            &config.with_file_name("shell-hooks-allowlist.json"),
+        ));
+        assert_eq!(allowlist["approvals"].as_array().map(Vec::len), Some(10));
+    }
+    assert!(read_file_text(&dobby).contains("my-audit-hook"));
+    assert!(
+        inspect_agent_hook_installation(&hermes, &hook_paths, &hermes_paths).current_hook_installed
+    );
+    assert!(repair_installed_agent_hook_paths(&paths)
+        .expect("repair again")
+        .is_empty());
+
+    uninstall_agent_hooks(
+        &paths,
+        json!({ "agentIds": ["hermes-agent"] })
+            .as_object()
+            .expect("params"),
+    )
+    .expect("uninstall");
+    for config in &hermes_paths {
+        assert!(
+            !read_file_text(config).contains(&notify_path),
+            "{config:?} uninstalled"
+        );
+    }
+    assert!(read_file_text(&dobby).contains("my-audit-hook"));
 }
 
 fn write_test_file(path: &Path, text: &str) {

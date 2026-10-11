@@ -16,9 +16,12 @@ pub(crate) fn show_browser_dev_tools(
     };
     let browser_settings = cef::BrowserSettings::default();
     let mut devtools_client = Some(GhostexGpuiCefClient::new(
-        Some(GhostexGpuiLifeSpanHandler::new(None, None, true)),
-        None,
-        None,
+        Some(GhostexGpuiLifeSpanHandler::new(
+            None,
+            None,
+            true,
+            StdRc::new(Cell::new(false)),
+        )),
         None,
         None,
         None,
@@ -80,9 +83,176 @@ wrap_task! {
     }
 }
 
+fn context_menu_link_url(params: &ContextMenuParams) -> Option<String> {
+    let unfiltered = params.unfiltered_link_url();
+    let mut url = CefString::from(&unfiltered).to_string();
+    if url.trim().is_empty() {
+        let filtered = params.link_url();
+        url = CefString::from(&filtered).to_string();
+    }
+    let url = url.trim();
+    (!url.is_empty()).then(|| url.to_string())
+}
+
+fn context_menu_image_url(params: &ContextMenuParams) -> Option<String> {
+    if params.media_type() != ContextMenuMediaType::IMAGE {
+        return None;
+    }
+    let source = params.source_url();
+    let url = CefString::from(&source).to_string();
+    let url = url.trim();
+    (!url.is_empty()).then(|| url.to_string())
+}
+
+/*
+CDXC:ContextMenus 2026-10-05 WHY:
+Alloy-style CEF (the only style a child-view browser can use) builds a page menu of Back, Forward, Print and View page source, with no link or image entries, so Browser pages get the Chrome link/image commands here. They go at the top in Chrome's order and only on Browser pages (the surfaces with a page metadata handler), which also own the clipboard route and the download handler that Save needs.
+*/
+fn insert_browser_page_context_menu_items(
+    params: &ContextMenuParams,
+    model: &MenuModel,
+    can_open_tabs: bool,
+) {
+    let mut items: Vec<Option<(c_int, &str)>> = Vec::new();
+    if context_menu_link_url(params).is_some() {
+        if can_open_tabs {
+            items.push(Some((
+                CEF_CONTEXT_MENU_APP_OPEN_LINK_NEW_TAB_COMMAND_ID,
+                "Open link in new tab",
+            )));
+        }
+        items.push(Some((
+            CEF_CONTEXT_MENU_SAVE_LINK_AS_COMMAND_ID,
+            "Save link as...",
+        )));
+        items.push(Some((
+            CEF_CONTEXT_MENU_COPY_LINK_ADDRESS_COMMAND_ID,
+            "Copy link address",
+        )));
+    }
+    if context_menu_image_url(params).is_some() {
+        if !items.is_empty() {
+            items.push(None);
+        }
+        if can_open_tabs {
+            items.push(Some((
+                CEF_CONTEXT_MENU_OPEN_IMAGE_NEW_TAB_COMMAND_ID,
+                "Open image in new tab",
+            )));
+        }
+        items.push(Some((
+            CEF_CONTEXT_MENU_SAVE_IMAGE_AS_COMMAND_ID,
+            "Save image as...",
+        )));
+        items.push(Some((CEF_CONTEXT_MENU_COPY_IMAGE_COMMAND_ID, "Copy image")));
+        items.push(Some((
+            CEF_CONTEXT_MENU_COPY_IMAGE_ADDRESS_COMMAND_ID,
+            "Copy image address",
+        )));
+    }
+    if items.is_empty() {
+        return;
+    }
+    let had_default_items = model.count() > 0;
+    for (index, item) in items.iter().enumerate() {
+        match item {
+            Some((command_id, label)) => {
+                model.insert_item_at(index, *command_id, Some(&CefString::from(*label)));
+            }
+            None => {
+                model.insert_separator_at(index);
+            }
+        }
+    }
+    if had_default_items {
+        model.insert_separator_at(items.len());
+    }
+}
+
+fn start_browser_download(browser: Option<&mut cef::Browser>, url: &str) -> c_int {
+    let Some(host) = browser.and_then(|browser| browser.host()) else {
+        return 0;
+    };
+    host.start_download(Some(&CefString::from(url)));
+    1
+}
+
+wrap_download_image_callback! {
+    pub(crate) struct GhostexGpuiCopyImageCallback {
+        page_metadata_handler: BrowserPageMetadataHandler,
+    }
+
+    impl DownloadImageCallback {
+        fn on_download_image_finished(
+            &self,
+            _image_url: Option<&CefString>,
+            _http_status_code: c_int,
+            image: Option<&mut cef::Image>,
+        ) {
+            let Some(png) = image.and_then(|image| image.as_png(1.0, 1, None, None)) else {
+                return;
+            };
+            let mut bytes = vec![0; png.size()];
+            if bytes.is_empty() || png.data(Some(&mut bytes), 0) != bytes.len() {
+                return;
+            }
+            (self.page_metadata_handler)(BrowserPageMetadataEvent::CopyToClipboard(
+                gpui::ClipboardItem::new_image(&gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    bytes,
+                )),
+            ));
+        }
+    }
+}
+
+wrap_download_handler! {
+    pub(crate) struct GhostexGpuiDownloadHandler {}
+
+    impl DownloadHandler {
+        fn can_download(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> c_int {
+            1
+        }
+
+        fn on_before_download(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _download_item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> c_int {
+            let Some(callback) = callback else {
+                return 0;
+            };
+            /*
+            CDXC:Browser 2026-10-05 WHY:
+            Alloy-style CEF cancels every download when the client has no download handler, so Save image/link as... and page downloads never reached disk. Every download asks where to save, starting in the user's Downloads folder with the page's suggested name.
+            */
+            let suggested_name = suggested_name
+                .map(|name| name.to_string())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "download".to_string());
+            let download_path = std::env::home_dir()
+                .map(|home| home.join("Downloads").join(&suggested_name))
+                .unwrap_or_else(|| PathBuf::from(&suggested_name));
+            callback.cont(
+                Some(&CefString::from(download_path.to_string_lossy().as_ref())),
+                1,
+            );
+            1
+        }
+    }
+}
+
 wrap_context_menu_handler! {
     pub(crate) struct GhostexGpuiContextMenuHandler {
         popup_open_handler: Option<BrowserPopupOpenHandler>,
+        page_metadata_handler: Option<BrowserPageMetadataHandler>,
     }
 
     impl ContextMenuHandler {
@@ -90,12 +260,21 @@ wrap_context_menu_handler! {
             &self,
             _browser: Option<&mut cef::Browser>,
             _frame: Option<&mut Frame>,
-            _params: Option<&mut ContextMenuParams>,
+            params: Option<&mut ContextMenuParams>,
             model: Option<&mut MenuModel>,
         ) {
             let Some(model) = model else {
                 return;
             };
+            if self.page_metadata_handler.is_some()
+                && let Some(params) = params.as_deref()
+            {
+                insert_browser_page_context_menu_items(
+                    params,
+                    model,
+                    self.popup_open_handler.is_some(),
+                );
+            }
             /*
             CDXC:ContextMenus 2026-07-10:
             Match the production macOS CEF browser menu by preserving CEF's
@@ -127,31 +306,66 @@ wrap_context_menu_handler! {
                 });
                 return show_browser_dev_tools(browser, inspect_point.as_ref()) as c_int;
             }
-
-            if !matches!(
-                command_id,
-                CEF_CONTEXT_MENU_OPEN_LINK_NEW_TAB_COMMAND_ID
-                    | CEF_CONTEXT_MENU_OPEN_LINK_NEW_WINDOW_COMMAND_ID
-            ) {
-                return 0;
-            }
-            let (Some(popup_open_handler), Some(params)) =
-                (self.popup_open_handler.as_ref(), params)
-            else {
+            let Some(params) = params.as_deref() else {
                 return 0;
             };
-            let unfiltered = params.unfiltered_link_url();
-            let mut requested_url = CefString::from(&unfiltered).to_string();
-            if requested_url.trim().is_empty() {
-                let filtered = params.link_url();
-                requested_url = CefString::from(&filtered).to_string();
+            let copy_text = |text: String| -> c_int {
+                let Some(handler) = self.page_metadata_handler.as_ref() else {
+                    return 0;
+                };
+                handler(BrowserPageMetadataEvent::CopyToClipboard(
+                    gpui::ClipboardItem::new_string(text),
+                ));
+                1
+            };
+            match command_id {
+                CEF_CONTEXT_MENU_OPEN_LINK_NEW_TAB_COMMAND_ID
+                | CEF_CONTEXT_MENU_OPEN_LINK_NEW_WINDOW_COMMAND_ID
+                | CEF_CONTEXT_MENU_APP_OPEN_LINK_NEW_TAB_COMMAND_ID
+                | CEF_CONTEXT_MENU_OPEN_IMAGE_NEW_TAB_COMMAND_ID => {
+                    let url = if command_id == CEF_CONTEXT_MENU_OPEN_IMAGE_NEW_TAB_COMMAND_ID {
+                        context_menu_image_url(params)
+                    } else {
+                        context_menu_link_url(params)
+                    };
+                    let (Some(popup_open_handler), Some(url)) =
+                        (self.popup_open_handler.as_ref(), url)
+                    else {
+                        return 0;
+                    };
+                    popup_open_handler(url, BrowserPopupPlacement::Selected);
+                    1
+                }
+                CEF_CONTEXT_MENU_SAVE_LINK_AS_COMMAND_ID => context_menu_link_url(params)
+                    .map_or(0, |url| start_browser_download(browser, &url)),
+                CEF_CONTEXT_MENU_SAVE_IMAGE_AS_COMMAND_ID => context_menu_image_url(params)
+                    .map_or(0, |url| start_browser_download(browser, &url)),
+                CEF_CONTEXT_MENU_COPY_LINK_ADDRESS_COMMAND_ID => {
+                    context_menu_link_url(params).map_or(0, copy_text)
+                }
+                CEF_CONTEXT_MENU_COPY_IMAGE_ADDRESS_COMMAND_ID => {
+                    context_menu_image_url(params).map_or(0, copy_text)
+                }
+                CEF_CONTEXT_MENU_COPY_IMAGE_COMMAND_ID => {
+                    let (Some(url), Some(handler), Some(host)) = (
+                        context_menu_image_url(params),
+                        self.page_metadata_handler.clone(),
+                        browser.and_then(|browser| browser.host()),
+                    ) else {
+                        return 0;
+                    };
+                    let mut callback = GhostexGpuiCopyImageCallback::new(handler);
+                    host.download_image(
+                        Some(&CefString::from(url.as_str())),
+                        0,
+                        0,
+                        0,
+                        Some(&mut callback),
+                    );
+                    1
+                }
+                _ => 0,
             }
-            let requested_url = requested_url.trim();
-            if requested_url.is_empty() {
-                return 0;
-            }
-            popup_open_handler(requested_url.to_string(), BrowserPopupPlacement::Selected);
-            1
         }
     }
 }
@@ -185,6 +399,7 @@ wrap_life_span_handler! {
         popup_open_handler: Option<BrowserPopupOpenHandler>,
         page_metadata_handler: Option<BrowserPageMetadataHandler>,
         register_created_native_view: bool,
+        app_initiated_close: StdRc<Cell<bool>>,
     }
 
     impl LifeSpanHandler {
@@ -216,22 +431,29 @@ wrap_life_span_handler! {
             cef_life_span_handler.h the app must still complete it by
             proceeding with window/view-hierarchy tear-down, or the browser is
             left partially closed and its renderer process never exits. That
-            step is `CefBrowser::drop` calling `platform::release_native_view`,
-            which removes the CEF child view from its superview (macOS) or
-            destroys the embed-host window (Linux). Drop is only "fully owning"
-            teardown because it performs that removal; do not turn
-            release_native_view back into a no-op.
+            step on macOS/Windows is `CefBrowser::drop` calling
+            `platform::release_native_view`. Linux instead lets CEF close its
+            own X11 child before releasing the embed host in on_before_close.
 
             CDXC:Browser 2026-08-21:
             DevTools Target.closeTarget and /json/close enter through this
             same CEF close request. Browser panes must hand that request back
             to the GPUI tab model before returning handled; otherwise CEF
-            accepts the request but the app-owned pane remains. App-initiated
-            closes may report this during teardown too, and the model close
-            path deliberately treats that as a no-op.
+            accepts the request but the app-owned pane remains. App-owned
+            surface disposal is identified before native teardown and does
+            not request a model close.
             */
-            if let Some(handler) = self.page_metadata_handler.as_ref() {
+            if !self.app_initiated_close.get()
+                && let Some(handler) = self.page_metadata_handler.as_ref()
+            {
                 handler(BrowserPageMetadataEvent::CloseRequested);
+            }
+            // CEF's Linux CloseHostWindow sends WM_DELETE_WINDOW to its own
+            // CefWindowX11, not the GPUI ancestor. Let that native close tear
+            // down Chromium's compositor before removing our embed host.
+            #[cfg(target_os = "linux")]
+            if self.app_initiated_close.get() || self.register_created_native_view {
+                return 0;
             }
             1
         }
@@ -253,15 +475,22 @@ wrap_life_span_handler! {
             unregister_native_view_browser is idempotent, so the Drop path
             may run it again for app-initiated closes.
             */
-            let Some(host) = browser.and_then(|browser| browser.host()) else {
+            let Some(browser) = browser else {
                 return;
             };
-            unregister_native_view_browser(platform::native_view_ptr(host.window_handle()));
+            site_prompts_browser_closed(browser.identifier());
+            let Some(host) = browser.host() else {
+                return;
+            };
+            let native_view = platform::native_view_ptr(host.window_handle());
+            unregister_native_view_browser(native_view);
+            #[cfg(target_os = "linux")]
+            platform::browser_native_close_finished(native_view);
         }
 
         fn on_before_popup(
             &self,
-            _browser: Option<&mut cef::Browser>,
+            browser: Option<&mut cef::Browser>,
             _frame: Option<&mut Frame>,
             _popup_id: c_int,
             target_url: Option<&CefString>,
@@ -284,6 +513,9 @@ wrap_life_span_handler! {
             */
             if let Some(no_javascript_access) = no_javascript_access {
                 *no_javascript_access = 1;
+            }
+            if dispatch_external_app_popup(browser, target_url) {
+                return 1;
             }
 
             if let (Some(popup_open_handler), Some(requested_url)) = (
@@ -354,10 +586,22 @@ wrap_display_handler! {
                 // borrowed wrapper out instead so the URLs CEF supplied remain
                 // visible to the iterator for the lifetime of this callback.
                 let icon_urls = std::mem::take(icon_urls);
-                icon_urls.into_iter().find_map(|url| {
-                    let url = url.trim().to_string();
-                    if url.is_empty() { None } else { Some(url) }
-                })
+                let urls = icon_urls
+                    .into_iter()
+                    .map(|url| url.trim().to_string())
+                    .filter(|url| !url.is_empty())
+                    .collect::<Vec<_>>();
+                // The tab icon decodes bitmaps only, so a page that offers both (GitHub lists a
+                // PNG beside its SVG) is represented by the one that can be drawn.
+                let is_svg = |url: &String| {
+                    url.split(['?', '#'])
+                        .next()
+                        .is_some_and(|path| path.to_ascii_lowercase().ends_with(".svg"))
+                };
+                urls.iter()
+                    .find(|url| !is_svg(url))
+                    .or_else(|| urls.first())
+                    .cloned()
             });
             (self.page_metadata_handler)(BrowserPageMetadataEvent::FaviconUrlChanged(
                 representative_url,
@@ -366,67 +610,12 @@ wrap_display_handler! {
     }
 }
 
-wrap_drag_handler! {
-    pub(crate) struct GhostexGpuiSessionChatDragHandler;
-
-    impl DragHandler {
-        fn on_drag_enter(
-            &self,
-            browser: Option<&mut cef::Browser>,
-            drag_data: Option<&mut DragData>,
-            _mask: DragOperationsMask,
-        ) -> c_int {
-            /*
-            CDXC:Clipboard 2026-08-29:
-            Chromium never exposes an OS file drag's absolute paths to the
-            page, so the browser process is the only place a Session Chat
-            drop can resolve to real local paths (folders included). Publish
-            the drag's paths onto the bundled chat page's `ghostexGpui`
-            namespace at drag-enter — a non-file drag publishes the empty
-            list, clearing any earlier drag's paths — and let the drop itself
-            proceed normally. Installed only for Session Chat surfaces; the
-            page-side transport reads the paths only for a session running on
-            this machine, so a remote chat keeps uploading bytes and never
-            hands this machine's paths to an agent elsewhere.
-            */
-            let paths: Vec<String> = drag_data
-                .filter(|drag_data| drag_data.is_file() == 1)
-                .map(|drag_data| {
-                    let mut file_paths = cef::CefStringList::default();
-                    if drag_data.file_paths(Some(&mut file_paths)) == 1 {
-                        file_paths
-                            .into_iter()
-                            .filter(|path| !path.trim().is_empty())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .unwrap_or_default();
-            if let Some(browser) = browser
-                && let Some(frame) = browser.main_frame()
-                && let Ok(paths_json) = serde_json::to_string(&paths)
-            {
-                let script = format!(
-                    "window.ghostexGpui = window.ghostexGpui || {{}}; \
-                     window.ghostexGpui.sessionChatDropPaths = {paths_json};"
-                );
-                frame.execute_java_script(
-                    Some(&CefString::from(script.as_str())),
-                    Some(&CefString::from(BROWSER_APP_OWNED_SCRIPT_URL)),
-                    1,
-                );
-            }
-            0
-        }
-    }
-}
-
 wrap_permission_handler! {
     pub(crate) struct GhostexGpuiPermissionHandler {
-        trusted_loopback_entry_identity: Option<String>,
         trusted_clipboard_origin: Option<String>,
         media_access_handler: Option<BrowserMediaAccessHandler>,
+        // The browser's CEF profile, where a Local Network Access answer is kept.
+        profile: String,
     }
 
     impl PermissionHandler {
@@ -476,50 +665,45 @@ wrap_permission_handler! {
         fn on_show_permission_prompt(
             &self,
             browser: Option<&mut cef::Browser>,
-            _prompt_id: u64,
+            prompt_id: u64,
             requesting_origin: Option<&CefString>,
             requested_permissions: u32,
             callback: Option<&mut PermissionPromptCallback>,
         ) -> c_int {
-            /*
-            CDXC:PlatformSupport 2026-08-04:
-            Current Windows CEF asks for LOCAL_NETWORK_ACCESS, LOCAL_NETWORK,
-            or LOOPBACK_NETWORK before a bundled file:// app surface may call
-            the authenticated loopback gxserver API. Alloy has no permission
-            UI for these hidden first-party surfaces, so leaving the prompt to
-            default handling strands fetch (and therefore sleeping-session
-            wake) indefinitely.
-            Accept only a pure local-network request on surfaces that were
-            explicitly constructed with the sidebar gxserver bridge/bootstrap;
-            Browser, editor, project-workarea, and modal surfaces keep their
-            existing permission behavior.
-            */
-            let local_network_permissions =
-                PermissionRequestTypes::LOCAL_NETWORK_ACCESS.get_raw() as u32
-                    | PermissionRequestTypes::LOCAL_NETWORK.get_raw() as u32
-                    | PermissionRequestTypes::LOOPBACK_NETWORK.get_raw() as u32;
             let requesting_origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
-            let trusted_loopback_request = self.trusted_loopback_entry_identity.as_deref().is_some_and(|entry_identity| {
-                browser.as_ref().and_then(|browser| browser.main_frame()).is_some_and(|frame| {
-                    let frame_url = CefString::from(&frame.url()).to_string();
-                    first_party_loopback_request_matches(entry_identity, &frame_url, &requesting_origin)
-                })
-            });
-            if trusted_loopback_request
-                && requested_permissions & local_network_permissions != 0
-                && requested_permissions & !local_network_permissions == 0
+            // Local Network Access (CDXC:Browser 2026-10-03 in site_requests.rs): asked in the app
+            // when the prompt is for nothing else.
+            let loopback_network = PermissionRequestTypes::LOOPBACK_NETWORK.get_raw() as u32;
+            let local_network_current = PermissionRequestTypes::LOCAL_NETWORK.get_raw() as u32;
+            let local_network_deprecated =
+                PermissionRequestTypes::LOCAL_NETWORK_ACCESS_DEPRECATED.get_raw() as u32;
+            let local_network = local_network_current | local_network_deprecated;
+            if requested_permissions != 0
+                && requested_permissions & !(loopback_network | local_network) == 0
             {
                 let Some(callback) = callback else {
                     return 0;
                 };
-                crate::support_logs::append(
-                    crate::support_logs::GpuiSupportLog::TerminalFocus,
-                    "gpui.cef.firstPartyLoopbackPermissionAccepted",
-                    serde_json::json!({
-                        "requestedPermissions": requested_permissions,
-                    }),
-                );
-                callback.cont(PermissionRequestResult::ACCEPT);
+                let browser_id = browser.map(|browser| browser.identifier()).unwrap_or_default();
+                dispatch_browser_site_request(BrowserSiteRequest::LocalNetworkAccess(
+                    BrowserLocalNetworkAccessRequest {
+                        origin: requesting_origin,
+                        local_network: requested_permissions & local_network != 0,
+                        profile: self.profile.clone(),
+                        content_types: local_network_access_content_types(
+                            requested_permissions & loopback_network != 0,
+                            requested_permissions & local_network_current != 0,
+                            requested_permissions & local_network_deprecated != 0,
+                        ),
+                        browser_id,
+                        callback: Some(callback.clone()),
+                        page_watch: SitePromptPageWatch::register(
+                            browser_id,
+                            Some(prompt_id),
+                            None,
+                        ),
+                    },
+                ));
                 return 1;
             }
             /*
@@ -550,6 +734,15 @@ wrap_permission_handler! {
                 PermissionRequestResult::DENY
             });
             1
+        }
+
+        fn on_dismiss_permission_prompt(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            prompt_id: u64,
+            _result: PermissionRequestResult,
+        ) {
+            local_network_prompt_dismissed(prompt_id);
         }
     }
 }

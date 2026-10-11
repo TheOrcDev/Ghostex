@@ -70,6 +70,9 @@ const BOUNDARY_FINGERPRINT_BYTES: u64 = 64;
 pub(crate) const RECONCILIATION_INTERVAL: Duration = Duration::from_millis(1_000);
 pub(crate) const INITIAL_RESOLVE_POLL: Duration = Duration::from_millis(500);
 pub(crate) const MAX_RESOLVE_POLL: Duration = Duration::from_millis(5_000);
+/// How often a follower waiting for its transcript looks at the agent's statusline payload, one
+/// file stat each: the payload is the first thing that names a new Claude chat's model and effort.
+pub(crate) const STATUSLINE_WATCH_POLL: Duration = Duration::from_millis(100);
 /// How long a subscribe waits for its one model/effort probe before emitting
 /// the snapshot anyway, and how long a read waits for the same probe before
 /// answering without the screen-derived fields. See
@@ -144,12 +147,19 @@ pub enum SessionChatBlock {
         name: String,
         #[serde(default)]
         input: Value,
+        /// The agent's id for this call (Claude's `tool_use.id`, Codex's `call_id`), which its
+        /// result names: parallel calls can finish out of order.
+        #[serde(rename = "callId", skip_serializing_if = "Option::is_none", default)]
+        call_id: Option<String>,
     },
     #[serde(rename = "tool-result")]
     ToolResult {
         output: String,
         #[serde(rename = "isError", skip_serializing_if = "Option::is_none", default)]
         is_error: Option<bool>,
+        /// The id of the call this answers, when the agent records one.
+        #[serde(rename = "callId", skip_serializing_if = "Option::is_none", default)]
+        call_id: Option<String>,
     },
     #[serde(rename = "image-ref")]
     ImageRef {
@@ -262,8 +272,11 @@ pub enum SessionChatTranscriptAgent {
     Claude,
     Codex,
     Cursor,
+    Empryo,
+    Freebuff,
     Grok,
     Hermes,
+    OpenCode,
     Pi,
     Zcode,
 }
@@ -279,10 +292,13 @@ pub fn resolve_session_chat_transcript_agent(
         "claude" | "openclaude" => Some(SessionChatTranscriptAgent::Claude),
         "codex" => Some(SessionChatTranscriptAgent::Codex),
         "cursor" | "cursor-agent" | "cursor cli" => Some(SessionChatTranscriptAgent::Cursor),
+        "empryo" => Some(SessionChatTranscriptAgent::Empryo),
         "grok" | "grok-build" => Some(SessionChatTranscriptAgent::Grok),
         "hermes" | "hermes agent" | "hermes-agent" => Some(SessionChatTranscriptAgent::Hermes),
+        "opencode" => Some(SessionChatTranscriptAgent::OpenCode),
         "pi" | "omp" => Some(SessionChatTranscriptAgent::Pi),
         "zcode" | "zcode-cli" => Some(SessionChatTranscriptAgent::Zcode),
+        "freebuff" => Some(SessionChatTranscriptAgent::Freebuff),
         _ => None,
     }
 }
@@ -293,10 +309,13 @@ pub fn session_chat_transcript_agent_id(agent: Option<&str>) -> Option<&'static 
         SessionChatTranscriptAgent::Claude => Some("claude"),
         SessionChatTranscriptAgent::Codex => Some("codex"),
         SessionChatTranscriptAgent::Cursor => Some("cursor"),
+        SessionChatTranscriptAgent::Empryo => Some("empryo"),
         SessionChatTranscriptAgent::Grok => Some("grok"),
         SessionChatTranscriptAgent::Hermes => Some("hermes"),
+        SessionChatTranscriptAgent::OpenCode => Some("opencode"),
         SessionChatTranscriptAgent::Pi => Some("pi"),
         SessionChatTranscriptAgent::Zcode => Some("zcode"),
+        SessionChatTranscriptAgent::Freebuff => Some("freebuff"),
     }
 }
 
@@ -309,10 +328,13 @@ pub fn session_chat_line_decoder(agent: SessionChatTranscriptAgent) -> SessionCh
         SessionChatTranscriptAgent::Claude => decode_claude_transcript_line,
         SessionChatTranscriptAgent::Codex => decode_codex_transcript_line,
         SessionChatTranscriptAgent::Cursor => decode_cursor_transcript_line,
+        SessionChatTranscriptAgent::Empryo => decode_empryo_transcript_line,
         SessionChatTranscriptAgent::Grok => decode_grok_transcript_line,
         SessionChatTranscriptAgent::Hermes => decode_hermes_transcript_line,
+        SessionChatTranscriptAgent::OpenCode => crate::session_chat_opencode::decode_line,
         SessionChatTranscriptAgent::Pi => decode_pi_transcript_line,
         SessionChatTranscriptAgent::Zcode => decode_zcode_transcript_line,
+        SessionChatTranscriptAgent::Freebuff => decode_freebuff_transcript_line,
     }
 }
 
@@ -324,10 +346,15 @@ pub fn session_chat_lifecycle_decoder(
         SessionChatTranscriptAgent::Claude => Some(decode_claude_turn_lifecycle),
         SessionChatTranscriptAgent::Codex => Some(decode_codex_turn_lifecycle),
         SessionChatTranscriptAgent::Cursor => Some(decode_cursor_turn_lifecycle),
+        SessionChatTranscriptAgent::Empryo => Some(decode_empryo_turn_lifecycle),
         SessionChatTranscriptAgent::Grok => Some(decode_grok_turn_lifecycle),
         SessionChatTranscriptAgent::Hermes => Some(decode_hermes_turn_lifecycle),
+        SessionChatTranscriptAgent::OpenCode => {
+            Some(crate::session_chat_opencode::decode_lifecycle)
+        }
         SessionChatTranscriptAgent::Pi => None,
         SessionChatTranscriptAgent::Zcode => Some(decode_zcode_turn_lifecycle),
+        SessionChatTranscriptAgent::Freebuff => Some(decode_freebuff_turn_lifecycle),
     }
 }
 
@@ -404,10 +431,13 @@ pub fn session_chat_lineage_extractor(
         SessionChatTranscriptAgent::Antigravity
         | SessionChatTranscriptAgent::Codex
         | SessionChatTranscriptAgent::Cursor
+        | SessionChatTranscriptAgent::Empryo
         | SessionChatTranscriptAgent::Grok
         | SessionChatTranscriptAgent::Hermes
+        | SessionChatTranscriptAgent::OpenCode
         | SessionChatTranscriptAgent::Pi
-        | SessionChatTranscriptAgent::Zcode => None,
+        | SessionChatTranscriptAgent::Zcode
+        | SessionChatTranscriptAgent::Freebuff => None,
     }
 }
 
@@ -1080,6 +1110,8 @@ pub use crate::session_chat_decode_antigravity::*;
 pub use crate::session_chat_decode_claude::*;
 pub use crate::session_chat_decode_codex::*;
 pub use crate::session_chat_decode_cursor::*;
+pub use crate::session_chat_decode_empryo::*;
+pub use crate::session_chat_decode_freebuff::*;
 pub use crate::session_chat_decode_grok::*;
 pub use crate::session_chat_decode_hermes::*;
 pub use crate::session_chat_decode_pi::*;

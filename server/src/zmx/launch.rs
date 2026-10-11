@@ -38,6 +38,11 @@ pub(crate) fn run_zmx_interaction_command(
     Ok(result)
 }
 
+/// wmx's start waits up to 20 s for a slow first host (`START_READY_TIMEOUT` in
+/// .dependencies/wmx/src/client.rs); cutting it off sooner failed starts that then succeeded.
+#[cfg(not(target_os = "macos"))]
+const ZMX_START_COMMAND_TIMEOUT_MS: u64 = 25_000;
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run_zmx_start_command(
     _session_name: &str,
@@ -50,11 +55,13 @@ pub(crate) fn run_zmx_start_command(
     the command was accepted, NOT that the session is registered. Report no
     observation; the caller keeps its authoritative probe.
     */
-    run_zmx_interaction_command(script, ZmxCommandOptions::default()).map(|result| {
-        ZmxStartOutcome {
-            observed_alive: false,
-            result,
-        }
+    let options = ZmxCommandOptions {
+        timeout_ms: Some(ZMX_START_COMMAND_TIMEOUT_MS),
+        ..ZmxCommandOptions::default()
+    };
+    run_zmx_interaction_command(script, options).map(|result| ZmxStartOutcome {
+        observed_alive: false,
+        result,
     })
 }
 
@@ -80,6 +87,17 @@ pub(crate) fn run_zmx_start_command(
     zmx_executable_path: &str,
     script: String,
 ) -> ZmxEndpointResult<ZmxStartOutcome> {
+    let gate = macos_zmx_start_gate(session_name);
+    let (_start_guard, waited) = match gate.try_lock() {
+        Ok(guard) => (guard, false),
+        Err(_) => (
+            gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+            true,
+        ),
+    };
+    if waited && macos_zmx_session_exists(session_name, zmx_executable_path) {
+        return Ok(zmx_start_observed_success());
+    }
     let job = MacosZmxLaunchdJob::new(session_name)?;
     job.prepare(&script)?;
 
@@ -140,6 +158,20 @@ pub(crate) fn run_zmx_start_command(
     Err(ZmxEndpointError::DependencyUnavailable(format!(
         "zmx session did not become ready: {launch_log}"
     )))
+}
+
+/// CDXC:Zmx 2026-09-21 WHY: One session's launchd job shares a single script, plist, and label, and the script deletes itself on its first line. Two overlapping starts for the same session (a sidebar attach racing a chat wake) let one attempt's `rm` or cleanup remove the script the other's kickstart was about to exec, so launchd logged `/bin/zsh: can't open input file`, the session never registered, and the attach waited out the 5 s deadline and surfaced as HTTP 503 "Session attach unavailable". Starts for one session therefore run one at a time; a caller that had to wait first checks whether the winner already brought the session up.
+#[cfg(target_os = "macos")]
+fn macos_zmx_start_gate(session_name: &str) -> Arc<std::sync::Mutex<()>> {
+    static GATES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    GATES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(session_name.to_string())
+        .or_default()
+        .clone()
 }
 
 /// First readiness re-check delay, and the amount each further wait grows by.
@@ -434,8 +466,8 @@ pub(crate) enum ZmxShellProfileMode {
     /// Sources the user's login profile. Required whenever the script hands the
     /// user their own shell or runs user-authored terminal content.
     Login,
-    /// Skips the login profile. Only for probe/snapshot pipelines that run the
-    /// bundled zmx binary, `ps`, and shell builtins.
+    /// Skips the login profile for bundled terminal controls and probe/snapshot
+    /// pipelines that run the bundled zmx binary, `ps`, and shell builtins.
     Profileless,
 }
 
@@ -460,8 +492,8 @@ pub(crate) fn run_zmx_probe_script(
 }
 
 /// `run_zmx_interaction_command`'s error contract on a profile-free spawn, for
-/// probe reads that only run the bundled zmx binary.
-pub(crate) fn run_zmx_probe_command(
+/// controls and probes that only run the bundled zmx binary.
+pub(crate) fn run_zmx_profileless_command(
     script: String,
     options: ZmxCommandOptions,
 ) -> ZmxEndpointResult<ZmxCommandResult> {
@@ -495,14 +527,15 @@ fn run_zsh_script_blocking(
         ZmxShellProfileMode::Profileless => shell.profileless_script_args(script),
     };
     #[cfg(windows)]
-    let (mut process, native_environment) = match super::scripts_windows::process(script)? {
-        Some(invocation) => invocation,
-        None => {
-            let mut command = Command::new(&shell.executable);
-            command.args(shell_args);
-            (command, std::collections::HashMap::new())
-        }
-    };
+    let (mut process, native_environment, native_flags) =
+        match super::scripts_windows::process(script)? {
+            Some(invocation) => invocation,
+            None => {
+                let mut command = Command::new(&shell.executable);
+                command.args(shell_args);
+                (command, std::collections::HashMap::new(), 0)
+            }
+        };
     #[cfg(not(windows))]
     let mut process = {
         let mut command = Command::new(&shell.executable);
@@ -511,10 +544,8 @@ fn run_zsh_script_blocking(
     };
     #[cfg(windows)]
     {
-        // CDXC:PlatformSupport 2026-09-14 WHY:
-        // Session polling is background work. Without CREATE_NO_WINDOW, Windows Terminal opens a new window for every PowerShell probe.
         use std::os::windows::process::CommandExt;
-        process.creation_flags(0x0800_0000);
+        process.creation_flags(crate::platform::process::CREATE_NO_WINDOW | native_flags);
     }
     let mut environment = build_gxserver_zmx_child_environment();
     #[cfg(windows)]

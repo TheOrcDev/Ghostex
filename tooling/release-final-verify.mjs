@@ -4,25 +4,38 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  changelogNotesFormat,
+  changelogNotesItems,
   extractChangelogSectionFromText,
   onDemandAssetNames,
   releaseBuildVersion,
   validateGhostexCask,
-} from './release-ghostex.mjs';
+} from './release-shared.mjs';
 import { validateMacosAppBundle } from './validate-macos-app-bundle.mjs';
 import { validateOnDemandManifestV2 } from './release-gpui/on-demand-manifest.mjs';
-import { inspectRelease, verifyPublishedComponent } from './release-gpui/publish-component.mjs';
+import { locateComponentRelease, verifyPublishedComponent } from './release-gpui/publish-component.mjs';
+import { componentDownloadRepo } from './release-gpui/on-demand-manifest.mjs';
+import { LEGACY_COMPONENTS_GITHUB_REPO, componentsGithubRepo } from './release-gpui/components-repo.mjs';
 import { validateWindowsUpdateFeed, windowsUpdateArtifactNames } from './release-gpui/windows-update-feed.mjs';
 import { releaseProvenanceAssetName, validateReleaseProvenance } from './release-gpui/provenance.mjs';
-import { customerDownloadEntries, renderIosAvailabilityNotes } from './release-gpui/customer-downloads.mjs';
 import {
+  customerDownloadEntries,
+  DOWNLOADS_START,
+  renderIosAvailabilityNotes,
+} from './release-gpui/customer-downloads.mjs';
+import {
+  RELEASE_PLAN_ARTIFACT_DIRECTORY,
+  RELEASE_PLAN_ARTIFACT_FILE,
   crossReleaseReuseOrigins,
   productOriginLabel,
   renderReleaseProvenanceReport,
+  verifyPlannedProductCoverage,
   verifyReleaseProvenanceAgainstAssets,
 } from './release-gpui/publish-provenance.mjs';
+import { validatePlan } from './release-gpui/plan.mjs';
+import { caskVersion, findOpenPullRequest, officialCask, personalTap } from './release-gpui/publish-homebrew-cask.mjs';
 
 /*
  CDXC:Release 2026-07-02-14:10:
@@ -33,7 +46,7 @@ import {
  downloads the live DMG only when no verified local copy exists.
 */
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const githubRepo = 'maddada/Ghostex';
 export const MAX_RELEASE_DMG_BYTES = 300 * 1024 * 1024;
 const subrepoCandidates = ['apps/mobile/app', '.dependencies/zmx'];
@@ -46,6 +59,9 @@ Usage:
 Options:
   --dmg <path>       Reuse an already-downloaded DMG (for example Homebrew's
                      fetch cache) instead of downloading the live asset again.
+  --run-id <id>      Release run whose release-plan artifact states the
+                     dispatched scope, used only when the live provenance
+                     record carries no per-product plan.
   --skip-repo        Skip local repo checks (clean worktree, tag at HEAD).
   --skip-brew        Skip all Homebrew checks.
   --skip-brew-fetch  Run brew info/cat but skip the large forced DMG fetch.
@@ -55,12 +71,19 @@ Options:
   --skip-dmg         Skip DMG download/mount/bundle validation.
   --skip-subrepos    Skip subrepo cleanliness checks.
   --help             Show this help.
+
+Notes:
+  The Homebrew checks read the local maddada/tap checkout and never run
+  brew update or brew tap themselves. Run brew update first when the
+  release was published minutes ago, otherwise the checkout still serves
+  the previous version.
 `;
 }
 
 function parseArgs(argv) {
   const options = {
     dmg: null,
+    runId: null,
     skipAndroid: false,
     skipBrew: false,
     skipBrewFetch: false,
@@ -79,6 +102,12 @@ function parseArgs(argv) {
       options.dmg = argv[index + 1];
       if (!options.dmg) {
         throw new Error('--dmg requires a path.');
+      }
+      index += 1;
+    } else if (arg === '--run-id') {
+      options.runId = argv[index + 1];
+      if (!options.runId || !/^\d+$/u.test(options.runId)) {
+        throw new Error('--run-id requires a numeric Actions run id.');
       }
       index += 1;
     } else if (arg === '--skip-repo') {
@@ -222,7 +251,25 @@ function formatDuration(durationMs) {
   return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
+// CDXC:TempCleanup 2026-09-25 WHY: every run used to leave its temp dirs and the
+// downloaded DMG in $TMPDIR (about 550 MB per run), so repeated verifications filled
+// the disk. verify() registers each temp path in cleanupPaths; main() removes them
+// all when verification finishes, passes or fails.
 async function main() {
+  const cleanupPaths = [];
+  try {
+    await verify(cleanupPaths);
+  } finally {
+    await Promise.all(cleanupPaths.map((entry) => rm(entry, { recursive: true, force: true }).catch(() => {})));
+  }
+}
+
+async function verify(cleanupPaths) {
+  const tempDir = async (prefix) => {
+    const dir = await mkdtemp(path.join(tmpdir(), prefix));
+    cleanupPaths.push(dir);
+    return dir;
+  };
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(usage().trim());
@@ -297,6 +344,9 @@ async function main() {
         `Release notes are missing customer download links: ${missing.map((item) => item.label).join(', ')}`
       );
     }
+    if (!releaseBody.trimStart().startsWith(DOWNLOADS_START)) {
+      throw new Error('Release notes do not open with the download block.');
+    }
     const hasAndroidDownload = groups.some((group) => group.title === 'Android');
     if (hasAndroidDownload && !releaseBody.includes(renderIosAvailabilityNotes())) {
       throw new Error('Release notes are missing the iOS TestFlight Discord instructions.');
@@ -320,7 +370,7 @@ async function main() {
         warn: `Expected difference: ${version} carries no ${assetName} (released before change-aware planning).`,
       };
     }
-    const temporary = await mkdtemp(path.join(tmpdir(), `ghostex-provenance-verify-${version}-`));
+    const temporary = await tempDir(`ghostex-provenance-verify-${version}-`);
     await capture(
       `env -u GH_TOKEN -u GITHUB_TOKEN gh release download ${shellQuote(`v${version}`)} ` +
         `--repo ${shellQuote(githubRepo)} --pattern ${shellQuote(assetName)} --dir ${shellQuote(temporary)}`
@@ -376,6 +426,59 @@ async function main() {
     );
   });
 
+  /*
+   CDXC:Release 2026-09-16 WHY:
+   The 9.6.0 verify passed while all eight Windows ARM64 assets were still
+   missing. The provenance check above walks the products the merged record
+   already contains, and a staged release writes that record stage by stage, so
+   a stage that has not published yet (or died) is simply absent from it and
+   nothing compared the release against the scope the run was dispatched with.
+   This check walks the recorded plan instead: every product the plan resolved
+   as build or reuse must have all of its required assets live and a product
+   record; a product skipped by flag is reported as skipped. The plan travels in
+   the provenance asset; only a record without one needs --run-id to read the
+   run's release-plan artifact.
+  */
+  await check('planned-products-live', async () => {
+    let plan = releaseProvenance?.plan?.products ? releaseProvenance.plan : null;
+    let source = `the plan recorded in ${releaseProvenanceAssetName(version)}`;
+    if (!plan && options.runId) {
+      const temporary = await tempDir(`ghostex-release-plan-${version}-`);
+      await capture(
+        `env -u GH_TOKEN -u GITHUB_TOKEN gh run download ${shellQuote(options.runId)} --repo ${shellQuote(githubRepo)} ` +
+          `--name ${shellQuote(RELEASE_PLAN_ARTIFACT_DIRECTORY)} --dir ${shellQuote(temporary)}`
+      );
+      plan = validatePlan(JSON.parse(await readFile(path.join(temporary, RELEASE_PLAN_ARTIFACT_FILE), 'utf8')));
+      if (plan.version !== version) throw new Error(`Run ${options.runId} planned ${plan.version}, not ${version}.`);
+      source = `the ${RELEASE_PLAN_ARTIFACT_DIRECTORY} artifact of run ${options.runId}`;
+    }
+    if (!plan) {
+      if (!releaseProvenance) {
+        return {
+          warn: 'Expected difference: no provenance record and no --run-id, so the dispatched scope is unknown.',
+        };
+      }
+      throw new Error(
+        `${releaseProvenanceAssetName(version)} carries no per-product plan; pass --run-id <release run id> ` +
+          `so the dispatched scope can be read from that run's ${RELEASE_PLAN_ARTIFACT_DIRECTORY} artifact.`
+      );
+    }
+    const coverage = verifyPlannedProductCoverage({
+      liveAssetNames: releaseAssets.map((asset) => asset.name),
+      plan,
+      releaseProvenance,
+      version,
+    });
+    if (coverage.failures.length > 0) throw new Error(coverage.failures.join(' | '));
+    const built = coverage.covered.filter((entry) => entry.action === 'build').length;
+    const reused = coverage.covered.length - built;
+    const skipped = coverage.skippedByFlag.map((entry) => entry.product);
+    return (
+      `${coverage.covered.length} planned product(s) live (${built} built, ${reused} reused)` +
+      `${skipped.length > 0 ? `, skipped by flag: ${skipped.join(', ')}` : ''} per ${source}`
+    );
+  });
+
   const provenanceFor = (product) => releaseProvenance?.products?.[product] ?? null;
   const describeProduct = (product) => {
     const record = provenanceFor(product);
@@ -399,7 +502,7 @@ async function main() {
     if (arches.length === 0) {
       return { warn: 'Release has no Velopack Windows update channels (legacy or Windows-excluded release).' };
     }
-    const temporary = await mkdtemp(path.join(tmpdir(), `ghostex-windows-update-verify-${version}-`));
+    const temporary = await tempDir(`ghostex-windows-update-verify-${version}-`);
     const validated = [];
     for (const arch of arches) {
       const names = windowsUpdateArtifactNames(version, arch);
@@ -468,7 +571,7 @@ async function main() {
   await check('changelog-section', async () => {
     const changelog = await readFile(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
     changelogNotes = extractChangelogSectionFromText(changelog, version);
-    return 'present with Major/Minor bullets';
+    return `present in the ${changelogNotesFormat(changelogNotes)} format with ${changelogNotesItems(changelogNotes).length} items`;
   });
 
   let liveSignature = null;
@@ -476,7 +579,7 @@ async function main() {
     if (options.skipSparkle) {
       return SKIPPED;
     }
-    const appcastPath = path.join(await mkdtemp(path.join(tmpdir(), `ghostex-verify-${version}-`)), 'appcast.xml');
+    const appcastPath = path.join(await tempDir(`ghostex-verify-${version}-`), 'appcast.xml');
     await writeFile(appcastPath, await githubContent(githubRepo, 'appcast.xml'));
     await capture(`xmllint --noout ${shellQuote(appcastPath)}`);
     const topVersion = await capture(
@@ -504,11 +607,8 @@ async function main() {
     if (!liveSignature) {
       throw new Error('Top enclosure has no EdDSA signature.');
     }
-    const notesProbe = changelogNotes
-      ?.split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.startsWith('- ') && line !== '- Major' && line !== '- Minor' && line !== '- GPUI')
-      ?.slice(2);
+    /* The first change item, never a group heading, in every accepted section format. */
+    const notesProbe = changelogNotes ? changelogNotesItems(changelogNotes)[0] : undefined;
     if (!embeddedNotes.trim()) {
       throw new Error('Top item has empty embedded release notes.');
     }
@@ -525,7 +625,7 @@ async function main() {
     if (!dmgDigest) {
       throw new Error('GitHub reported no DMG digest to validate the cask sha256 against.');
     }
-    const liveCask = await githubContent('maddada/homebrew-tap', 'Casks/ghostex.rb');
+    const liveCask = await githubContent(personalTap.repo, personalTap.path, personalTap.base);
     validateGhostexCask(liveCask, { sha256: dmgDigest, version });
     return `live cask at ${version}, arm64-only, :ventura`;
   });
@@ -535,24 +635,95 @@ async function main() {
   if (dmgPath && !existsSync(dmgPath)) {
     throw new Error(`--dmg does not exist: ${dmgPath}`);
   }
+  /*
+   CDXC:Release 2026-09-16 WHY:
+   9.7.0's final verification failed this check with `missing required stanza:
+   version "9.7.0"` although both casks had been published correctly, because
+   two different things were read as one. First, the official
+   Homebrew/homebrew-cask bump is a pull request (#287591 for 9.7.0) and the
+   official cask keeps shipping the previous version until Homebrew merges it,
+   so right after a release the official cask is legitimately behind while the
+   personal tap already carries the release; that is a pending state, reported
+   as a warning that names the pull request, not a failure. Second, brew
+   info/cat/fetch read the local maddada/tap checkout, which only `brew update`
+   refreshes and which a release never touches (9.6.0 passed only because
+   something had run `brew update` in between), so a stale checkout is now
+   named as such with the `brew update` instruction instead of a misleading
+   stanza error. The check never runs `brew update` or `brew tap` and refuses
+   to let brew tap implicitly, so local Homebrew state stays exactly as the user
+   keeps it; the `brew fetch` cache download is the one write it has always made.
+   The official cask is validated on its own stanzas (it installs through
+   `binary`, which validateGhostexCask forbids for the wrapper-based tap cask),
+   and the local brew commands stay on the tap cask, whose stanzas the tap bump
+   advanced in the same publish stage.
+   SEE-ALSO: tooling/release-gpui/publish-homebrew-cask.mjs (findOpenPullRequest).
+  */
   await check('homebrew-commands', async () => {
     if (options.skipBrew) {
       return SKIPPED;
+    }
+    if (!dmgDigest) {
+      throw new Error('GitHub reported no DMG digest to validate the cask sha256 against.');
+    }
+    const official = await githubContent(officialCask.repo, officialCask.path, officialCask.base);
+    const officialVersion = caskVersion(official);
+    let officialState = `${officialCask.label} at ${version}`;
+    let pendingBump = null;
+    if (officialVersion === version) {
+      for (const required of [
+        `sha256 "${dmgDigest}"`,
+        'url "https://github.com/maddada/Ghostex/releases/download/v#{version}/ghostex-#{version}-arm64.dmg"',
+        'depends_on arch: :arm64',
+        'depends_on macos: :ventura',
+      ]) {
+        if (!official.includes(required)) {
+          throw new Error(`${officialCask.label} ghostex ${version} is missing required stanza: ${required}`);
+        }
+      }
+    } else {
+      pendingBump = await findOpenPullRequest({ version });
+      if (!pendingBump) {
+        throw new Error(
+          `${officialCask.label} ships ghostex ${officialVersion}, not ${version}, and no open "ghostex ${version}" bump pull request exists; ` +
+            "Homebrew's autobump bot (BrewTestBot) opens it after a release; rerun this check in a while."
+        );
+      }
+      officialState =
+        `official cask bump pending, PR #${pendingBump.number} open (${pendingBump.html_url}); ` +
+        `${officialCask.label} still ships ${officialVersion}`;
+    }
+
+    const tapped = (await capture('brew tap')).split(/\r?\n/u).map((line) => line.trim());
+    if (!tapped.includes('maddada/tap')) {
+      throw new Error(
+        'maddada/tap is not tapped locally and this check never taps it for you; run brew tap maddada/tap first, or pass --skip-brew.'
+      );
     }
     await capture('HOMEBREW_NO_INSTALL_FROM_API=1 brew info --cask maddada/tap/ghostex', { timeoutMs: 300_000 });
     const catOutput = await capture('HOMEBREW_NO_INSTALL_FROM_API=1 brew cat --cask maddada/tap/ghostex', {
       timeoutMs: 300_000,
     });
+    const localVersion = caskVersion(catOutput);
+    if (localVersion !== version) {
+      throw new Error(
+        `The local maddada/tap checkout serves ghostex ${localVersion}, not ${version}; brew info/cat/fetch read that checkout ` +
+          'and only brew update refreshes it. Run brew update, then rerun.'
+      );
+    }
     validateGhostexCask(catOutput, { sha256: dmgDigest, version });
+    const outcome = (commands, dmgNote) => {
+      const detail = `${officialState}; ${commands} validated against maddada/tap/ghostex${dmgNote ? `, ${dmgNote}` : ''}`;
+      return pendingBump ? { warn: detail } : detail;
+    };
     if (options.skipBrewFetch || dmgPath) {
-      return dmgPath ? 'brew info/cat validated; supplied DMG reused' : 'brew info/cat validated; fetch skipped';
+      return outcome('brew info/cat', dmgPath ? 'supplied DMG reused' : 'fetch skipped');
     }
     await capture('HOMEBREW_NO_INSTALL_FROM_API=1 brew fetch --force --cask --arch=arm maddada/tap/ghostex', {
       timeoutMs: 900_000,
     });
     const brewCache = await capture('brew --cache --cask maddada/tap/ghostex');
     if (existsSync(brewCache)) dmgPath = brewCache;
-    return dmgPath ? 'brew info/cat/fetch validated; cached DMG reused' : 'brew info/cat/fetch validated';
+    return outcome('brew info/cat/fetch', dmgPath ? 'cached DMG reused' : '');
   });
 
   await check('dmg-artifact', async () => {
@@ -561,6 +732,7 @@ async function main() {
     }
     if (!dmgPath) {
       const downloadPath = path.join(tmpdir(), `ghostex-${version}-final-verify.dmg`);
+      cleanupPaths.push(downloadPath);
       await capture(
         `curl -fsSL ${shellQuote(`https://github.com/${githubRepo}/releases/download/v${version}/ghostex-${version}-arm64.dmg`)} -o ${shellQuote(downloadPath)}`,
         { timeoutMs: 1_800_000 }
@@ -678,13 +850,28 @@ async function main() {
     if (!sealedManifestV2) {
       return { warn: 'Expected difference: legacy release has no manifest v2 component tags to verify.' };
     }
+    /*
+     * Components moved to their own repository on 2026-09-16. A manifest names
+     * the repository per component; releases sealed before the move carry no
+     * per-component repository and still download from the app repository, so
+     * the lookup accepts either place and reports which one served the tag.
+     */
+    const located = [];
     for (const component of Object.values(sealedManifestV2.components)) {
-      verifyPublishedComponent({
+      const { repo, release } = locateComponentRelease({
         component,
-        release: inspectRelease({ repo: githubRepo, tag: component.downloadTag }),
+        repos: [
+          ...new Set([
+            componentDownloadRepo(sealedManifestV2, component),
+            componentsGithubRepo(),
+            LEGACY_COMPONENTS_GITHUB_REPO,
+          ]),
+        ],
       });
+      verifyPublishedComponent({ component, release });
+      located.push(`${component.downloadTag} in ${repo}`);
     }
-    return `${Object.keys(sealedManifestV2.components).length} component tag(s) match sealed digests and sizes`;
+    return `${located.length} component tag(s) match sealed digests and sizes: ${located.join(', ')}`;
   });
 
   await check('component-download-unpack', async () => {
@@ -697,12 +884,25 @@ async function main() {
     );
     const selected = candidates.sort((left, right) => left.asset.sizeBytes - right.asset.sizeBytes)[0];
     if (!selected) throw new Error('Manifest v2 contains no component asset to spot-check.');
-    const temporary = await mkdtemp(path.join(tmpdir(), `ghostex-component-verify-${version}-`));
+    const { repo: componentRepo, release: componentRelease } = locateComponentRelease({
+      component: selected.component,
+      repos: [
+        ...new Set([
+          componentDownloadRepo(sealedManifestV2, selected.component),
+          componentsGithubRepo(),
+          LEGACY_COMPONENTS_GITHUB_REPO,
+        ]),
+      ],
+    });
+    if (!componentRelease.exists) {
+      throw new Error(`Component tag ${selected.component.downloadTag} was not found in any component repository.`);
+    }
+    const temporary = await tempDir(`ghostex-component-verify-${version}-`);
     const archivePath = path.join(temporary, selected.asset.assetName);
     const extractPath = path.join(temporary, 'unpacked');
     await capture(
       `env -u GH_TOKEN -u GITHUB_TOKEN gh release download ${shellQuote(selected.component.downloadTag)} ` +
-        `--repo ${shellQuote(githubRepo)} --pattern ${shellQuote(selected.asset.assetName)} --dir ${shellQuote(temporary)}`,
+        `--repo ${shellQuote(componentRepo)} --pattern ${shellQuote(selected.asset.assetName)} --dir ${shellQuote(temporary)}`,
       { timeoutMs: 1_800_000 }
     );
     const downloadedSha = await capture(`shasum -a 256 ${shellQuote(archivePath)} | awk '{print $1}'`);
@@ -718,7 +918,7 @@ async function main() {
     await capture(`tar -xzf ${shellQuote(archivePath)} -C ${shellQuote(extractPath)}`);
     if ((await readdir(extractPath)).length === 0)
       throw new Error(`${selected.asset.assetName} unpacked to an empty directory.`);
-    return `${selected.asset.assetName} downloaded, SHA-verified, and unpacked`;
+    return `${selected.asset.assetName} downloaded from ${componentRepo}, SHA-verified, and unpacked`;
   });
 
   await check('android-apk', async () => {

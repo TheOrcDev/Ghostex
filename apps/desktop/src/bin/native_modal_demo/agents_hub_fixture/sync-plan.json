@@ -1,0 +1,283 @@
+{
+  "generatedAt": "2026-09-16T12:00:01.000Z",
+  "groups": [
+    {
+      "changeCount": 2,
+      "enabledByDefault": true,
+      "kind": "removeDangling",
+      "ops": [
+        {
+          "agentId": "kiro-cli",
+          "note": "target missing: ~/.agents/skills/faster-chrome-devtools-skill",
+          "path": "~/.kiro/skills/faster-chrome-devtools-skill",
+          "verb": "unlink"
+        },
+        {
+          "agentId": "opencode",
+          "note": "target missing: ~/.agents/skills/test",
+          "path": "~/.config/opencode/skills/test",
+          "verb": "unlink"
+        }
+      ],
+      "title": "Remove dangling links"
+    },
+    {
+      "changeCount": 8,
+      "enabledByDefault": true,
+      "kind": "convertWholeFolder",
+      "ops": [
+        {
+          "agentId": "claude-code",
+          "note": "folder symlink; replaced by a real folder of per-skill links",
+          "path": "~/.claude/skills",
+          "verb": "unlink"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills",
+          "verb": "mkdir"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/ghostex-cli",
+          "target": "../../.agents/skills/ghostex-cli",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/ghostex-help",
+          "target": "../../.agents/skills/ghostex-help",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/madda-commit-and-push",
+          "target": "../../.agents/skills/madda-commit-and-push",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/shadcn",
+          "target": "../../.agents/skills/shadcn",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/web-design-guidelines",
+          "target": "../../.agents/skills/web-design-guidelines",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code",
+          "path": "~/.claude/skills/skill-creator",
+          "target": "../../.agents/skills/skill-creator",
+          "verb": "link"
+        }
+      ],
+      "title": "Convert whole-folder links to per-skill links"
+    },
+    {
+      "changeCount": 14,
+      "enabledByDefault": true,
+      "kind": "perSkillLinks",
+      "ops": [
+        {
+          "agentId": "kiro-cli",
+          "note": "identical to the source copy",
+          "path": "~/.kiro/skills/ghostex-cli",
+          "target": "~/.kiro/skills/ghostex-cli.pre-sync-20260916-1200.bak",
+          "verb": "backup"
+        },
+        {
+          "agentId": "kiro-cli",
+          "path": "~/.kiro/skills/ghostex-cli",
+          "target": "../../.agents/skills/ghostex-cli",
+          "verb": "link"
+        },
+        {
+          "agentId": "kiro-cli",
+          "note": "identical to the source copy",
+          "path": "~/.kiro/skills/ghostex-help",
+          "target": "~/.kiro/skills/ghostex-help.pre-sync-20260916-1200.bak",
+          "verb": "backup"
+        },
+        {
+          "agentId": "kiro-cli",
+          "path": "~/.kiro/skills/ghostex-help",
+          "target": "../../.agents/skills/ghostex-help",
+          "verb": "link"
+        },
+        {
+          "agentId": "kiro-cli",
+          "note": "differs from the source; kept for review",
+          "path": "~/.kiro/skills/skill-creator",
+          "verb": "keep"
+        },
+        {
+          "agentId": "kiro-cli",
+          "note": "only here; not in the source",
+          "path": "~/.kiro/skills/plannotator-review",
+          "verb": "keep"
+        },
+        {
+          "agentId": "kiro-cli",
+          "path": "~/.kiro/skills/madda-commit-and-push",
+          "target": "../../.agents/skills/madda-commit-and-push",
+          "verb": "link"
+        },
+        {
+          "agentId": "kiro-cli",
+          "path": "~/.kiro/skills/shadcn",
+          "target": "../../.agents/skills/shadcn",
+          "verb": "link"
+        },
+        {
+          "agentId": "kiro-cli",
+          "path": "~/.kiro/skills/web-design-guidelines",
+          "target": "../../.agents/skills/web-design-guidelines",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills",
+          "verb": "mkdir"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/ghostex-cli",
+          "target": "../../../.agents/skills/ghostex-cli",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/ghostex-help",
+          "target": "../../../.agents/skills/ghostex-help",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/madda-commit-and-push",
+          "target": "../../../.agents/skills/madda-commit-and-push",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/shadcn",
+          "target": "../../../.agents/skills/shadcn",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/web-design-guidelines",
+          "target": "../../../.agents/skills/web-design-guidelines",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/skills/skill-creator",
+          "target": "../../../.agents/skills/skill-creator",
+          "verb": "link"
+        },
+        {
+          "agentId": "opencode",
+          "note": "reads ~/.agents/skills directly; no links added",
+          "path": "~/.config/opencode/skills",
+          "verb": "keep"
+        }
+      ],
+      "title": "Per-skill links"
+    },
+    {
+      "changeCount": 3,
+      "enabledByDefault": true,
+      "kind": "pointerFiles",
+      "ops": [
+        {
+          "agentId": "claude-code",
+          "note": "already the pointer",
+          "path": "~/.claude/CLAUDE.md",
+          "verb": "keep"
+        },
+        {
+          "agentId": "kiro-cli",
+          "content": "Before starting any task, read ~/.agents/main.md in full and follow its instructions.\n",
+          "note": "pointer to ~/.agents/main.md",
+          "path": "~/.kiro/steering/ghostex-shared.md",
+          "verb": "write"
+        },
+        {
+          "agentId": "claude-code:work",
+          "note": "older pointer wording",
+          "path": "~/.claude-profiles/work/CLAUDE.md",
+          "target": "~/.claude-profiles/work/CLAUDE.md.pre-sync-20260916-1200.bak",
+          "verb": "backup"
+        },
+        {
+          "agentId": "claude-code:work",
+          "content": "Before starting any task, read ~/.agents/main.md in full and follow its instructions.\n",
+          "path": "~/.claude-profiles/work/CLAUDE.md",
+          "verb": "write"
+        }
+      ],
+      "title": "Instruction pointer files"
+    },
+    {
+      "changeCount": 2,
+      "enabledByDefault": true,
+      "kind": "hooks",
+      "ops": [
+        {
+          "agentId": "claude-code",
+          "note": "already linked",
+          "path": "~/.claude/hooks",
+          "verb": "keep"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/hooks",
+          "target": "/Users/example/.agents/hooks",
+          "verb": "link"
+        },
+        {
+          "agentId": "claude-code:work",
+          "path": "~/.claude-profiles/work/.skill-lock.json",
+          "target": "/Users/example/.agents/.skill-lock.json",
+          "verb": "link"
+        }
+      ],
+      "title": "Hook scripts and lock file links"
+    },
+    {
+      "changeCount": 2,
+      "enabledByDefault": false,
+      "kind": "pruneLock",
+      "ops": [
+        {
+          "note": "no skill folder in ~/.agents/skills",
+          "path": "~/.agents/.skill-lock.json",
+          "target": "faster-chrome-devtools-skill",
+          "verb": "drop"
+        },
+        {
+          "note": "no skill folder in ~/.agents/skills",
+          "path": "~/.agents/.skill-lock.json",
+          "target": "test",
+          "verb": "drop"
+        }
+      ],
+      "title": "Prune stale lock entries"
+    }
+  ],
+  "scope": "all",
+  "stamp": "20260916-1200",
+  "summary": {
+    "backups": 3,
+    "defaultChanges": 29,
+    "drops": 2,
+    "keeps": 5,
+    "links": 22,
+    "mkdirs": 2,
+    "unlinks": 3,
+    "writes": 2
+  }
+}

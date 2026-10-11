@@ -1,19 +1,16 @@
-import { TOOLTIP_DELAY_MS as BASE_TOOLTIP_DELAY_MS } from '../components/ui/tooltip-config';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { createContext, createElement, useContext, type ReactNode } from 'react';
-import { DEFAULT_SIDEBAR_TOOLTIP_DELAY_MS } from '../shared/ghostex-settings';
 
-/** Sidebar tooltips intentionally wait 300ms longer than the app-wide default. */
-export const TOOLTIP_DELAY_MS = DEFAULT_SIDEBAR_TOOLTIP_DELAY_MS;
+/** The Settings default for `sidebarTooltipDelayMs` (packages/settings-catalog/src/data/defaults.rs). */
+const DEFAULT_SIDEBAR_TOOLTIP_DELAY_MS = 600;
 
-/** Session/browser cards and project headers wait another 700ms before opening. */
-export const SIDEBAR_ITEM_TOOLTIP_DELAY_MS = TOOLTIP_DELAY_MS + 700;
+const SidebarTooltipDelayContext = createContext<number | undefined>(undefined);
 
-/** Fixed action-button labels historically use the shorter app-wide delay. */
-export const SIDEBAR_FIXED_TOOLTIP_DELAY_OFFSET_MS = BASE_TOOLTIP_DELAY_MS - TOOLTIP_DELAY_MS;
-
-const SidebarTooltipDelayContext = createContext(TOOLTIP_DELAY_MS);
-
+/**
+ * CDXC:Tooltips 2026-09-16 DECISION:
+ * User: all sidebar elements, including project titles, must follow the tooltip delay in Settings.
+ * Use the exact configured delay without per-control offsets; AppTooltip isolates each hover delay so moving between labels cannot skip it.
+ */
 export function SidebarTooltipDelayProvider({ children, delayMs }: { children: ReactNode; delayMs: number }) {
   return createElement(
     SidebarTooltipDelayContext.Provider,
@@ -22,10 +19,10 @@ export function SidebarTooltipDelayProvider({ children, delayMs }: { children: R
   );
 }
 
-export function useSidebarTooltipDelayMs(offsetMs = 0): number {
-  return Math.max(0, useContext(SidebarTooltipDelayContext) + offsetMs);
+export function useConfiguredSidebarTooltipDelayMs(): number | undefined {
+  return useContext(SidebarTooltipDelayContext);
 }
 
-export function useSidebarItemTooltipDelayMs(): number {
-  return useSidebarTooltipDelayMs(SIDEBAR_ITEM_TOOLTIP_DELAY_MS - TOOLTIP_DELAY_MS);
+export function useSidebarTooltipDelayMs(): number {
+  return useConfiguredSidebarTooltipDelayMs() ?? DEFAULT_SIDEBAR_TOOLTIP_DELAY_MS;
 }

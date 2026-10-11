@@ -6,9 +6,14 @@ use crate::*;
 
 pub(crate) struct GpuiShellLayoutState {
     pub(crate) active_mode: TitlebarMode,
+    pub(crate) open_views: Vec<TitlebarMode>,
+    pub(crate) view_strip_layout: GpuiViewStripLayout,
+    pub(crate) view_panel_maximized: bool,
+    pub(crate) view_panel_picker_open: bool,
     pub(crate) shell_focus: ShellFocusTarget,
     pub(crate) previous_non_command_focus: Option<ShellFocusTarget>,
     pub(crate) pet_overlay_activities_visible: bool,
+    pub(crate) sidebar_usage_visible: bool,
     pub(crate) agents_workspace: WorkspaceModel,
     pub(crate) agents_workspace_project_id: Option<String>,
     pub(crate) parked_agents_workspaces_by_project: HashMap<String, serde_json::Value>,
@@ -26,6 +31,7 @@ pub(crate) struct GpuiShellLayoutState {
     pub(crate) pending_command_gxserver_cleanup: HashSet<GpuiLocalWorkspaceSessionKey>,
     pub(crate) project_editor_shell: ProjectEditorShellModel,
     pub(crate) project_view_states_by_project: HashMap<String, GpuiProjectViewState>,
+    pub(crate) last_open_view_mode: Option<TitlebarMode>,
     pub(crate) view_pane_layouts: GpuiViewPaneLayouts,
     pub(crate) browser_profiles: BrowserProfileModel,
     pub(crate) browser_tabs: BrowserTabModel,
@@ -62,9 +68,14 @@ impl GpuiShellLayoutState {
             BrowserTabModel::shell_address_only_with_profile(browser_profiles.active_profile_id());
         Self {
             active_mode: TitlebarMode::Agents,
+            open_views: Vec::new(),
+            view_strip_layout: GpuiViewStripLayout::default(),
+            view_panel_maximized: false,
+            view_panel_picker_open: false,
             shell_focus,
             previous_non_command_focus: Some(shell_focus),
             pet_overlay_activities_visible: true,
+            sidebar_usage_visible: false,
             agents_workspace,
             agents_workspace_project_id: None,
             parked_agents_workspaces_by_project: HashMap::new(),
@@ -83,6 +94,7 @@ impl GpuiShellLayoutState {
             pending_command_gxserver_cleanup: HashSet::new(),
             project_editor_shell: ProjectEditorShellModel::shell_default(),
             project_view_states_by_project: HashMap::new(),
+            last_open_view_mode: None,
             view_pane_layouts: GpuiViewPaneLayouts::shell_default(),
             browser_profiles,
             browser_tabs,
@@ -91,12 +103,14 @@ impl GpuiShellLayoutState {
         }
     }
 
+    /// `path` is the window's own layout file (app/workspace_windows/slots.rs).
     pub(crate) fn load_or_default(
+        path: &std::path::Path,
         content_height: f32,
         fallback_availability: ProjectScopedWorkareaAvailability,
         settings: &shared_settings::SharedSidebarSettingsSnapshot,
     ) -> Self {
-        read_json_object(&gpui_workspace_shell_state_path())
+        read_json_object(path)
             .and_then(|object| {
                 Self::from_json_object_with_shared_settings(
                     &object,
@@ -130,7 +144,7 @@ impl GpuiShellLayoutState {
     ) -> Option<Self> {
         /*
         CDXC:Workarea 2026-06-22-06:29:
-        GPUI layout persistence is scoped to placeholder shell state only: titlebar mode, tab/split ids, active selections, focus/Focus mode, bounded canonical gxserver P/G identities, the validated bounded command Action selector used for restart reuse, safe Agents Delayed Send trigger/remaining-time checkpoints, command pane mode/height/tree, Browser tab shell ids with complete sanitized HTTP(S) URLs, project-editor companion sizing, project-editor awake/sleeping recency state, and the single `petOverlayActivitiesVisible` boolean. Do not persist pet activity payloads, titles, paths, raw settings JSON, terminal content, command text, stdout/stderr, user paths, project paths, URL credentials, cookies, secrets, raw page titles, favicon URLs, or unrelated private user content.
+        GPUI layout persistence is scoped to placeholder shell state only: titlebar mode, tab/split ids, active selections, focus/Focus mode, bounded canonical gxserver P/G identities, the validated bounded command Action selector used for restart reuse, safe Agents Delayed Send trigger/remaining-time checkpoints, command pane mode/height/tree, Browser tab shell ids with complete sanitized HTTP(S) URLs, project-editor companion sizing, project-editor awake/sleeping recency state, and the `petOverlayActivitiesVisible`, `sidebarUsageVisible` and `viewPanelPickerOpen` UI booleans. Do not persist pet activity payloads, titles, paths, raw settings JSON, terminal content, command text, stdout/stderr, user paths, project paths, URL credentials, cookies, secrets, raw page titles, favicon URLs, or unrelated private user content.
 
         CDXC:Workarea 2026-06-22-06:29:
         Restoring corrupted or absent GPUI shell state should use the current placeholder defaults because the persisted file is optional app state. This fallback is limited to invalid state-file input and should not mask runtime errors in live layout mutation code.
@@ -383,6 +397,13 @@ impl GpuiShellLayoutState {
             .get("petOverlayActivitiesVisible")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true);
+        // Layout state, not a preference: the usage strip starts hidden on a first
+        // run, on any state file written before it existed, and for anyone whose
+        // state still carries the retired `sidebarUsageExpanded` key.
+        let sidebar_usage_visible = object
+            .get("sidebarUsageVisible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         /*
         CDXC:Navigation 2026-08-07:
         Same key gate as the parked workspaces: accept a plain local project id
@@ -403,22 +424,41 @@ impl GpuiShellLayoutState {
                     .collect::<HashMap<_, _>>()
             })
             .unwrap_or_default();
+        let open_views = open_view_modes_from_shell_state(object.get("openViews"), active_mode);
+        let view_strip_layout = GpuiViewStripLayout::from_shell_state(object.get("viewStrip"));
+        let view_panel_maximized = object
+            .get("viewPanelMaximized")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && active_mode != TitlebarMode::Agents;
+        // The picker is only ever the panel's content while no view is open, so a state written
+        // with a view open can never restore into it.
+        let view_panel_picker_open = object
+            .get("viewPanelPickerOpen")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && active_mode == TitlebarMode::Agents;
+        let last_open_view_mode = object
+            .get("lastOpenViewMode")
+            .and_then(serde_json::Value::as_str)
+            .and_then(TitlebarMode::from_slug)
+            .filter(|mode| *mode != TitlebarMode::Agents)
+            .or((active_mode != TitlebarMode::Agents).then_some(active_mode));
         let view_pane_layouts = object
             .get("viewPaneLayouts")
             .and_then(GpuiViewPaneLayouts::from_shell_state)
-            .unwrap_or_else(|| {
-                GpuiViewPaneLayouts::seeded_from_restored_shell(
-                    active_mode,
-                    &project_editor_shell,
-                    &command_pane,
-                )
-            });
+            .unwrap_or_else(GpuiViewPaneLayouts::shell_default);
 
         Some(Self {
             active_mode,
+            open_views,
+            view_strip_layout,
+            view_panel_maximized,
+            view_panel_picker_open,
             shell_focus,
             previous_non_command_focus,
             pet_overlay_activities_visible,
+            sidebar_usage_visible,
             agents_workspace,
             agents_workspace_project_id,
             parked_agents_workspaces_by_project,
@@ -434,6 +474,7 @@ impl GpuiShellLayoutState {
             pending_command_gxserver_cleanup,
             project_editor_shell,
             project_view_states_by_project,
+            last_open_view_mode,
             view_pane_layouts,
             browser_profiles,
             browser_tabs,

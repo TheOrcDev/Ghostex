@@ -1,5 +1,1168 @@
 # Changelog
 
+## Unreleased
+
+## 10.19.0 - 2026-10-10
+
+**Ghostex 10.19.0 is out.** A new Skills menu shows Ghostex's skills in the chat and terminal, the Work page gets two-line rows, Group by and a one-row filter bar, each workspace window keeps to its own sessions, browser sign-ins in workspaces stay saved, and Colourfulness gets finer steps.
+
+### 💬 Chat and terminal
+- **Skills in the ⋯ menus:** the chat's More actions and the terminal's ⋯ menu list the Ghostex skills the session's agent has installed; pick one to put it in the chat box or type it into the agent, and Configure / Install more opens Settings > Integrations > Agent skills.
+- **Branches moved into More actions:** the floating "This conversation has N branches" button is gone; Branches at the top of the Chat section opens the same list.
+- **Agents' HTML pages open in a floating window over the chat.**
+- **A send waits out a busy agent** instead of retyping into it.
+
+### 🧩 Workspaces and Work Mode
+- **Two-line Work rows** keep every part in the same place, the ticket ID, PR number, repo and project names open their pages, and the owner comes first.
+- **Group by** sorts the Work list by status, repo, project, assignee, type, pull request or last update, with folding headers.
+- **One-row filter bar:** All / issues / PRs and Assigned to me on the left, Filter and View menus on the right, and the page's menus stay inside the page.
+- **A window shows only its own workspace's sessions,** and opening a session of another workspace goes to the window showing it.
+- **The workspace tile is a split button:** one click switches workspace, the chevron opens the menu.
+- **A workspace's browser keeps its sign-ins** after Ghostex closes (sign in once more after updating).
+- **A PR's details find its ticket** whichever chip opened them, plus fixes from live testing.
+
+### 🌐 Browser
+- **Links open in the empty New Tab** instead of leaving it beside the page, everywhere the app opens a link in its browser.
+- **Links that open another app never leave an error page;** a tab opened only for that link closes once you answer.
+
+### 🎨 Theme and views
+- **Colourfulness moves in half steps** (33 positions) from Subtle to Vivid, showing the nearest name, and the Custom colour's depth sliders follow.
+- **Files, Kanban, Automate and extension views say "Loading sessions…"** while Ghostex starts, instead of "unavailable".
+- **The Files view's comment box takes typing on macOS** with transparency on.
+
+### 📱 Phone
+- **The Spaces bar shows its Space buttons again,** the workspace tile is a split button, and the sessions list starts at the screen's edge.
+- **Skills** is in the chat's More actions and the terminal menu, and the chat's Branches item replaces the floating button.
+- **The unused Sidebar projects opacity setting is gone** from Advanced.
+
+## 10.18.0 - 2026-10-10
+
+**Ghostex 10.18.0 is out.** Coordinators are now called Orchestrators, failed sends fix themselves, the phone app stops crashing and reaches your Windows computer again, and Windows hooks, cloning and helper windows behave.
+
+### 🧭 Orchestrators
+- **Coordinators are now called Orchestrators** across the app, the phone, Help and the CLI; `ghostex orchestrator` is the new command and `ghostex coordinator` still works.
+
+### 💬 Chat
+- **Failed sends fix themselves:** Ghostex redraws a stuck screen, retypes once, or restarts the agent on its own conversation and delivers your message, and shows a card with one Fix it button only when that fails. It never restarts an orchestrator or a session with background work.
+- **A Claude session that quit before its first message starts fresh** instead of failing to resume.
+- **Messages from other agents show their real text,** and Not sent appears only when a send really failed.
+- **Claude Code's internal suggestion queries no longer show up as questions in the chat,** and its faint guess at your next message is no longer mistaken for typed text.
+- **Sliding a panel no longer re-wraps or rebuilds the chat every frame,** and the question card's buttons have an outline.
+
+### 🪟 Windows
+- **Agent hooks no longer time out on Windows** for Claude, Codex, Grok, OpenClaude and OpenCode, thanks to @gvastethecreator.
+- **No more console windows flashing** from anything Ghostex starts in the background.
+- **Window glass uses Windows 11's own blur,** so sidebar and panel slides run about three times faster, menus share the panels' bluish fill, and toasts no longer show a square blur; new installs on Windows still start with glass off.
+
+### 📂 Projects and Files
+- **Add Project's clone shows git's progress,** can be cancelled, never hangs on a password prompt, and starts at your drives on Windows.
+- **Project websites like GitHub, Linear and Jira open straight to the page** instead of a command screen.
+- **Confirm delete in the files list is bold red,** and text buttons in Settings and the Agents Hub have an outline.
+- **The hooks card shows Install all only when needed,** with Uninstall all (now confirmed first) in a ⋯ menu and Refresh as an icon, and long extension descriptions show in full on hover.
+
+### 📱 Phone
+- **The Android app no longer crashes** and can send to a Windows computer again; Ghostex on the computer also listens where older phone apps look.
+
+### 🧩 Workspaces and Work Mode
+- **Work Mode adds team Linear keys and GitHub as a workspace's tracker,** with work cards on the phone (Settings > Extensions > Workspaces and Work Mode).
+
+## 10.17.0 - 2026-10-09
+
+**Ghostex 10.17.0 is out.** Workspaces and Work Mode arrive as an extension you can turn on, a chat's history no longer disappears after Escape, dialogs keep their focus on Windows, and the Files editor gets find, Open with and proper Windows editing keys.
+
+### 🧩 Workspaces and Work Mode
+- **Workspaces and Work Mode are a built-in extension, off by default:** turn it on in Settings > Extensions to get workspaces with their own browser sign-ins, a Work page with Linear and GitHub items, Link to and Create Linear ticket on sessions, and your team's Slack flow.
+
+### 💬 Chat
+- **A chat no longer loses its earlier history** after you press Escape and send again.
+- **Long messages show their first lines with Show more,** and scrolling past a very long message no longer lags the app.
+- **Send failures say what actually went wrong** (the message never appeared, appeared twice, or was kept by the agent), and Claude sessions on a saved account are no longer reported as stopped.
+- **Short hex colors like `#abc` show a swatch,** while all-digit numbers like `#1234` stay issue links.
+- **The loading notice stays on one line** when there's room.
+
+### 📂 Files
+- **Ctrl+F (Cmd+F) finds in the open file,** with next and previous match.
+- **Open with works on Windows,** listing your apps and browsers plus Choose another app.
+- **Windows editing keys work in the Markdown editor:** Ctrl+arrows by word, Shift+Home/End, Ctrl+Home/End and Ctrl+Backspace.
+- **File list tooltips sit below the pointer and wrap,** and hovering one no longer closes the floating list.
+
+### 🪟 Windows and dialogs
+- **Dialogs keep their focus:** Rename keeps its selected text and History stays open instead of the main window taking focus back; clicking away closes Rename without renaming.
+- **The floating chat stays open** with two windows, and a second window no longer hides the first window's menu.
+- **Tooltips never block clicks,** and a pane's blue attention line shows along its top edge.
+- **The terminal view's Switch Account opens its account list,** to the right when there's room.
+
+### 🗂️ Sessions
+- **Starting a new session no longer closes your other empty sessions;** turn it back on for Chat agents with Settings > General > Chat > Close empty sessions when starting a new one.
+
+### 📱 Phone
+- **The phone's session menu matches the desktop's Copy, Work Mode and Parked menus,** and its chat connection recovers from a dropped link instead of showing raw errors.
+
+## 10.16.0 - 2026-10-09
+
+**Ghostex 10.16.0 is out.** Chat View no longer starts a terminal it doesn't need, the phone opens chats at once, custom agents can keep their own Claude or Codex login, and the Files editor handles wide tables, selections and long code lines properly.
+
+### ⚡ Speed
+- **Chat View no longer runs a terminal in the background:** a session's terminal starts the first time you switch to it, and your last three stay warm. Terminal View works exactly as before.
+- **On Windows, switching between Chat and Terminal resizes the agent straight away** instead of waiting for a size check.
+- **Settings > General > Faster rendering (experimental) redraws only what changed,** which uses less CPU while agents stream and you scroll; GPUI is updated to the latest upstream.
+
+### 💬 Chat
+- **`#123` issue and PR numbers link to the project's GitHub,** and only real 6- and 8-digit hex colors show a color swatch.
+- **Long code blocks are capped** with an expand button and scroll inside, charts draw in, and list markers and finished tasks are quieter.
+- **A message is never sent twice** when the computer is slow, and its preview bubble always clears.
+- **Codex's weekly limit shows in the status line** on plans that only have a weekly limit.
+- **View and Switch Account in More actions open on click and close on a second click.**
+- **A pane shows its blue attention outline** whenever its session's sidebar dot is blue.
+
+### 👤 Accounts
+- **Custom agents that use their own login keep it:** an agent that sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, or runs its own wrapper, runs as-is, and Ghostex shows "Uses its own login" instead of offering accounts, thanks to @landygg.
+- **Continue automatically is on by default,** and at a limit Ghostex uses another account.
+- **An account whose subscription access was disabled is skipped,** and a message to one of its sessions first moves it to an account with usage; Settings > Accounts says why it turned Manual.
+- **The terminal view's ⋯ menu offers Switch Account** for Claude and Codex, with each account's usage.
+
+### 📂 Files
+- **Wide tables fit the editor like the chat's,** wrapping long columns and scrolling sideways when they still can't fit, with Open in window, Copy as Markdown and Copy as CSV on hover.
+- **Typing over a selection replaces it,** wrapped code lines keep their background, and the editor's scrollbar is always shown.
+- **The floating files list opens only from its button** and slides in from the right, without moving the bar behind it.
+- **Files opened from outside the project before the last update open again** instead of asking to be reopened from a chat link.
+
+### 🪟 Windows and dialogs
+- **Menus with hotkeys widen to fit Windows' spelled-out shortcuts,** and modal scrollbars sit 1px from the window edge.
+
+### 📱 Phone
+- **Chats open at once:** a Chat View session no longer connects its terminal until you switch to it, and chat uses one warm connection per computer instead of a new SSH command per request.
+
+## 10.15.5 - 2026-10-08
+
+**Ghostex 10.15.5 is out.** Windows close when you click away, every conversation keeps its own model, `!` commands get a cleaner card, and the app waits for its background service instead of asking you to click.
+
+### 💬 Chat
+- **Each conversation remembers its own model and effort:** waking or resuming it comes back on what it last used, including a choice for that session only or a `/model` typed in Claude's terminal, and the chat box shows it right away.
+- **`!` commands show as `! command`** with their output in its own bubble below; click the header to fold it, even while it runs.
+- **While Ghostex is still starting, the chat shows its loading skeleton with the normal chat box** and fills in by itself.
+
+### 🗂️ Sidebar
+- **"Loading sessions…" retries every 2 seconds on its own** while Ghostex's background service starts; Try now is still there.
+- **A dragged session card stays under your cursor,** and a pane from another project dims and says it can't split there.
+
+### 🪟 Windows and dialogs
+- **Clicking away closes Quick Access, Settings, Search by Prompt, the viewers and the Agents Hub,** unless you're in the middle of typing something.
+- **Resizing the window closes floating panels and menus,** such as the Files list.
+- **The Settings scrollbar drags again** and sits against the window's right edge.
+- **Files opened from outside the project show their name and a plain path in Open Files.**
+
+### 📱 Phone
+- **The sessions list retries every 2 seconds** while Ghostex on the computer isn't answering, instead of showing a raw error.
+
+## 10.15.0 - 2026-10-08
+
+**Ghostex 10.15.0 is out.** Empryo joins as a built-in agent, the chat feels instant (sending, the model name, `!` shell commands), Windows terminals use PowerShell 7, and Easy Connect pairs Windows administrator accounts.
+
+### 🤖 Agents
+- **Empryo is a built-in agent:** chat, questions and approvals as cards, its model and effort picker, forks, resume, coordinators and threads, and its prompts in Search by Prompt and on the phone. It installs on Windows too and starts switched off in Settings > Agents, thanks to @banozz0.
+- **Haiku 5.5 replaces Haiku 4.5** in the Claude Code and Cursor model pickers, and auto titles and other background helpers run on Haiku 5.5.
+- **Chat messages reach OMP in all eight of its prompt layouts.**
+- **Codex's own update works again inside Ghostex sessions on Windows** (it failed with "Get-FileHash is not recognized").
+
+### 💬 Chat
+- **Sending is instant:** your message leaves the composer and shows in the chat the moment you press Enter, images included.
+- **The model name shows right away,** and new sessions start on the model you last picked.
+- **`!` shell commands show as a Shell card** with their output streaming live.
+- **Scrolling up past a long reply no longer jumps to its top.**
+- The loading notice sits in the middle of an empty chat, tree guide lines line up with the icon above, the answer field's pills always match its text, and the Tasks panel reopens the way you left it.
+
+### 🧭 Coordinators
+- **Clicking a thread in the Threads panel opens it,** resuming a closed one.
+- **The Threads panel shows working threads and those active in the last 2 hours,** and remembers whether you folded it.
+
+### 🗂️ Sidebar and Files
+- **An expanded project shows only New agent, the agent picker and a ⋯ menu;** everything else moved into the menu.
+- **Clicking the file name at the top of the Files view copies its full path.**
+
+### 🪟 Windows
+- **Terminals use PowerShell 7 wherever it is installed** (Program Files, your user folder, the Microsoft Store or PATH) and Windows PowerShell 5.1 until then; Settings > General > Terminal offers **Install PowerShell 7** when only 5.1 is present.
+- **Easy Connect pairs a phone with a Windows administrator account** after one Windows admin prompt.
+- **Every build shows the real Ghostex version,** and About shows the app icon.
+
+### 📱 Phone
+- **A simpler sessions list,** Empryo in chat and Find, and pairing waits for the computer's admin prompt.
+
+## 10.14.0 - 2026-10-07
+
+**Ghostex 10.14.0 is out.** Agents can show charts and pages right in the chat, Cursor and ZCode work properly on Windows, Settings > Agents gets a simple switch per agent, coordinators show one tidy list of threads, and the phone opens file links and attaches pictures reliably.
+
+### 🤖 Agents
+- **Settings > Agents has a switch on every agent.** Turn agents on or off instead of deleting them; agents you used but turned off stay dimmed in place, and agents you never used wait under More agents, where one click turns one on and offers its install. Add custom agent is the last row, and a single line with Fix all lists only real problems.
+- **Cursor works end to end on Windows:** sign-in, its plan approval and mode-switch choices as chat cards, model switching from the chat, questions answered from the chat, and Stop that really stops it.
+- **A ZCode session that exits shows a red card with Restart ZCode and Open terminal,** and opens in Chat View even when its hooks never connected, thanks to @Ni7e.
+- **Pi starts with the model and thinking level you pick, gets its own status line, and resumes by its session ID;** OMP and Amp get the same turn handling on Windows.
+- **Windows: agent CLIs installed through npm or mise (ZCode, Codex, Gemini, Copilot) no longer show as not installed** or fail their version check.
+
+### 💬 Chat
+- **Agents can show charts, tables, stat tiles and short layouts in the chat, and open small HTML pages as cards,** on the computer, the web and the phone. Ask for it with `$ghostex-visuals`; install the skill in Settings > Integrations.
+- **An answered question no longer flashes back as answerable** before the answer appears.
+- **The `# Changelog
+
+, `/` and `@` menus scroll and follow the pointer without lag,** even with a long chat.
+- **Links to Windows paths such as `C:\Users\you\.claude\…` open the right file.**
+- **A message sent to a session that hasn't started yet starts it,** instead of waiting forever.
+
+### 🧭 Coordinators
+- **The Threads panel is one simple list:** working threads first, then the three most recent, and "N more" shows every thread, closed ones included, each still one tap away. A thread stuck on a permission only you can give says Needs your approval.
+- **Under an expanded coordinator the sidebar shows threads working or active in the last 2 hours,** with an "N older threads" row for the rest.
+- **Hovering a coordinator turns its crown into the fold chevron.**
+
+### 🗂️ Sidebar and Spaces
+- **Go to Space 1–9 hotkeys:** Cmd+Option+Shift+1–9 on macOS, Ctrl+Alt+Shift+1–9 on Windows and Linux, following the order of your Space row.
+- **Spaces follow the machine you're looking at:** a remote computer shows its own Spaces when it has them turned on.
+- **Dragging projects works everywhere:** above the first project, over another project's sessions and threads, and the dragged project stays under the pointer. The project chevron is now part of its header button.
+
+### 👥 Accounts
+- **Auto-redeem uses a banked reset 5 minutes before it expires.** Using one as soon as you hit a usage limit in its last 24 hours is a separate switch, off by default.
+
+### 📱 On the phone
+- **Tapping a link to a file on your computer opens it:** HTML pages, Markdown, text and code, and pictures.
+- **Android: attaching a picture no longer fails with "open failed".**
+- **Charts and tables from agents, and the simpler coordinator Threads list, show on the phone too.**
+
+### 🪟 Windows
+- **Thin overlay scrollbars in the Files view, browser tabs, the Code view and extension views.**
+- **Shutting down Windows no longer shows an error dialog for every session.**
+- **The setup intro video plays inside the app.**
+- **The Windows app can install Ghostex on Linux remote machines,** which used to show Machine unsupported.
+- **Status line commands no longer leave hundreds of stray processes running.**
+
+### 🧩 Extensions and integrations
+- **Cloud Boxes is now a built-in extension on macOS and Linux, off by default.** Turn it on in Settings > Extensions; your boxes and logins are kept.
+- **Installing Computer Use or Browser Use also installs the Cua Driver skill.**
+
+### 🩹 Fixes and polish
+- **macOS: `brew upgrade` no longer fails and uninstalls Ghostex;** Ghostex now leaves Homebrew's `ghostex` link alone and repairs it (#203).
+- **Starting a new session no longer closes a session you were using** (#204).
+- **Windows: opening Settings while it's already open no longer closes it.**
+- **The titlebar Update button is rounded.**
+
+## 10.13.0 - 2026-10-06
+
+**Ghostex 10.13.0 is out.** Ghostex can spend a banked Claude or Codex reset before it expires, Windows gets real system notifications, working sessions can fold into a Working section, the built-in browser can open, save and copy links and images, and Pi works much better.
+
+### 👥 Accounts
+- **Ghostex can spend a banked Claude or Codex reset for you before it expires.** It only uses a reset that would otherwise be lost. Turn it on per provider in Settings > Accounts > Auto-redeem expiring resets (off by default).
+- **The bell warns in red when a banked reset expires within 3 days and again within 24 hours,** with an optional system notification (Settings > General > Notifications > Reset Expiry Notifications).
+
+### 🔔 Notifications
+- **Windows: attention alerts and reset warnings show as real Windows notifications,** and clicking one brings Ghostex forward on that session. Linux shows them through the desktop's notifications.
+
+### 🗂️ Sidebar
+- **Group working sessions moves sessions into a collapsed Working section under their project while their agent works.** The session you have open and sessions with an unanswered question stay in Sessions, and a session goes back on its own when its agent stops. Turn it on in Settings > Sidebar or the sidebar's More > Sort & Filter (off by default).
+- **Drag sideways with the mouse on an empty part of the sidebar list to switch Spaces,** like a sideways trackpad swipe; one switch per drag, with a grabbing hand cursor.
+- **Sidebar setting changes show right away** instead of after a delay.
+
+### 🧭 Coordinators
+- **The Threads panel lists the 3 most recently finished threads,** with older ones folded into "N more done", on the computer and the phone.
+- **Threads keep the title their coordinator gives them.**
+- **A message to an agent is typed at most once,** even when the send is retried after a timeout or a restart.
+
+### 🤖 Pi
+- **Pi works on native Windows and reports its state accurately:** a finished turn only when nothing more is coming, Esc as an interrupt, and its dialogs as needing you.
+- **The chat shows Pi's thinking, links each tool call to its result, and shows provider errors and Pi's edit diffs.**
+
+### 🌐 Browser
+- **Right-click a link or an image in the built-in browser** to open it in a new tab, save it, or copy it or its address. Downloads a page starts ask where to save instead of being dropped.
+
+### 🧩 Integrations
+- **Desktop control is now called Fast Computer & Browser Use,** links to the trycua/cua project, and installs the driver's own Cua Driver skill, which the Agent skills list can also install or remove.
+
+### 🪟 Windows
+- **The Dev servers panel lists this computer's servers in PowerShell mode** instead of saying it could not inspect WSL ports.
+- **`ghostex ports` works on native Windows,** so the phone's Web preview lists this computer's servers with their page titles.
+- **Clicking the title bar no longer leaves the chat selecting text as the mouse moves.**
+- **The "Paste potentially unsafe text?" confirmation opens above browser tabs and the Files view** instead of being hidden behind them.
+
+### 📱 On the phone
+- **Android: the status bar shows the Ghostex flower** instead of a terminal icon.
+
+### 🩹 Fixes and polish
+- **macOS: arrow keys move the cursor in the VS Code view** instead of typing red FS/GS/RS/US characters.
+- **Every tooltip has rounded corners.**
+- **Opening a General setting by name lands on General with the setting found,** instead of an empty search on the last page you used.
+- **A `ghostex` command that times out says so** instead of telling you to start Ghostex.
+
+## 10.12.0 - 2026-10-05
+
+**Ghostex 10.12.0 is out.** Make any session a coordinator without interrupting it, run coordinators on ZCode, switch Claude accounts on Windows, copy whole tool calls from the chat, and a new session tidies away the project's empty ones.
+
+### 🧭 Coordinators
+- **Make Coordinator turns an existing session into a coordinator without interrupting it.** Right-click a Claude, Codex or ZCode session, open Advanced and choose Make Coordinator, or use the session's menu on the phone. It keeps its conversation, gets the crown right away, and picks up the coordinator playbook once its current turn ends. From a terminal: `ghostex coordinator promote <session>`.
+- **Coordinators can run on ZCode, with a model picker** in New Coordinator…, thanks to @Ni7e.
+- **Messages between agents name the sender after the message,** so a new thread titles itself from its task instead of from the agent that sent it.
+
+### 👥 Accounts
+- **Windows: Ghostex confirms a Claude account switch by checking which account the restarted agent really uses.** Switching on Windows also needs a Claude Swap version with Windows history sharing, which is on its way upstream.
+- **Switching the account of a session you never sent a message to works,** instead of failing with "No conversation found".
+- **A failed account switch card has a close (X) button** that dismisses it on the computer and the phone.
+- **Add account in Settings > Accounts always opens the sign-in form,** and long email addresses in menus are shortened instead of stretching the menu.
+- **Account chips fill their row in the sidebar.**
+
+### 💬 Chat
+- **Tool calls in the chat are selectable and have a copy-all button** that copies the tool's name, input and result, on the computer, the web and the phone.
+- **The spinning working icon no longer shows flickering square lines.**
+
+### ⌨️ Terminal
+- **Shift+Insert pastes** in terminals and in text fields such as the chat composer and dialogs, thanks to @rgruenewald.
+- **Windows: Shift+Enter inserts a newline in Claude Code.**
+- **Windows: no more leftover characters at the left edge of a terminal,** for example after Claude's /usage.
+
+### 🗂️ Sessions and sidebar
+- **Starting a new session closes the project's older sessions that are still completely empty:** nothing sent, no chat draft, nothing queued and no text in the agent's input box. This applies to the hotkey, the project's agent button and menu, the New Thread picker and the phone.
+- **Windows: a session can no longer take on another session's identity** when Windows reuses a process ID or an agent runs `claude -p` inside it, and a title taken from the wrong conversation corrects itself.
+- **Search and Notifications stay in the sidebar's top row;** only Feedback moves into the sidebar menu when the sidebar is narrow.
+- **Windows: the sidebar's minimum width is 200 px (300 px on a 150% screen),** so its top row always fits.
+
+### 📱 On the phone
+- **SVG project icons show on the phone,** such as a project's favicon.svg.
+- **Image chips in the phone's composer no longer leave a stray line after them.**
+- **Windows: Easy Connect pairing with the phone works,** because the pairing code now names the port the Ghostex server really listens on.
+
+### 🩹 Fixes and polish
+- **Model pickers show this release's model lineup right after an update** instead of the previous release's, thanks to @Ni7e.
+
+## 10.11.1 - 2026-10-04
+
+**Ghostex 10.11.1 is out.** On Windows, Ghostex's small pop-ups now stay with Ghostex instead of floating over other apps, and the agent menu keeps all its rows.
+
+### 🪟 Windows
+- **The chat's scroll-down and Esc pills, tooltips, toasts and menus no longer stay on top of other apps** after you switch away from Ghostex, including when one opens while Ghostex is in the background.
+- **The agent menu keeps its last rows,** New Coordinator… and Configure, when it opens right after a smaller menu.
+
+## 10.11.0 - 2026-10-04
+
+**Ghostex 10.11.0 is out.** Send feedback straight from the sidebar, new threads fill in and agents start sooner, Freebuff and seven more agents get a status line, and on Windows the window drags smoothly with its dialogs, menus and toasts following along.
+
+### 📣 Feedback
+- **New: Send Feedback from the sidebar.** The chat-bubble button in the sidebar's top row opens a pop-up where you describe what's broken, confusing or missing and paste screenshots, review the exact GitHub issue before it goes out, and get a link to the issue once it's filed. If you hit the sending limit, it tells you when you can send again.
+
+### ⚡ Faster starts
+- **A new thread's composer fills in much sooner:** its mode and the model chosen at launch show right away, and a model or mode you pick in the composer is never replaced.
+- **New agents start sooner,** without a full hook check before every launch and without waiting for the chat to load first.
+- **Windows: Claude's status line updates no longer start PowerShell,** so each one arrives in a fraction of the time.
+
+### 🤖 Agents
+- **Freebuff sessions drop the "Freebuff:" prefix from their titles,** and the sidebar shows when Freebuff is working.
+- **Agents without a status line of their own get one showing the repo and branch:** Freebuff, Pi, OMP, Grok Build, Antigravity, OpenCode, ZCode and OpenClaude.
+- **Chat offers "Switch model in CLI" for agents whose models it can't list,** on the computer and the phone.
+- **Windows: sessions are no longer named "Windows PowerShell".**
+
+### 🪟 Windows
+- **Dragging the window is smoother,** because Ghostex no longer rebuilds a hidden window on every step of the move.
+- **Drag the window from the empty top of the sidebar,** and double-click there to maximize it.
+- **Overlay windows follow the window when it moves:** the maximized composer, dialogs and their close X, dropdowns, toasts and the Docs drawer.
+- **Clicking a dialog's close X no longer flashes the main window.**
+- **Tooltips and toasts no longer show a square box behind their rounded corners.**
+- **The chat's scroll-down and Esc pills show with transparency on,** including at 125% and 150% display scaling.
+- **Transparency is off by default on Windows,** so the window is fast and solid. Turn it on in Settings > Theme > Enable transparency.
+
+### 🩹 Fixes and polish
+- **Transparency Strength defaults to 10,** and Blur shows only where it changes something: on Windows once What shows behind the glass is no longer Desktop and windows, and Menu blur only on macOS.
+- **macOS: app dialogs move with the main window,** and the Automate dialog behaves like the other dialogs.
+- **A Codex question card can still be answered after Codex closed its question box,** thanks to @rgruenewald.
+- **The Extensions page has a flatter filter row,** and its count includes only the extensions it offers.
+
+## 10.10.0 - 2026-10-04
+
+**Ghostex 10.10.0 is out.** Coordinators check that the work they hand to a thread actually arrives, Freebuff joins the agents with chat, the phone can start a coordinator and nests its threads, embedded pages can open apps like Okta Verify, and Windows gets a working account sign-in, a red Close button and more reliable remote setup.
+
+### 🧭 Coordinators
+- **Coordinators check that a thread received its work.** A new thread reports started only once its brief has arrived, and the coordinator hears about any message that never reached a thread.
+- **`ghostex agents send` says whether a message was delivered,** pending, accepted or queued, and control characters in a message no longer act as keys.
+- **New Coordinator… is first in a project's agent menu,** and a coordinator keeps the name you gave it.
+- **The crew badge counts working threads, else waiting ones, else all of them,** with a tint that matches.
+
+### 🤖 Agents
+- **Freebuff joins the agents with simple chat support:** messages, replies, tool results and its questions as chat cards. Its chat appears after the first message, and sign-in and `/model` stay in its terminal.
+- **macOS: agents start for fish users whose agent command is only on fish's PATH,** and they keep Ghostex's prompt editor, thanks to @escottalexander.
+- **A chat message sent while the computer is busy is no longer lost** when its paste arrives late.
+
+### 📱 On the phone
+- **Start a coordinator from the phone's agent menu,** and its threads nest under it as they do on the computer.
+- **A Handoff's new conversation opens with the handover link in its chat box.**
+
+### 🪟 Windows
+- **Signing in to an account from Settings > Accounts works on Windows.**
+- **The window buttons reach the top-right corner, and Close turns red on hover.**
+- **Remote setup over SSH finds the SSH server reliably** and says clearly what blocks it, such as missing admin rights, a pending restart or a policy block.
+- **The Ghostex server never runs your sessions from an SSH or background session,** and a server started over SSH keeps running when nobody is signed in.
+- **A new agent created in another project gets focus.**
+
+### 🌐 Browser and extensions
+- **Embedded pages can open other apps and reach local apps after asking,** so sign-ins that use Okta Verify work. Ghostex asks before opening an app or letting a site connect to apps on this computer.
+- **Prerender Buddy is in the extension store:** open your Prerender Buddy workspace beside your agent to review AI visibility, crawler access, website health and articles.
+
+### 🩹 Fixes and polish
+- **Full Reload keeps focus on the session it reloads.**
+- **The chat keeps following new output** at the bottom, and the scroll-down button shows exactly when it doesn't.
+- **The chat history rail is shorter and starts below the fork button.**
+- **A modal's close X sits on its top-right corner** and shows whenever the pointer is in the modal's top 80px.
+- **Dragging a session no longer reveals hidden sidebar sections.**
+- **Experimental terminal shaders skip terminals they can't draw on,** thanks to @vespillo-tech.
+
+## 10.9.1 - 2026-10-02
+
+**Ghostex 10.9.1 is out, and it brings 10.9.0 to macOS:** Cloud Boxes, more windows for other monitors and Spaces, menus and dialogs that open on the monitor you are using, and everything else in the 10.9.0 notes below. Every platform also gets files that open in the browser, highlighted chat search and a clear message when a remote computer can't connect.
+
+### 📂 Files
+- **Open HTML, Markdown and drawings in your browser** with the open-in-browser button in the Files header. Markdown opens as a rendered page with its diagrams, and a drawing opens as an editor that saves back to the file. The button's Open With arrow, and Open Externally and Open With on a file's right-click menu, open the file in another browser or app.
+- **Pinch to zoom an Excalidraw drawing** with the trackpad.
+- **The Show files button is the last button in the header row,** so it no longer covers the other buttons, and the Open Files close-all x sits in a circle.
+
+### 💬 Chat
+- **Search highlights the words it found,** yellow for every match and orange for the selected one, and scrolls the selected match into view, on the computer and the phone.
+- **Cmd+F opens chat search from the chat box,** and typing in the search field keeps its focus when another session switches to Chat.
+
+### 🌐 Remote computers
+- **A remote computer that can't connect says why** in its sidebar tab, with Reconnect and Remote Settings buttons, and its cloud turns red.
+- **A wrong SSH password is no longer retried every minute,** so the account is not locked out. Saving the new password reconnects.
+
+### 🩹 Fixes and polish
+- **The Search by Prompt placeholder is never cut off** by the filter buttons in a narrow window.
+- **A modal's close button sits in its corner** and appears when the pointer comes near it.
+- **New Folder in Add Project looks like a button you can click.**
+
+## 10.9.0 - 2026-10-01
+
+**Ghostex 10.9.0 is out.** Run agent threads in Cloud Boxes on this computer, in the cloud or on your own server, open more Ghostex windows for other monitors and Spaces, turn Actions, Open In and Spaces on or off as built-in extensions, and get wrapping tables, Antigravity questions in chat and native Find on the phone.
+
+### 📦 Cloud Boxes
+- **Run an agent thread in an isolated box instead of on this computer.** Boxes run locally with Docker, in the cloud on Hetzner, Vercel, Daytona, E2B or DigitalOcean, or on your own server over SSH, and the session keeps working like any other: sleep and wake, messages, notifications and its terminal.
+- **Set it up from Settings > Cloud Boxes,** or press Set It Up for Me and an agent installs and configures everything, asking before anything that costs money.
+- **Pick where a thread runs from the Run on row** in New Thread or above a new chat thread's message box, on the computer, the phone and in the browser. The box starts with your first message.
+
+### 🪟 More windows
+- **File > New Window (Cmd+Shift+N) opens another full Ghostex window** for another monitor or Space, also from Quick Access and the sidebar's More menu. Each window keeps its own selection, tabs, panes and views, and every open window reopens at launch.
+- **Every window gets the Code view, glass and Keep Awake,** a Window menu lists the open windows, and Cmd+` cycles them.
+- **Menus, dialogs and toasts open on the monitor of the Ghostex window you are using,** so the chat's model menu and its other popups no longer appear on the main display. Floating Capture works on every display too.
+
+### 🧩 Built-in extensions
+- **Actions, Open In and Spaces each have an on/off switch** under Features in Settings > Extensions. Turning one off hides its pages, buttons, hotkeys, menus and Quick Access rows, and your saved actions, open targets and Spaces are kept for when you turn it back on.
+- **SpaceO installs from Settings > Integrations,** giving agents their own headless displays on Apple Silicon computers with macOS 14 or later.
+
+### 💬 Chat
+- **Wide tables wrap to fit the chat,** and expanded tables and pictures open over the whole window, on the computer and the phone.
+- **Antigravity questions are answered from the chat card,** and a mode pill switches between Default, Accept edits and Plan.
+- **A picture that can't be shown says why in a compact card** with its shortened folder.
+- **Typing in a long chat is faster,** because the conversation is no longer laid out again on every key.
+- **OMP sessions are named OMP in chat,** and messages reach OMP whatever symbol theme it uses.
+
+### 🧭 Coordinators
+- **Fold a coordinator's threads with the chevron beside its crown,** and the crown is white on dark themes and black on light ones, on the computer and the phone.
+- **The crew badge shows one number,** orange while a thread works and light blue while one waits, and resolving a finished thread closes its session while keeping its conversation to reopen later.
+- **Threads for work in another folder start in the coordinator's own project** with that folder in their brief.
+
+### 📱 On the phone
+- **Find Prompts is native screens** that open with the search field focused and the keyboard up.
+- **The phone chat gets Simple mode, Saved prompts and Switch Account,** and text fields and dialog buttons stay above the keyboard everywhere.
+- **The phone's app icon matches the desktop app icon.**
+
+### 🩹 Fixes and polish
+- **Experimental terminal shader effects on macOS.** Turn on Enable Experimental Features in Settings > Advanced, then Custom shaders at the bottom of the Terminal section runs the custom shaders from your Ghostty config. Thanks to @vespillo-tech.
+- **First-run setup opens on the Ghostex intro video,** with setup continuing as usual when you are offline.
+- **The mouse Back and Forward buttons walk the Settings pages again,** and a sign-in that finishes after you leave Settings reopens it at Accounts.
+- **Settings > Accounts shows its accounts at once,** and the account editor saves edits as you make them.
+- **Settings, Search by Prompt, the Agents Hub, Commit Changes and File Diff open 10% bigger.**
+- **A custom agent starts on a remote computer,** and a refused remote start says why.
+- **Sessions dropped between pinned rows pin at that spot,** and drop lines show exactly where a row will land.
+- **An Excalidraw drawing no longer reloads after its own autosaves,** and the Files comment box opens on the Files view's monitor.
+
+## 10.8.1 - 2026-10-01
+
+**Ghostex 10.8.1 is out.** Coordinators start, brief and supervise a crew of agent sessions for you, Pi and OMP get the model picker, Escape asks twice before it interrupts a working agent, the phone can search every computer's sessions, and Linux gets 10.7.0's features together with its own fixes.
+
+### 🧭 Coordinators
+- **A coordinator is one agent you talk to about a stream of work that hands every real task to a thread,** an ordinary agent session it starts and briefs, so it stays free to talk while the threads work in parallel. Start one from a project's Select Agent menu with New Coordinator, then pick Claude or Codex, a model, and an optional goal and first request.
+- **Threads sit under their coordinator in the sidebar and in a Threads panel above its chat box,** grouped under Waiting on you, Working and Finished, on the computer, the phone and in the browser. Click a thread to watch it or answer its questions directly.
+- **Reports come back by themselves.** When a thread finishes or waits on a question, the coordinator is told, checks the work and tells you what needs you. It can give each thread its own worktree, and it remembers standing instructions and notes you ask it to keep.
+
+### 💬 Chat
+- **Pi and OMP get the model picker,** listing every model they can use from the providers you are logged in to, each with only the reasoning levels it supports. Picks apply to that session only.
+- **Escape asks for a second press within 2 seconds before it interrupts a working agent,** and a red Agent was interrupted notice shows for 2 seconds afterwards. Turn it off in Settings > Chat > Press Escape twice to interrupt.
+- **The model menu keeps the reasoning level you picked** when the highlight moves to another model that offers it, and a model change followed by an effort change shows as one pill.
+- **Every session Ghostex opens follows its agent's Default Agent View,** including created, forked, restored and resumed ones, and a name you typed shows as renamed by you.
+- **A message from the session's own background agent shows as a Message from card** naming that agent.
+
+### 📱 On the phone
+- **Search every computer's sessions from the Sessions header,** with the same rules as the desktop.
+- **The phone shows a coordinator's Threads panel,** and its chat and session menu match the desktop's latest changes.
+
+### 🗃 Sidebar, sessions and windows
+- **Check for Updates, Restart and Quit are in the sidebar menu and Quick Access.**
+- **The session menu lists Rename, Pin, Snooze, Park, Sleep and Note, then Tag As,** on the computer and the phone, and a session waiting on an unanswered question is never put to sleep.
+- **A click anywhere in a view focuses it,** so Cmd+W closes the view you clicked in, and with a Browser pane focused the mouse's back and forward buttons, swipes and the Back and Forward hotkeys walk the browser's own history.
+- **A file outside the project opens by its real path in Files,** with its images, links and notes working.
+- **Tooltips are darker in dark mode,** the update notice fits small screens, and the notification list keeps the 40 newest.
+
+### 🐧 Linux and Windows
+- **Linux gets everything from 10.7.0 in this release,** including Floating Capture, one-click installs and Side chat for Codex, since 10.7.0 shipped without a Linux build.
+- **Linux: the interface keeps its normal size under Hyprland** even when the launcher drops its environment, and dropdowns have the same solid background as the sidebar's top menu.
+- **Windows: Claude Code's status line works,** Fast Computer Use no longer shows the macOS permission rows on Windows and Linux, and the model menu shows Alt instead of the Option symbol.
+
+### 🩹 Fixes
+- **Committing a change that deletes an already staged file no longer fails** with pathspec did not match.
+- **Native Settings and dialog controls are named for VoiceOver,** and the Sleeping Sessions and Highlight unanswered questions rows are back in Settings.
+
+## 10.8.0 - 2026-10-01
+
+**Ghostex 10.8.0 is out.** Coordinators start, brief and supervise a crew of agent sessions for you, Pi and OMP get the model picker, Escape asks twice before it interrupts a working agent, the phone can search every computer's sessions, and Linux gets 10.7.0's features together with its own fixes.
+
+### 🧭 Coordinators
+- **A coordinator is one agent you talk to about a stream of work that hands every real task to a thread,** an ordinary agent session it starts and briefs, so it stays free to talk while the threads work in parallel. Start one from a project's Select Agent menu with New Coordinator, then pick Claude or Codex, a model, and an optional goal and first request.
+- **Threads sit under their coordinator in the sidebar and in a Threads panel above its chat box,** grouped under Waiting on you, Working and Finished, on the computer, the phone and in the browser. Click a thread to watch it or answer its questions directly.
+- **Reports come back by themselves.** When a thread finishes or waits on a question, the coordinator is told, checks the work and tells you what needs you. It can give each thread its own worktree, and it remembers standing instructions and notes you ask it to keep.
+
+### 💬 Chat
+- **Pi and OMP get the model picker,** listing every model they can use from the providers you are logged in to, each with only the reasoning levels it supports. Picks apply to that session only.
+- **Escape asks for a second press within 2 seconds before it interrupts a working agent,** and a red Agent was interrupted notice shows for 2 seconds afterwards. Turn it off in Settings > Chat > Press Escape twice to interrupt.
+- **The model menu keeps the reasoning level you picked** when the highlight moves to another model that offers it, and a model change followed by an effort change shows as one pill.
+- **Every session Ghostex opens follows its agent's Default Agent View,** including created, forked, restored and resumed ones, and a name you typed shows as renamed by you.
+- **A message from the session's own background agent shows as a Message from card** naming that agent.
+
+### 📱 On the phone
+- **Search every computer's sessions from the Sessions header,** with the same rules as the desktop.
+- **The phone shows a coordinator's Threads panel,** and its chat and session menu match the desktop's latest changes.
+
+### 🗃 Sidebar, sessions and windows
+- **Check for Updates, Restart and Quit are in the sidebar menu and Quick Access.**
+- **The session menu lists Rename, Pin, Snooze, Park, Sleep and Tag As first,** with Note under Advanced, and a session waiting on an unanswered question is never put to sleep.
+- **A click anywhere in a view focuses it,** so Cmd+W closes the view you clicked in, and with a Browser pane focused the mouse's back and forward buttons, swipes and the Back and Forward hotkeys walk the browser's own history.
+- **A file outside the project opens by its real path in Files,** with its images, links and notes working.
+- **Tooltips are darker in dark mode,** the update notice fits small screens, and the notification list keeps the 40 newest.
+
+### 🐧 Linux and Windows
+- **Linux gets everything from 10.7.0 in this release,** including Floating Capture, one-click installs and Side chat for Codex, since 10.7.0 shipped without a Linux build.
+- **Linux: the interface keeps its normal size under Hyprland** even when the launcher drops its environment, and dropdowns have the same solid background as the sidebar's top menu.
+- **Windows: Claude Code's status line works,** Fast Computer Use no longer shows the macOS permission rows on Windows and Linux, and the model menu shows Alt instead of the Option symbol.
+
+### 🩹 Fixes
+- **Committing a change that deletes an already staged file no longer fails** with pathspec did not match.
+- **Native Settings and dialog controls are named for VoiceOver,** and the Sleeping Sessions and Highlight unanswered questions rows are back in Settings.
+
+## 10.7.0 - 2026-09-30
+
+**Ghostex 10.7.0 is out.** Floating Capture puts a floating button over every app for screenshots and quick prompts, every install button now works with one click on a fresh computer, Mermaid diagrams are drawn in chat, window glass gets Blur sliders, GPT 6.1 Sol and Side chat arrive for Codex, off-screen web pages sleep to free memory, and Linux and Windows get a round of fixes.
+
+### 📸 Floating Capture
+- **A floating Ghostex button over every app shows how many sessions are working, waiting for you, or asking a question.** Turn it on at the top of Settings > Integrations > Floating Capture or during setup (off by default), drag it anywhere, or drop it against a screen edge to tuck it away as a thin tab.
+- **Screenshot an area, the current app or the full screen from any app,** then crop it, zoom and pan, and add arrows, text and rectangles before it goes into your prompt. Click the button or press Cmd+Ctrl+Shift+S (Alt+Ctrl+Shift+S on Windows and Linux) to open the panel, or use the same keys with A, Space, F or T to run an action straight away.
+- **Write a prompt without switching to Ghostex.** The floating prompt box sends to a new session in the project you last used, or to any project or running session you pick, and a prompt you close without sending is kept as a draft in the sidebar. Ghostex switches to the session after a send without coming in front of the app you are in. Screenshots need Screen Recording permission on macOS, and Linux support is X11 only.
+
+- **Floating Capture replaces App Shots,** which is removed together with its settings.
+
+### 🧰 One-click installs
+- **Every install button works with one click on a fresh computer and installs what it needs first,** and its tooltip says exactly how Ghostex installs it. Installing an agent that needs npm installs Node.js on its own.
+- **Settings > Integrations > Tools lists the tools Ghostex can set up for you:** Node.js and npm, uv, Homebrew, Linux system tools, Beads, and the GitHub and GitLab CLIs. Your own copies are used when you have them; otherwise Ghostex downloads the official release, checks it, and gives you Update, Reinstall and Uninstall buttons.
+- **Claude Swap and Codex Swap install with one click,** Install Beads appears on the Kanban notice, and Add Project offers to install the GitHub or GitLab CLI.
+- **Trycua is now called Fast Computer Use** in Settings > Integrations, and it installs in the background instead of opening a terminal tab.
+
+### 💬 Chat and agents
+- **Mermaid diagrams an agent writes are drawn as diagrams in the desktop chat.** Source switches to the diagram's text, Copy copies it, and the expand button opens a larger view you can zoom and pan.
+- **GPT 6.1 Sol takes the Sol spot in the Codex model picker,** and GPT 6 Sol moves under Legacy.
+- **In the model picker, Enter now saves the highlighted model and level as the agent's default,** and Option+Enter uses them in this session only, on the computer and the phone.
+- **Codex's Sign in with Device Code shows a Sign in to Codex card** with a clickable link and the one-time code, handy on a remote computer, and when Codex quits to the terminal the chat offers Restart Codex on the same conversation.
+- **Codex chats get Side chat and `/btw`.** Codex answers in a side conversation in its terminal, so sending one switches to Terminal View. In any chat, typing `/btw` on its own and pressing Enter turns Side chat on without sending anything, and Close hides a side question card at once.
+- **Messages between agents show as cards:** a message from another agent shows its first two lines, a message your session's agent sent stays closed, and a click opens either one, on the computer and the phone.
+
+### 🎨 Window glass, windows and web pages
+- **Settings > Theme > Transparency has a Blur slider** that sets how soft what shows behind the window looks, plus a Menu blur slider on macOS for menus and tooltips.
+- **Settings and Search by Prompt open 30% larger,** app windows such as Settings close with a corner close button instead of a click outside, and tab rails and segmented controls no longer paint an opaque slab over frosted surfaces.
+- **Off-screen web pages sleep to free memory.** A browser tab or a Files, website or extension view that has been off screen for its Auto Sleep time closes and reloads when you select it again; tabs playing sound or holding text you have not sent stay awake, and the page another Space opens on stays loaded so swiping there is instant.
+- **An open menu hides the tooltips of the window behind it,** typing and shortcuts work right after a dialog closes, a newly opened view tab scrolls into view, and the project header buttons in the sidebar show their hotkeys.
+- **Kanban lanes keep a minimum width and the board scrolls sideways,** and long lanes stay fast.
+
+- **Link CLI accepts the `ghostex` command that Homebrew installed** instead of reporting it as a foreign command, and the phone finds the CLI on your computer over SSH.
+
+### 🐧 Linux and Windows
+- **Linux: the sidebar and Settings keep a normal size under XWayland** (Hyprland and Omarchy among them), and closing Settings no longer crashes the built-in browser's graphics process.
+- **Linux: menus, popups and dialogs no longer get a title bar from the window manager,** they are opaque where the desktop cannot blur behind them, and a restored window keeps its saved size and position instead of drifting on each launch.
+- **Windows and Linux: Ctrl+click opens terminal links,** Windows drive and backslash paths are recognised as links, and Quick Access and the Files view show Ctrl instead of the Cmd symbol.
+- **Windows: Codex sessions in different projects no longer share one background server,** which could attach one project's conversation to another and leave a chat empty, agent hooks no longer flash PowerShell windows, and the mouse pointer comes back after leaving or deactivating Ghostex, thanks to @gvastethecreator. Restart Codex sessions that were already running.
+
+## 10.6.0 - 2026-09-29
+
+**Ghostex 10.6.0 is out.** Settings, first-run setup, Add Project, the Agents hub and Git Commit are now native windows, Chromium becomes an optional one-time install, the Files editor gains tables, Mermaid and drag and drop, Claude Opus 5.5 and Sonnet 5.5 arrive, and Windows installs get through first launch on a clean computer.
+
+### 🧩 Ghostex without Chromium
+- **Settings, first-run setup, Add Project, the Agents hub and Git Commit open as native windows,** so almost all of Ghostex works without the built-in web runtime, and the Settings colour swatches use your system's colour picker.
+- **The web runtime is an optional one-time install.** Until you install it, the Browser, the Code view, website and extension views, and HTML and media files show an Install button (or Hide tab), and web links open in your system browser. Nothing is downloaded until you press Install; Settings > Extensions > Built-in > Chromium runtime installs, reinstalls or uninstalls it.
+
+### 🗂 A richer Files editor
+- **Markdown in Files gains table tools, emoji, Mermaid diagrams, smarter list keys, find and notes,** with a richer gutter and rename and conflict dialogs.
+- **Drag and drop files and folders in the Files tree,** and opening a file from chat always goes to the Files view.
+
+### 💬 Chat and agents
+- **Claude Opus 5.5 and Sonnet 5.5 replace Opus 5 and Sonnet 5** in the model pickers for Claude Code and Cursor, and Opus 5.5 is a single 1M row.
+- **Claude Code 2.1.284 works with every chat picker:** the effort slider knows the new Ultracode switch, session-only model and effort picks answer Claude's Switch model? prompt, the model picker works in short panes, and a 1M session keeps its 1M pill.
+- **A new Claude Code install's first-run setup is answered in the chat,** with a Sign in to Claude card that tells you to paste the code your browser shows.
+- **A collapsed approval shows the command it asks to run,** compaction shows its token counter, and the Note, Stash, Attach and Switch to Terminal tooltips name their hotkeys, on the computer and the phone.
+- **Codex plans show above Implement this plan?,** a Codex script that runs several commands lists each one, and an interrupted turn keeps its Interrupted marker under your prompt.
+- **Hermes chats keep every prompt and reply across a compaction,** Hermes /compress works like /compact, and subagent notices and errors read the way the terminal prints them, thanks to @banozz0.
+- **Chat rides out a gxserver restart** instead of saying gxserver is not reachable, links take the chat's own light or dark link colour, and the scrollbar stays on the pane's right edge in a wide chat.
+
+### 🗃 Sidebar, Spaces and sleeping sessions
+- **Dim sleeping sessions and Wake sleeping sessions when selected** are new in Settings > Advanced. Turn off the second one and clicking a sleeping session opens it with its Resume button instead of waking it.
+- **Grouping never moves a project out of its Space.** A new group joins its project's Space, a project taken out of a group stays in that Space, and adding a project to a group in another Space switches the sidebar there.
+- **Marking a notification read clears its session's done or needs-input mark** in every sidebar, and a newly pinned session goes to the bottom of the pinned list.
+- **Search by Prompt follows your theme and window glass,** and its preview text can be selected and copied.
+
+### 🪟 Windows
+- **A clean Windows install gets through first launch and onboarding** without the Visual C++ runtime, and a slow first start (often the antivirus scan) is waited for, with Retry if it fails.
+- **Agent CLIs installed where new terminals cannot find them offer Add to PATH,** and Git and the GitHub CLI installed while Ghostex runs are picked up without a restart.
+- **Opening Ghostex again hands off to the running window at once,** and slow first session starts no longer fail the session.
+
+### 🩹 Fixes
+- **A woken Hermes session resumes under its own profile,** even when the project's Hermes agent uses another one, thanks to @banozz0.
+- **Attaching to a session after Codex's fullscreen view or Claude Code quit keeps the shell history** instead of showing an empty screen.
+
+## 10.5.5 - 2026-09-28
+
+**Ghostex 10.5.5 is out.** A big round of Windows fixes, from agent startup and accented typing to mouse Back and Forward, Hermes bot sessions that keep their status and chat, large files that open at any size, an optional highlight for unanswered questions, and keyboard and terminal fixes.
+
+### 🪟 Windows
+- **Agent sessions start reliably on Windows,** using each CLI's own launcher and PowerShell for Grok, and a session that fails to start says why instead of hanging, thanks to @gvastethecreator.
+- **Accented characters compose correctly in the terminal.** A dead key waits for the next letter instead of typing the accent on its own, thanks to @gvastethecreator.
+- **Mouse Back and Forward buttons follow your visited sessions and projects,** and inside Settings they move between the pages you visited and restore each page's scroll position, thanks to @gvastethecreator.
+- **Model controls appear as soon as their data arrives,** instead of waiting on a skeleton until you hover them, thanks to @gvastethecreator.
+- **Menus behave like native ones:** sidebar menus close when you switch to another app, frosted menus no longer close before your click lands, and the pointer updates correctly over pop-ups, thanks to @gvastethecreator.
+- **Terminal block and border characters draw without gaps,** thanks to @gvastethecreator.
+
+### 🤖 Bots and Hermes sessions
+- **A Hermes session keeps its own status, chat and name** when its subagents or nested runs report in, and its subagents show in the Subagents card, thanks to @banozz0.
+- **Hermes chats show every step message,** and `/rename` in a Hermes chat renames the conversation in Hermes too.
+- **The default Hermes bot always opens as itself,** even after `hermes profile use` switched Hermes to another profile.
+- **Sessions no longer blink idle mid-turn,** including while Claude compacts automatically.
+
+### ⌨️ Keyboard and terminals
+- **Typing keeps working after you click beside the terminal.** Backspace and Pinyin input no longer stop after a click on the terminal's margin or the agent bar.
+- **Clicking empty space in a chat sends your typing to the chat box.**
+- **The terminal find bar works on Windows and Linux:** typing, Enter, the arrows, Escape and the close button all act on the search.
+- **The terminal's padding always matches its background,** in dark and light mode, and waking a session in light mode no longer flashes white.
+
+### 🗂 Files and the sidebar
+- **Files opens large files at any size.** Only Markdown keeps its 2 MB editing limit, and a larger Markdown file offers Open in Code view.
+- **Highlight unanswered questions** gives sessions with a waiting question a soft pink background, thanks to @alp82. Turn it on in Settings > Sidebar with Show Advanced on; it currently covers Codex's questions.
+
+## 10.5.0 - 2026-09-28
+
+**Ghostex 10.5.0 is out.** Bots turns the sidebar into your Hermes agents with a feed of every scheduled run, glass backdrops come to Windows and Linux, terminals start on pure black or white, chat shows a delivery icon beside each prompt, Codex's fullscreen view works everywhere, and a large batch of Windows fixes.
+
+### 🤖 Bots for your Hermes agents
+- **Bots switches the sidebar to your Hermes agents,** one row per Hermes profile with its gateway status, Edit SOUL and Edit config, pinned Actions and a + that starts a new chat with that bot, thanks to @banozz0. Turn it on in Settings > Extensions under Planning and automation; it appears only on a computer with the Hermes CLI installed.
+- **Hermes conversations started elsewhere show up under their bot.** Chats begun in a terminal, the Hermes app, Discord or Telegram are listed with the bot that had them and resume with one click.
+- **Bot automations collects every Hermes cron run in one feed,** thanks to @banozz0. An Automations row at the top of Bots opens a channel per scheduled job, an all-runs channel, your own groups, unread counts and a bot filter, with failed runs marked.
+
+### 🪟 Glass on Windows and Linux
+- **Wallpaper, Picture and Live backdrops now work on Windows,** so the glass can show your wallpaper, a picture you choose or a calm animation behind the window.
+- **Every transparency setting works on Linux,** thanks to @alp82.
+
+### 💬 Chat
+- **A delivery icon beside your prompt replaces Waiting and QUEUED.** A spinner means the message is waiting for the agent; a play button means it is queued behind the running turn, and clicking it interrupts the agent so it takes your message now. The phone shows the same.
+- **The chat box slides closed over its draft** instead of fading, on the computer and the phone.
+- **Right-click a previewed image** for Copy Image, Copy Path, Save Image, Reset Zoom and Dismiss.
+- **Sending closes Claude's open side question first,** so the message is never stuck behind the side-question panel, and the side question's Fork button explains what it does.
+- **Codex's fullscreen view works with Ghostex.** Command-click still opens links, Stop works while you are scrolled up or selecting text, and automations and model picks keep working with Codex 0.157 and later.
+
+### 🖥 Terminals and accounts
+- **Terminals start on pure black or white.** Settings > Terminal > Terminal background offers Black / white (the new default), Follow theme, or Custom color, and a custom colour you set before is kept.
+- **Terminal panes start without side padding,** so the terminal uses the pane's full width.
+- **Update, reinstall or uninstall Claude Swap and Codex Swap from Settings > Accounts.** Hover a button to see the installed and latest versions; uninstalling keeps your saved logins.
+- **Reconnecting a Codex account no longer has to stop its sessions first;** when Codex still needs them stopped, Settings offers Sleep sessions and continue.
+- **Find by Prompt opens in a native window** that matches the rest of the app.
+
+### 🔧 Windows fixes
+- **Chat messages send reliably on Windows** now that the background service no longer freezes on a send.
+- **No more flashing console windows** when Ghostex starts helpers in the background.
+- **Windows sessions take their agent's title again,** instead of staying "Claude Session".
+- **Onboarding installs agent CLIs and skills correctly, and a custom install folder is found everywhere,** thanks to @gvastethecreator. Onboarding and Settings > Agents install and update Claude, Codex, Cursor and Grok, and newly installed CLIs are found without restarting.
+- **Codex runs without administrator rights,** and Add Project's Local folder opens the list of drives with your home folder first.
+- **Settings sliders show their thumbs** as soon as the window opens.
+
+### 🩹 Fixes
+- **The Linux browser keeps WebGL working** after a browser view closes, thanks to @alp82.
+- **The Files view's Send button shows how many new notes are waiting,** and the separate Review menu is gone: Send covers the open file's notes.
+- **The sidebar's Search button is always an icon,** with its label and shortcut in the tooltip.
+- **Claude chats show the context size Claude reports,** and server errors show the actual reason instead of a bare error code.
+
+## 10.4.0 - 2026-09-27
+
+**Ghostex 10.4.0 is out.** Docs becomes Files and opens your whole project, including pictures, video and audio; side questions and Claude's panels in chat; Hermes chats that name their bot and switch models; a red dot when a model change fails; Shift+Esc for the Commands panel; and a batch of chat and Windows fixes.
+
+### 🗂 Docs is now Files
+- **The Docs view is called Files and shows your whole project.** It lists and searches every file in the project, on this computer and on remote machines, not just the docs folders.
+- **Pictures, video and audio open in Files.** Images and SVGs show in place with an Edit source toggle, video and audio play with seeking, and PDFs and formats Files cannot show open in your system app.
+- **Choose where media from chat opens.** Settings > Tools > File opening has Images, Videos and Audio, each set to Files or System App, for files linked in agent chat or the terminal.
+- **Open any file by path.** The Open File command (set a key in Settings > Hotkeys) opens Files with its search ready: type a name or paste any path on this computer and press Enter.
+
+### 💬 Side questions and a tidier chat
+- **Ask a side question without stopping the agent.** In Claude Code chats, `/btw <question>` answers in a card above the chat box with Copy, Fork and Close, and the side question stays folded in the chat afterwards; turn on Side chat in More actions to send every message that way until you remove its pill.
+- **Claude's panels read like panels.** `/status`, `/usage` and similar panels show as clickable tabs, tables and usage meters instead of terminal text.
+- **Skills show the way each agent calls them.** A skill picked with `$` shows as `/name` for Claude Code and `$name` for Codex, and a skill you sent reads as your own turn before and after a reload.
+- **One View menu for display modes.** More actions > View holds Simple, Verbose and Summary as separate switches, and Simple mode is now on by default.
+- **Replies keep their line breaks,** and text such as `Option<String>` or `<my answer>` shows exactly as written instead of disappearing.
+- **Approval cards ask about the tool that is waiting** ("Allow this edit?"), Codex 0.157's command approval shows as a real approval card, and a turn the agent wrote no reply to shows what ended it.
+- **A rewind stays rewound** even when Ghostex restarts before your next prompt.
+- **Zoomed chat images keep the spot you clicked under the pointer,** and you can drag a zoomed picture around.
+- **The chat box always shows its blinking caret when it has focus,** including in pop-up windows and after switching back to it.
+- **The phone's chat gets side questions, Claude's panels, Side chat and the View menu too.** Update the app to get them.
+
+### 🤖 Models and Hermes
+- **Hermes chats name their bot and switch models,** thanks to @banozz0. A chip before the model pill names the bot (for example Harry), the status line shows its context, cost and tokens, and the model picker lists the bot's models with Low, Medium and High, applied to this session only; the phone shows the bot's chip too.
+- **A model change that fails turns the session red.** If the agent refuses a model, effort or mode you picked, or it keeps failing for 30 seconds, the session shows a red dot with the reason, and your messages wait instead of reaching the agent on the wrong model; pick a model again to clear it.
+- **Opus 5.5 is one row again,** starting on the 1M context window, and the model pill names the window only when it is 200K.
+- **Claude effort changes from chat work on every session,** without an extra "/effort" message in the transcript, and model changes no longer wait on the faint suggestion text in Claude's input box.
+- **The phone's model picker drops the reasoning chips from its rows** for a cleaner list.
+
+### ⌨️ Menus and hotkeys
+- **Shift+Esc opens the Commands panel.** It is Open Commands Panel's new second key; Focus Chat Box no longer has a default key, so set one in Settings > Hotkeys if you used it.
+- **Summary mode is Option+Ctrl+S on macOS.** Windows and Linux keep Ctrl+Alt+Shift+S.
+- **Session menus are shorter.** Split Right, Copy Resume and Copy Attach are gone from the sidebar and chat menus; Option+Shift+D still moves the focused session into a pane on the right.
+- **The view menu reads as three groups,** built-in views, website views and your own views, and a submenu such as Show in opens in the same place.
+- **Closing a side panel's last tab now closes the panel.** Turn off Close side panel with its last tab in Settings > Sidebar to get the view picker back.
+- **Saved Prompts and other dialogs stay in front** when a tooltip or menu appears behind them, and table previews, Mermaid diagrams and browser history open in native windows.
+
+### 🔧 Windows fixes
+- **Dragging the titlebar moves the window reliably,** and the project breadcrumb sits centred.
+- **The Settings window comes to the front when you open it** and draws its sliders at full size.
+- **Messages sent to PowerShell sessions arrive intact,** and the Code view shows its editor again, thanks to @gvastethecreator.
+- **Text renders consistently with bundled fonts,** thanks to @gvastethecreator.
+
+### 🩹 Fixes and updates
+- **The built-in browser moves to Chromium 154** with its latest security fixes, the Code view to VS Code 1.139.1, and terminals to the latest Ghostty.
+- **Video behind the glass is now Your video under Live.** Pick your own .mov, .mp4 or .m4v for dark and light mode; the downloadable Ghostex videos and the aerial list are gone.
+- **Settings tells you when the system keeps the window opaque,** naming Reduce transparency on macOS or Transparency effects on Windows and where to change it.
+- **A refreshed app icon.**
+- **`ghostex rename-command` reaches sleeping sessions,** `ghostex create-session --input` runs its text on first start, and a session created in a project parked in Recent Projects brings the project back to the sidebar.
+- **Ghostex web keeps the session it shows awake** instead of letting Agent Auto Sleep put it to sleep, and shows the account usage meter, thanks to @gvastethecreator.
+
+## 10.3.0 - 2026-09-26
+
+**Ghostex 10.3.0 is out.** Live animated glass and video behind the window, glass on Windows, a fully native chat on Android, OpenCode in Chat, seven new website views, a keyboard-driven model pop-up, flicker-free terminal switching, Summary mode that keeps every reply, and a large batch of chat, remote, Windows and Linux fixes.
+
+### ✨ Live glass, video and a new look
+- **Live glass backgrounds on macOS.** Choose Live for what the glass shows and pick one of eight calm animated styles (Aurora, Ink, Drift, Nebula, Silk, Bokeh, Waves, Mesh) drawn in your theme's colours, with Speed and Brightness controls; it loops without a seam and pauses in the background, on battery and in Low Power Mode.
+- **Video behind the glass.** Play a muted, looping, blurred video behind the window: the one that comes with Ghostex, an aerial wallpaper your computer has already downloaded, or your own .mov or .mp4 file.
+- **Window glass comes to Windows (beta).** The glass controls now work on Windows 10 and 11 with the system's acrylic blur; turning glass on applies at the next launch, and turning off Transparency effects in Windows Settings keeps the window opaque.
+- **Frosted menus, tooltips and dialogs.** Menus, tooltips, Quick Access menus, the Docs formatting toolbar and app dialogs take a see-through frosted look under glass, and header menus open just below their button.
+- **A reworked Theme page.** Sixteen colour presets per appearance, a Colourfulness setting from Subtle to Vivid, More options in each group, and Use transparency set to Dark only by default; new installs start at Transparency strength 20.
+- **Split buttons and view tabs get a cleaner outline,** and tooltips that only repeated a button's label are gone.
+
+### 📱 A native chat on Android
+- **The phone's chat is now fully native,** running on the same chat engine as your computer, so replies, cards, the chat box and the light theme look and behave the same on both. Update the app from Settings in the app to get it.
+- **More of the chat on the phone:** the transcript menu, Save as Markdown, Handoff, fork branches and the model menu, and session rows show a stack of status dots with sidebar-style menus.
+- **Browse and open a project's Markdown and HTML docs on the phone.**
+- **Settings on the phone are split into pages** (Connection, Chat, Terminal, Theme, Sounds, Keyboard, Updates, Advanced), and the web preview shows a load progress bar.
+- **Drafts follow you between devices.** A draft saved on another device is offered when you open the chat, and the chat box saves your draft whenever you pause typing.
+
+### 🧩 OpenCode in Chat
+- **OpenCode sessions work in Chat.** Streamed replies, reasoning, tool results, image attachments, questions, permissions, queued prompts and rewind all work; install its hooks in Settings > Agents, then start a new OpenCode session.
+- **Pick OpenCode models and modes from the chat box.** The model picker lists your OpenCode providers' models and reasoning levels, the mode control switches between Build and Plan, and a message starting with `!` runs a shell command in the session.
+
+### 🤖 Models and accounts
+- **Pick a model and effort without leaving the keyboard.** The model pop-up replaces the quick picker: type to filter, Up and Down move, Left and Right change reasoning, Enter applies to this session and Shift+Enter saves it as the default; Option+P opens it on macOS.
+- **F and C switch Fast mode and the context window** while the search box is empty, Option+1 to Option+9 highlight the first rows, and Option plus a letter presses the pop-up's bottom buttons.
+- **Hand a conversation to another agent** by picking one of its models in a started session, and switch between signed-in Claude or Codex accounts from the Account button; agent tabs show a badge after a handoff.
+- **The same picker in terminal view.** An agent terminal's bottom bar shows the model pill; turn it off with Model picker in terminal view.
+- **A Claude model pick keeps the effort you saved,** and a pick the agent refuses returns the pill to the model it is really using.
+- **Claude reset credits in the usage panel.** See your reset credits and redeem a reset without leaving Ghostex.
+
+### 💬 Chat
+- **Summary mode shows every reply to a prompt,** with the newest one open, and has its own hotkey: Cmd+Ctrl+S on macOS, Ctrl+Alt+Shift+S on Windows and Linux.
+- **Chat hotkeys work from anywhere in the window.** Focus Chat Box (Shift+Esc), Copy Last Code Block (Cmd+Shift+;) and Copy Last Reply (Cmd+Shift+C) act on the chat of the session you are in, and they show in Quick Access.
+- **Finished work folds away.** When the agent finishes a turn its tool work folds under "Worked for Xs" above the reply; click it to open it again.
+- **Every expand and collapse animates,** an opened fold keeps its header in place, and sleeping sessions open straight into chat and fade in instead of showing a skeleton.
+- **The transcript minimap sits on the right,** and hovering a mark previews its prompt and reply as formatted text.
+- **File and folder pills show their parent folder and name,** and a long one shortens from the start so the file name stays visible.
+- **Tables start neat.** Wide tables wrap and scroll, and a larger preview window shows the whole table.
+- **The chat box edits like VS Code:** move, duplicate, delete and select lines with the usual shortcuts, and cut or copy the whole line with nothing selected.
+- **Messages you send while a model or mode switch is settling wait for it** instead of being refused, and a queued message that could not be delivered returns to the chat box with its reason in a tooltip.
+- **The Subagents card shows Claude's workflow runs,** and phone session rows show waiting questions and background work.
+- **Videos, audio and PDFs in chat open in your default app.**
+- **Cursor chats show their branch and lines changed** in the status line and More details.
+- **Codex question replies read as normal answers,** and Copied! appears on the control you clicked.
+
+### 🧭 More views beside your sessions
+- **Sentry, Figma, Vercel, Supabase, GitHub Actions, PostHog and Custom Website views.** Turn on the ones you want in Settings > Extensions, open one from the + menu and paste its home address; each project remembers its own, and Custom Website opens any site.
+- **The view picker opens and animates like a view,** its cards show one line of description with the rest on hover, and the panel toggles stay in place.
+- **A view tab's right-click menu groups its options** under Configure and Show in, where you choose whether it shows in this project or this Space.
+- **Close side panel with its last tab** (Settings > Sidebar) closes the whole panel instead of showing the view picker, and the side panel's view stays awake while you move between Spaces.
+
+### 🗂 Sessions, terminals and the sidebar
+- **Switching sessions in terminal view no longer flickers,** and terminals keep a steady picture while the sidebar, chat or pane size changes, thanks to @Ni7e.
+- **New Agent Session starts the agent you used last,** and a new chat you leave empty closes by itself.
+- **Drag a session onto Pinned, Sessions or Parked** to pin, unpin or park it; an empty section shows its heading while you drag.
+- **Forking switches you to the fork,** named "Fork: <original name>", and its chat shows the history it inherited.
+- **Auto Sleep and Close After Done keep working with the window closed.** Ghostex's background service runs them now, and Auto Sleep never sleeps a session you are looking at.
+- **Status dots stack under Spaces and remote machine tabs,** so you see at a glance who is working.
+- **Project icons are found in nested app folders,** and projects without one show their first letter, thanks to @alp82.
+- **Drop a session that has no tab yet into the middle of a pane** to show it there.
+- **Settings and the other app windows open faster,** because Ghostex prepares their window in advance.
+- **The Kanban board shows skeleton cards while it first loads.**
+
+### 🌐 Remote, Windows and Linux
+- **Files dropped onto a remote machine's terminal are uploaded to that machine** and pasted as references the agent there can open, instead of local paths it cannot read, thanks to @Ni7e ([#159](https://github.com/maddada/Ghostex/pull/159)).
+- **Saved remote machines connect when Ghostex starts** and reconnect on their own after a dropped connection, and Project Groups and Spaces edited on a remote machine's tab are saved on that machine.
+- **Remote work between Windows, Linux and macOS is more reliable,** and Add Project can browse the selected computer's drives, including Windows paths from a Linux or macOS client.
+- **Windows runs Ghostex's background service and sessions with standard user rights,** even when started from an administrator terminal or SSH login, so Codex can start its background server.
+- **Windows terminals keep their history** when a pane is resized or reattached, and modified keys and Unicode characters reach the terminal intact.
+- **Windows app dialogs have a system border** so they stand out from the app, and paths from the command line open in Code.
+- **Linux dialogs stay attached to their window and open in the right place,** thanks to @alp82, and the window reports its app name correctly.
+- **Linux attachments offer Images or files and Folders** before the system picker opens.
+
+### ⚙️ Settings and the command line
+- **Update, reinstall or uninstall Trycua from Settings.** The Trycua row offers a one-click update when a new version is out, and uninstalling keeps its Accessibility and Screen Recording permissions.
+- **Copy Details is always in a session's Advanced menu** and carries exactly what another agent needs to reach that session.
+- **The Debugging page is simpler:** ten diagnostic log areas with one Turn logs off after picker.
+- **Manage hotkeys from the command line** with `ghostex settings hotkeys`, read a whole chat thread with `ghostex read-session-chat`, and `ghostex agents send` now wakes a sleeping recipient; `ghostex sessions --json` prints a short list and `--full` the whole inventory.
+
+### 🩹 Fixes
+- **Chat sends work on computers without the ghostex command installed;** Ghostex now installs and uses its own copy instead of opening an editor.
+- **A message ending in a $skill or @file mention sends on the first Enter.**
+- **Claude questions are answered reliably,** including long ones Claude draws behind a side border, and Codex's Folder access trust prompt is recognized.
+- **Claude interrupts, rewinds, pasted content and trust prompts** behave correctly in chat, and Claude sessions keep their identity once a transcript is written.
+- **Codex questions asked in the background** show up and can be answered.
+- **Terminals show their complete history** when you first attach to a running session.
+- **Parking a session with a tag keeps it parked,** and older turns keep their files-changed row.
+- **Sleep Inactive puts browser tabs to sleep again,** and Keep Awake and Join Discord in the More menu work.
+- **An App Shot goes into the focused agent, chat or terminal,** and Delayed Send from its hotkey shows the countdown.
+- **A fast Ctrl+Tab walk across projects lands on the row it counted to,** and the Loading sessions notice clears when Ghostex reconnects.
+- **Browser tabs load into an empty New Tab** and every tab can be closed.
+- **Cmd+F keeps the find bar focused,** the Maximize button opens the maximized chat box, chat menus show hover again, and queued message buttons show their icons.
+- **The scroll-to-bottom button no longer lingers** after its chat is gone.
+
+### ⚠️ Heads up
+- **New default hotkeys.** Cmd+T now opens a browser tab, Cmd+Shift+T a terminal, Cmd+N the New Thread picker, and Cmd+Shift+O starts the agent you used last; change them in Settings > Hotkeys or with `ghostex settings hotkeys`.
+
+## 10.2.0 - 2026-09-23
+
+**Ghostex 10.2.0 is out.** Window glass that shows your desktop, your wallpaper or a picture of your choice through the app, a new Theme page in Settings, panels that slide open and closed, a faster native Kanban board and Automate page, drag panes by their grip, and a round of Windows and Linux improvements.
+
+### ✨ Window glass
+- **See your desktop through Ghostex.** The sidebar, sessions, terminals and chat can show a blurred view of what is behind the window. Glass is on in dark mode by default; turn it on or off with Enable Transparency in Settings > Theme.
+- **Choose what the glass shows.** Desktop and windows shows everything behind Ghostex, Wallpaper only shows just your desktop picture, and Custom image blurs a picture you pick, with a separate picture for dark mode and light mode.
+- **One slider sets how much shows through.** Transparency strength on the Theme page tunes the whole window at once, and Advanced still lets you set the sidebar and work area tints apart.
+- **Menus, popups, toasts, tooltips and suggestions are frosted to match,** as are the scroll-to-bottom button, the floating sidebar and the chat skeleton shown while a session loads.
+- **Tune how much shows through.** Sidebar tint and Work area tint set each area on its own, in dark mode and in light mode, so either can be the darker one. Always glass keeps it on in light mode too.
+
+### 🎨 A Theme page in Settings
+- **Theme has its own page, right below General.** It starts with Appearance, a card for each dark and light theme showing the window in its colours, and Enable Transparency; Advanced holds colours, chat and terminal themes, glass and the app icon.
+- **Background contrast in five steps.** Pick Lowest to Highest on the Theme page, or set Sidebar contrast and Work area contrast apart under Advanced.
+- **Terminals follow your theme.** The terminal background matches the theme by default, and a colour you choose only paints behind the terminal text.
+- **Pick your look while getting started.** The last Get started panel offers the same Appearance, theme, contrast and transparency choices, and they apply right away.
+
+### 🗂 Panes, views and the board
+- **Panels slide open and closed.** The sidebar, side panel, Agents Panel and command pane slide in and out; set Panel animations to Off, Slow, Normal or Fast, and Reduce Motion always opens them instantly.
+- **Kanban and Automate are faster and match your theme.** Both are now drawn by Ghostex itself, so they open instantly, follow your theme colours and take the keyboard like the rest of the app.
+- **Move or close a pane from its grip.** While the screen is split, the focused pane has a small bar along its top: click it to close the pane (its sessions keep running) or merge all panes, or drag it onto another pane.
+- **Drop a session in the middle of a pane to show it there.** Dropping on a pane's edge still opens a new split.
+- **Sleeping panes show a slim pill** with the session's icon, title and Resume, instead of a large card.
+- **Opening a project or restarting Ghostex no longer wakes its sleeping sessions.** They show their Resume bar until you click the pane or press a key, while clicking a sidebar row still wakes them, thanks to @banozz0.
+- **Cmd+Option+Arrow moves between session panes and Commands**, skipping the view panel.
+- **Middle-click an empty spot in a command pane's tab bar** to close all of its terminals at once.
+
+### 🧭 Sidebar
+- **Hide sidebar and Toggle Agents Panel sit at the top left of the sidebar on every computer,** and dragging the sidebar's top row moves the window.
+- **A narrow sidebar keeps its buttons.** When the top row runs out of room, Search and Notifications move into the sidebar menu.
+- **Switching Spaces fades the list** as it slides, from the Spaces row and from the menu alike.
+- **Double-click the top of the sidebar or the view tab strip to zoom the window,** like the header beside them.
+- **Hover the window's left edge to float a collapsed sidebar.** The hover zone is now invisible, so nothing is drawn over your work.
+
+### 💬 Chat
+- **Cursor chats get a status line and Context details.** Hover the status line and click the pen after its last item to choose what it shows, for Claude Code, Codex and Cursor.
+- **The chat box collapses while you scroll again by default,** and in a short pane, such as half of a stacked split, it stays collapsed until you click it.
+- **Paste images into question answers.**
+- **Sessions that are still loading show the chat box and status line right away,** and the chat box takes focus as soon as the agent picker closes.
+- **The account switch card uses the compact account tiles.**
+
+### 🪟 Windows and Linux
+- **Close, minimize and maximize stay at the top right on Windows,** even with the sidebar or a view open.
+- **Linux computers can connect to Windows computers over SSH,** and Linux keeps saved SSH passwords in the desktop keyring.
+- **Windows terminals keep their output, interrupts and sessions more reliably,** and file dialogs and popups open correctly.
+
+### 🩹 Fixes
+- **Answering Claude's questions from chat works again.** Multi-select answers with a typed note deliver the note and every pick, questions with previewed options no longer look answered while Claude still waits, and answered preview questions show the option you picked.
+- **Popups and dialogs open on the display the window is on,** instead of behind it on another monitor.
+- **Claude sends go through even when its chat box was partly erased on screen.**
+- **Waking a Claude session never resumes a conversation from another project.**
+- **A new agent started right after a restart appears straight away** instead of being replaced by a woken session.
+- **Custom Claude profiles and projects on different Windows drives are told apart correctly,** thanks to @banozz0.
+
+## 10.1.0 - 2026-09-23
+
+**Ghostex 10.1.0 is out.** Linear, Jira, GitHub, Storybook and Terminal views, light and dark theme presets, a Trust and Remember answer for folder trust prompts, drag a session onto a pane to split, account usage that peeks on hover, and the newest Claude, Codex, Cursor and Grok models.
+
+### 🧭 New views beside your sessions
+- **Linear and Jira open as views.** Pick one from the + menu, paste the workspace, team, or board address you want as its home, and Ghostex keeps it per project; worktrees follow their parent project until you give them their own. Middle-click or Cmd-click a link to open it in a background Browser tab.
+- **A GitHub view opens your repository with no setup.** It appears whenever the project has a GitHub origin, including in worktrees.
+- **Storybook is built in.** Projects with Storybook get a Storybook view (press S in the view picker) that builds and serves the component workshop without keeping a server running, with Rebuild Storybook and Annotate with Agentation.
+- **A Terminal view puts command terminals on the right.** It has its own tabs and splits, runs Actions, and keeps its terminals alive when you close it; the Commands pane under your sessions still works as before.
+- **The view picker shows real icons.** Installed extensions use their own icon and description, and website views show their mark.
+- **Sleeping browser tabs show what they hold.** The card shows the page's icon, title and site, and a Resume button wakes it.
+
+### 🎨 Theme presets
+- **Pick a preset for each appearance.** Dark theme offers Dark Gray, Black, Blue, Green, Red, Purple, or Custom, and Light theme offers Light Gray, White, Blue, Green, Pink, Orange, or Custom, under Settings > Appearance.
+- **The theme reaches more of the app.** The sidebar, window chrome, sidebar menus, chat background, and chat and file change cards all follow the chosen preset, and Custom keeps your own contrast and tint.
+
+### 🗂 The Agents Panel and sidebar
+- **The sessions column is now the Agents Panel.** Its toggle sits beside Hide sidebar, even while the sidebar is collapsed.
+- **Drag a session onto a pane to split.** Drop a sidebar row on the left, right, top or bottom edge of a terminal or chat pane to open it in a new split there.
+- **Account usage peeks on hover.** Hover the chart button in the sidebar's Commands row to float your starred accounts' meters over the list, and click the pin to keep them there.
+- **Sleep Inactive on the Space menu.** Right-click a Space icon to sleep only its sessions that are awake but neither working nor waiting on you.
+- **The floating sidebar and Agents Panel slide at your chosen speed.** They follow the sidebar's Collapse animation setting, and 0 turns the slide off.
+- **Quick Access opens a session in the floating panel** while chat is collapsed, and your configured hotkeys now work from the floating sessions panel.
+- **Sessions with background shells or monitors still running show as working.**
+
+### 💬 Chat
+- **Trust and Remember answers folder trust prompts for good.** Choose it on the trust card once and Ghostex answers that project's trust prompt by itself from then on, for every agent.
+- **Every copy says Copied!** A small bubble appears at the pointer whenever you copy something anywhere in the app.
+- **The chat box stays expanded while you scroll.** Turn off Settings > Chat > Keep chat box expanded while scrolling to get the collapsing box back.
+- **Switching a draft's agent keeps your model and effort.** The picked model and reasoning carry into the new agent's launch.
+- **Switching accounts is safer for Claude background sessions.** Ghostex stops the conversation and its remaining jobs, then resumes it on the selected account.
+- **The model picker explains itself.** Hover a row's eye to read what the model is for, unavailable buttons are dimmed and say Default or Off, Auto sits first, and a detected Fast mode shows as on.
+
+### 🤖 Newest models, without waiting for a release
+- **New models reach your open app within minutes.** The model list updates on its own, so a new model shows up and can be picked without installing a new Ghostex.
+- **Claude matches Claude Code's own picker.** Opus 5.5 is the Opus model with 1M context, Opus 5 leaves the list, and the quick picker shows every Claude model with its version.
+- **Codex gets GPT 6 Sol and GPT 6 Luna.** Older GPT 5.6 models move under Legacy, and titles and commit messages are now written with GPT 6 Luna.
+- **Grok 4.7 and Grok 4.7 Fast for Grok Build and Cursor.**
+
+### 🩹 Fixes
+- **Linux shows new versions in the Update window.** Open download page takes you to the release; install it the same way you installed Ghostex.
+- **Windows chat sends reach the terminal again,** and the prompt editor starts correctly on Windows.
+- **The transcript scrollbar no longer jumps while a reply streams.**
+- **A new usage limit shows even right after the old one cleared.**
+- **Worktree dialogs explain why a list failed,** and pick the right source project.
+- **Remote sessions attach more reliably,** retrying each session on its own.
+- **The GitHub button opens the right repository** as soon as a project loads.
+- **Agents Hub sync is easier to read.** It says how many agents are out of sync and lists each fix in plain words, with a To fix and In sync filter.
+- **Better screen reader support** for the sidebar, chat box, transcript and terminal.
+
+## 10.0.1 - 2026-09-22
+
+**Ghostex 10.0.1 is out.** A new layout: the titlebar row is gone, views open as tabs beside your sessions instead of over them, and browser pages share the same tab strip. The sidebar now runs fully natively, the chat model picker gains favorites and one-click settings, and the accent color follows your background tint.
+
+### 🪟 Views open beside your sessions
+- **Your sessions stay on screen while you use a view.** Terminals and chats keep the left side, the view takes the right, and each project remembers where you left the divider; drag it to change the balance and double-click it to reset.
+- **Views are tabs, and a project can keep several open.** Open another from the + at the end of the tab strip, close a tab with its x or a middle click, drag tabs to reorder them, and right-click one to Pin tab. Each project brings its own tabs back when you return to it.
+- **Browser pages are tabs in the same strip.** Every open page shows its icon and title beside your views, Browser Tab at the top of the + menu opens a new one, and page icons are remembered across restarts.
+- **Pop a view out or give it the whole window.** Buttons at the end of the strip open the view in its own window, expand it over the sessions column (Cmd+Ctrl+E), or expand it fully and hide the sidebar too (Cmd+Ctrl+Shift+E).
+- **A slimmer header replaces the titlebar row.** It holds the project name, Start, Open and Commit, and a ⋯ menu with Ask Ghostex, Tips & Tricks, Resources, Dev servers, Extensions and Customize; Cmd+Option+B shows or hides the view panel.
+- **An Open a view picker when nothing is open.** It lists every view you can open in the project; press C, B, K, U or D for Code, Browser, Kanban, Automate or Docs.
+
+### 🦀 The sidebar is fully native
+- **Every sidebar action runs in the app itself.** Clicking, renaming, notes, forking, sleep and wake, pinning, snoozing, Spaces, Project Groups, and the Cmd+1 through 9 session hotkeys no longer go through a web page, so the list responds faster and stays in step with what you do.
+- **Remote computers draw in the same list.** A connected remote computer's projects and sessions sit alongside this computer's, and an offline one shows the sessions it had last time.
+- **Tooltips and menus fit better.** Row tooltips stay inside the sidebar and match their card's width, menus size to their labels, and the More menu no longer repeats Settings and Hotkeys.
+- **The collapsed sidebar's edge reveals what you point at.** Hover the window's left edge to float the sidebar back, or the sessions column when a view fills the window, and the revealed pane takes focus.
+- **Quick Access rows get an actions menu with hotkeys.** Open sessions show a blue status dot there.
+
+### 💬 Chat
+- **Star models to keep them at the top everywhere.** The model picker has a Favorites tab shared by every open session; click a model to set it for this session and as the default, or right-click to change only this session.
+- **Pick another agent's model to start a Handoff.** The Handoff dialog opens with that agent and model already chosen.
+- **Reasoning, context window and Fast mode are one-click buttons.** They sit along the bottom of the model picker.
+- **Option-click Send to compact and send.** The gesture is named on the button.
+- **Armed Delayed Send and Close After Done show on the composer.** Click one to open Delayed Actions.
+- **Resuming a Claude session reattaches to its background agent** when one is still running.
+- **Rewind and question answers are more reliable.** Rewind waits for Claude's input box before acting, pasted text shows as you typed it, and a file change card opens with one click anywhere on it.
+
+### 🎨 Look and feel
+- **The accent color follows your background tint.** The separate accent setting is gone; a neutral tint keeps the sky-blue accent.
+- **Clearer status colors.** Every working status uses the same orange, git diff counts read well in light and dark themes, and Spaces get a theme-aware Gray.
+- **The Quick Actions button shows the name of the last Action you ran.**
+- **The terminal scrollbar appears while you scroll,** and the scroll wheel moves the same distance as in Ghostty.
+- **Browser shortcuts.** Reload with F5 or Cmd+R (Ctrl+R on Windows and Linux), and Ctrl+F finds on the page on Windows and Linux.
+- **App dialogs open faster.** Each one loads only when you first open it.
+
+### 🩹 Fixes
+- **Windows fixes.** Account helpers and install commands resolve correctly, the installer checks that the new version really landed, header dropdowns no longer steal focus from the main window, and chat saves its state again.
+- **Restored custom-agent sessions keep their icon** and their chat view.
+- **New sessions start as top-level agent runs,** not as nested children of another session.
+- **Opening a prompt search result no longer stalls.** Pressing Enter on a result after browsing for a while used to rescan your whole history first; it now opens straight away.
+- **Menu labels no longer cut off early.** Items like Browser Tab show in full instead of "Browser…" in roomy menus.
+
+### ⚠️ Heads up
+- **The previous web chat view has been removed.** Desktop chat is native only, so the Use GPUI chat setting is gone.
+
+## 9.9.0 - 2026-09-19
+
+**Ghostex 9.9.0 is out.** The desktop app's sidebar and chat are rebuilt from the ground up in Rust with GPUI instead of the web views they used before, which cuts memory use roughly in half in many setups (from about 1.5 GB to about 800 MB). This release also adds actions under every chat message, per-session model picks, new session hotkeys, and CLI commands that let agents launch and talk to each other.
+
+### 🦀 A native desktop app at half the memory
+- **The sidebar and chat are now native.** Both are drawn by the app itself in Rust and GPUI instead of embedded web pages, so session clicks, scrolling, and typing respond in the same frame.
+- **Memory use drops by about half in many cases.** Workspaces that used around 1.5 GB now sit around 800 MB, and the built-in browser engine only starts once a page actually needs it, so launch no longer waits on web panes you are not using.
+- **Switching back is instant.** Recently visited chats stay warm instead of reloading, and the previous project's terminals, chats, and view keep running after you switch away; set how long with Keep the previous project live for in Settings (10 minutes by default).
+- **Views show a skeleton while they load.** Chat, Code, and Docs draw a placeholder that matches their real layout instead of an empty pane, restored browser panes stay asleep until you click them, and dark mode no longer flashes white between them.
+- **The previous chat view is still one switch away.** Turn off Use GPUI chat in Settings and restart the app to go back to it.
+
+### 🔭 Coming next: all native, and a new look
+- **The rest of the main views are moving to Rust next.** Over the coming releases, the remaining views in the app will be rewritten natively like the sidebar and chat.
+- **A big design revamp is on the way.** Ghostex will get a cleaner look that feels familiar to anyone coming from the ChatGPT or Claude apps.
+
+### 💬 Chat
+- **Actions and the time under every message.** Hover a reply for Copy, Reply by Annotating, Save to md, and when it arrived; hover your own message for its time, Rewind, Save prompt, and Copy.
+- **Pick a model for one Claude session without changing your default.** The composer's model and effort menus apply to the current session, with an Also set as default switch; in the model picker, Enter applies to the session and Shift+Enter sets the default. Codex can only change its default, and its controls say so.
+- **Identical skills show once.** Copies of the same skill installed in several places collapse into one row in the composer list.
+- **Delayed Send starts on When all agents finish.** New Session Automations dialogs on desktop, web, and mobile default to that trigger; an already armed send keeps its own setting.
+
+### ⌨️ Sidebar, titlebar, and hotkeys
+- **Session hotkeys follow browser tabs.** Next and Previous Session are Ctrl+Tab and Ctrl+Shift+Tab, pane tabs move to Cmd+Option+[ and ], and Back and Forward are Cmd+[ and ]; turn on Skip sleeping sessions to jump over sleeping ones.
+- **Titlebar tooltips show each button's hotkey.** Back and Forward stay in place in every view, and the mode-tab highlight slides between tabs.
+- **Collapse a group from its header.** The project chevron toggles collapse, and a section's status dots show only while it is collapsed.
+- **The new agent menu opens as a nested menu.** The plus button lists your agents with a back panel, like before.
+
+### 🤖 Agents that run other agents
+- **Agents can launch, message, and close other agents.** `ghostex agents` adds `whoami`, `types`, `create`, `list`, `send` (with `--interrupt` or `--queue`), and `close`; see `ghostex agents --help`.
+- **Pick a worker's model and effort at launch.** `ghostex create-agent` and `ghostex board start-work` take `--model` and `--effort` for Claude and Codex, for that session only, and resume and fork keep them.
+- **Ghostex Agents Orchestration replaces the Fable orchestration skill.** It walks agents through launching, messaging, reading, and closing helper sessions with the commands above.
+
+### 🗂 Workspace
+- **Two terminals side by side in the project editor companion.** The companion splits into resizable columns and remembers their widths.
+- **The window reopens on the monitor you last used.** Its position is saved as you move it, so a crash or force quit keeps it too.
+- **Accounts keep their last Claude usage reading when a refresh is rate-limited.** The row shows how old the reading is, and automatic switching skips that account until a fresh one arrives.
+- **Search results show their match count in a floating pill.**
+
+### 🩹 Fixes
+- **Linux keeps keyboard focus in browser chrome and sidebar rename,** and the sidebar sizes to the display's scale.
+- **The remote browser proxy works again,** so remote browser views connect instead of failing to configure.
+- **ZCode sessions can be renamed.** The new name is saved in ZCode's own session list.
+- **Dev servers keep their titles** instead of flipping to localhost.
+- **Search by Prompt opens a launch in the right session.**
+- **Rewind's confirmation quotes the prompt you are rewinding to.**
+- **Switching sessions closes an open image preview or model picker** instead of leaving it over the next session.
+- **The session you clicked away from loses its highlight right away,** even when the new session has to wake first.
+- **Toasts no longer block clicks underneath them,** and tooltips that got stuck now dismiss.
+
+## 9.8.5 - 2026-09-16
+
+**Ghostex 9.8.5 is out.** Agent Sync in the Agents Hub keeps every agent on your computer pointed at one shared set of skills, instructions, and hooks, plus switching a draft between Claude and Codex, annotations that clear after you send them, and fixes to chat and the sidebar.
+
+### 🔗 Agent Sync
+
+- **Keep every agent on one set of skills, instructions, and hooks.** Open the Agents Hub (Cmd+5) and choose Agent Sync to see each agent and profile on your computer, with a dot for Skills, Instructions, and Hooks and a list of problems such as broken links or copied skill folders.
+- **Review a plan before anything changes.** Sync all or sync one agent to preview the links and instruction pointers Ghostex will write; instruction files with other content are backed up first and nothing is deleted.
+- **Run it from the terminal too.** `ghostex agent-sync status`, `plan`, and `apply --yes` do the same scan, plan, and apply.
+
+### 💬 Chat and agents
+
+- **Switch a draft between Claude and Codex before the first message.** Use Switch Agent CLI in the model menu; the new agent picks its account by your Account for new sessions rule, and your unsent text stays in place.
+- **Queued prompts go out after a manual /compact in Claude.** Messages you queued no longer stay held once compaction finishes.
+- **Shift+Enter adds a new line wherever focus is in the chat view.**
+
+### 📝 Annotations
+
+- **Copying or sending annotations clears them.** This applies in the Browser toolbar and in Docs HTML files, and the toolbar's settings panel can turn it off.
+
+### 🗂 Sidebar
+
+- **Reveal Session leaves room around the session.** The revealed row stops 50px from the edge, below any pinned headers.
+- **The selected session blends with tinted sidebars in dark mode.** Its fill is translucent instead of a flat gray block.
+- **Dragging sessions is smoother.** The sidebar does less layout work while you drag.
+- **Search by Prompt stays open when started from Previous Sessions.** Its floating button now matches the chat composer's look.
+
+## 9.8.0 - 2026-09-16
+
+**Ghostex 9.8.0 is out.** Continue a Codex conversation that is open in another session, animated session sections with a separate dot for pending questions, one menu style across the app, Search by Prompt filters in the toolbar, and a reliable restart of the background server after an update.
+
+### 💬 Chat and agents
+
+- **Continue a Codex conversation that is open somewhere else.** When Codex says the conversation is in use by another session, choose Continue here (or press Cmd+Enter) and Ghostex closes the other Ghostex session, retries, and keeps your draft unsent until it succeeds.
+- **Rewind lands on the prompt you picked.** Claude slash commands now appear in the rewind list, so choosing a row no longer rewinds to a different prompt.
+- **Delayed Send waits for the agent to really finish.** A scheduled send no longer goes out while the agent is still writing its last turn.
+- **A session whose agent changed wakes with the right agent.** A session that started with one agent and was taken over by another now resumes with its current agent instead of the old command.
+- **Cursor conversations keep their place.** Late thinking steps from Cursor no longer shift where your next message is sent.
+
+### 🗂 A clearer sidebar
+
+- **Session sections open and close with an animation.** Status dots stay put while rows slide, and a session waiting on a question shows its own pink dot.
+- **Reveal Session is easy to spot.** After the section expands, the revealed session blinks with an outline, and the titlebar button uses a hollow circle.
+- **Closing a project keeps you in your Space.** Ghostex moves focus to an awake session in the next project of the same Space instead of leaving it.
+- **Light mode reads better.** The active session row and its hover buttons stand out more, and resize handles and agent tab drop targets use a softer gray.
+
+### 🎨 One look for menus and scrollbars
+
+- **Every menu shares one panel.** Dropdowns, context menus, and titlebar popups have the same rounded panel and shadow, and submenus open on click.
+- **Scrollbars are thin and match your theme everywhere.** Terminals, the code editor, chat, and the menu bar panel all use the same slim scrollbar that appears on hover.
+- **Long pick lists stay inside the window.** Delayed Send and other pickers scroll to the highlighted row instead of running off screen.
+
+### 🔍 Search by Prompt
+
+- **Agent and project filters sit in the toolbar.** They are dropdowns at the top right, and the list shows placeholders while your history loads.
+- **Open Search by Prompt from Previous Sessions.** A Search by Prompt button floats over the Sessions list.
+
+### 📝 Docs and views
+
+- **The annotation toolbar sits above your selection.** It moves below the text near the top of the page, and the X marks text for removal with a note.
+- **The Docs header shows Send or Copy with the annotation count.** It shrinks to an icon in narrow windows.
+- **Titlebar view menus offer Configure view and Wake again.** Configure view opens that custom view in Settings, and a sleeping web view can be woken from its menu.
+
+### 🩹 Fixes
+
+- **The background server starts on the first try after an update.** Ghostex waits for the old server to exit before starting the new one, so "gxserver failed to start" no longer appears until you reload, and the copyable diagnostics explain any start failure.
+
+## 9.7.0 - 2026-09-16
+
+- New Features
+
+  - Compact before you send. Press Option+Enter on macOS or Alt+Enter on Windows and Linux in the chat box, or right-click Send and choose Compact & Send, and Ghostex sends `/compact` first and queues your written prompt to go out the moment compaction finishes. Cursor's `/summarize` and Grok Build's compaction now use the same flow, with the same compaction card above the input and the same hold on queued messages, so nothing is delivered mid-compaction.
+  - Open File/Folder Location is back, everywhere a path can be copied. Right-click a file reference or file-change path in chat, an image preview, a changed file in the Git row or the commit dialog, a project, or a Docs entry and reveal it in your computer's file manager. Image previews also say Copy Path or Copy URL depending on what the picture actually is.
+  - File references open in Code or Docs with one click from composer pills and transcript paths, using the same view preference in both places. Double-click a composer pill to edit its text, and a view that is switched off simply leaves the menu instead of offering a dead action.
+  - Delayed Send can wait for a specific date and time. Session Automations gains a Specific time choice beside After a delay on desktop, web, and mobile, using the local time of the device you set it on. The Postpone by submenu now also has Edit delayed send and Disable delayed send, and the web sidebar can cancel a pending send.
+  - Projects you add join the Space that is open at the time and appear at its top, whether you add them from the More menu, the Add Project button on an empty list or empty Space, or the empty sidebar area's right-click menu. Add a project while Other is selected to keep it out of every Space.
+  - Debugging is its own Settings page, above About. It starts with Show debug UI controls, and only with that on does it load the diagnostic logging scenarios, session debugging controls, Storage usage by feature with a way to clear disposable caches, and on-disk Ghostex folder sizes with Refresh and Open Folder. The storage inspector works from any open Ghostex page, not only the one that owns the data.
+  - Docs keeps the files you have not saved yet in an Open Files list beside the tree, under the same section label, so switching between them no longer risks losing work.
+  - Installing the Claude Code hooks keeps your Claude transcripts on disk instead of letting Claude delete them after 30 days. A retention value you set yourself is left exactly as it is.
+  - App dialogs are native windows built from one shared modal kit, so every dialog has the same controls, spacing, and theming, and the New Thread picker has been restyled to match it, with centered key-hint chips.
+
+- Major Improvements
+
+  - Ghostex speaks about your computer, not your Mac. Settings, notifications, remote machines, Computer Use, the first-launch guide, Agents Hub, the Docs file menu, the export dialog, and the terminal font presets no longer name Finder, the Keychain, Launch Services, Low Power Mode, or "This Mac", and describe the same things in words that fit macOS, Linux, and Windows.
+  - Every shortcut hint is written in your platform's notation. Tips, the model picker, Settings, the prompt editor, Find, Add Project, Docs, saved prompts, slash commands, and session notes all render the same chord the same way: compact glyphs on macOS, key names on Windows and Linux.
+  - Long conversations open faster. Completed turns before the latest prompt arrive already collapsed and expand on demand, a page hidden for a moment is kept instead of rebuilt, and switching sessions runs one reconcile instead of several.
+  - Changing the app, system, or terminal theme repaints every open terminal at once, including idle terminals and terminals in parked projects, and a light window no longer flashes the dark sidebar at startup.
+  - Status cards above the composer and in the transcript share one shell and one motion: compact headers, the whole header as the hover target, animated open and close, and Subagents wearing the same pending-tool card as everything else.
+  - The Windows prompt editor (Ctrl+G) ships inside Windows builds again and talks to the app over a named pipe, and its window no longer shows the generic Windows icon.
+  - The main pane in Code, Browser, Kanban, Automate, and Docs keeps a minimum width of 455px, and the sidebar respects that floor when you drag it.
+  - Hover the model or effort to see the Model & Effort Picker shortcut, and hover the context circle to read the agent's terminal status line.
+  - Clean RAM tells you what it did: a toast confirms that the diagnosis prompt is on your clipboard and asks you to paste it into an agent session.
+
+- Minor Improvements
+
+  - Get Started agent tiles wrap onto new rows instead of squeezing.
+  - The account switch submenu closes as soon as you pick an account, and the switch backdrop covers the whole chat pane until the new account is ready.
+  - Chat popups keep the chat theme, so a light chat inside a dark app shows a light menu; the scroll-to-bottom pill takes the composer's border, fill, and text color; and a disabled image menu item looks disabled.
+  - Generate Name comes before Rename in the rename dialogs.
+  - Context details stay usable in a narrow pane, with a real height cap and a one-row footer.
+  - The sidebar shows more loading bars while a large project inventory is still arriving.
+  - The collapsed composer leaves room beside More actions instead of crowding it.
+  - Unread notification text is darker in light mode, and session-list dots are visible there.
+  - Escape and single-key terminal controls act immediately in chat instead of waiting on your login profile.
+  - Workspace state is written off the UI thread, so clicking around no longer waits on a save.
+  - Annotate in the Browser toolbar now opens inside the frame that holds the page content, so a Storybook story or another framed preview can be annotated instead of only the chrome around it. It also shows up again on Ghostex's own development pages, where it used to disappear before appearing.
+  - Sidebar section headings (Pinned, Sessions, Drafts, Browser, Parked, Snoozed) carry an orange dot when a session there is working and a blue dot when one is done or waiting on you, counting rows hidden by collapse or Compact mode, plus a plain dot on the section holding the active session. Section labels are also a little larger.
+  - Every sidebar tooltip waits exactly as long as the delay you set in Settings, including project titles, session cards, fixed action buttons, the branch badge, and the question dot. Moving from one label to the next no longer skips the wait.
+
+- Stabilization
+
+  - A cancelled Claude message that was never accepted returns its text to the composer, Rewind to here does the same, and Escape can no longer let a cancelled send slip through after the text comes back.
+  - Maximized composers no longer show working, tasks, or subagents cards on top of the overlay.
+  - Claude completion notifications wait while Claude still reports background work running.
+  - Loading earlier history survives overlapping snapshots, and the pinned section keeps its drop gap when headings are collapsed.
+  - Grok's always-approve composer row is no longer mistaken for a permission card, and Cursor's compaction tool catalog stays out of the transcript.
+  - A file diff deep inside a Claude Bash result can no longer become a status card's heading.
+  - Worktrees whose registered parent is a bare repository now list their first linked checkout.
+  - Clicking the find bar, the address bar, or terminal search while the page has focus sends your keys to that field instead of the page.
+  - The Clean RAM button keeps its width while it says Copied.
+  - A macOS accessibility update no longer dismisses an open popup.
+  - Pairing a phone with Easy Connect works again with the current Easy Connect helper. The phone app now tunnels with the same tailcat version the computer serves, so update the phone app and scan the code on the computer again.
+  - A file opened into Docs from a chat link keeps working after a reload, and opening a Code link or another chat file no longer takes its access away. Two files with the same name in different folders also stay separate.
+
 ## 9.6.0 - 2026-09-15
 
 - New Features
@@ -240,7 +1403,7 @@
 
 - New Features
 
-  - Slash commands you send from chat now stay in the conversation after a reload, together with their output. Long output expands when clicked, and model, effort, Fast mode and compaction results keep their status rows, thanks to @banozz.
+  - Slash commands you send from chat now stay in the conversation after a reload, together with their output. Long output expands when clicked, and model, effort, Fast mode and compaction results keep their status rows, thanks to @banozz0.
   - Bundled skills (Ghostex CLI, Ghostex Help, Browser Use and the rest) update themselves from GitHub, so a skill fix reaches you without waiting for a release. Installed skills refresh each time Ghostex starts; offline installs use the copy inside the app.
   - Park selected: select several sessions and park or unpark them together. Parking is on by default now, and its settings no longer hide behind Show Advanced.
   - The Extensions page has a Titlebar account usage section: star the Claude and Codex accounts whose usage you want to see in the titlebar.
@@ -364,7 +1527,7 @@
 - Stabilization
 
   - Agent finished and stopped notifications no longer show up twice in a row.
-  - Codex's local commands now show their full output, thanks to banozz.
+  - Codex's local commands now show their full output, thanks to banozz0.
   - A rewind that works but cannot tidy the terminal keeps your draft and tells you, instead of dropping it.
   - Closing the last browser tab takes you back to Agents rather than leaving an empty browser.
   - The menu bar dropdown stays open when you switch to another app.
@@ -493,7 +1656,7 @@
   - Model, reasoning effort and Fast mode choices in the chat composer come from a published catalog that updates without an app release, and Codex sessions gain a Fast mode pill.
   - Sessions whose agent process dies outside Ghostex, including Quit Ghostex & BG Service, a crash or a reboot, now go to sleep instead of disappearing into history, keep their chat, and wake on the next launch.
 - Minor
-  - Native alert dialogs such as the paste-protection and close-terminal confirmations appear again instead of invisibly holding keyboard focus, thanks to banozz.
+  - Native alert dialogs such as the paste-protection and close-terminal confirmations appear again instead of invisibly holding keyboard focus, thanks to banozz0.
   - Codex hooks are now marked trusted when installed, so Codex actually runs them instead of showing Installed while silently skipping them, and Settings says when a hook update is required.
   - A session started from Handoff or Export is created as a draft, so Chat View is available immediately and, when your default agent view is Chat, it opens straight into chat with the handed-off prompt in the composer.
   - Forked Claude and Codex sessions no longer share the parent's identity, so the fork and its parent stop showing the same chat and title.
@@ -523,1662 +1686,3 @@
   - The sidebar has symmetric gutters, separators that run its full width, and a plain gap against the workspace in place of the stacked separator strip.
   - The mobile chat view can switch an unprompted draft session's agent and send Enter or a shifted option key without typing into the terminal.
   - The transcript no longer shows a second typing indicator while the agent works, since the pinned working strip already reports it.
-
-## 8.4.0 - 2026-08-31
-
-- Major
-  - Session Chat now shows what the agent's terminal is doing right now: compaction and other live activity appear as a card pinned above the composer, stay visible wherever the transcript is scrolled, and clear on their own when the agent goes idle.
-  - Codex sessions that open a chooser — model, effort, permissions, approvals, or any other numbered picker — now say so in chat with the choice on screen, instead of refusing your message with a generic "input box is not on screen" error.
-- Minor
-  - The `ghostex` and `gx` commands keep working after an app update; a packaged launch refreshes command wrappers that were still pointing at the previous install's binaries.
-  - Close After Done sits beside Delayed Send in the session menus on desktop, web, and the terminal action bar, and both countdowns tick live instead of only moving when the session refreshes.
-  - First launch asks whether the terminal view should use the full pane or match the chat width, and new installs now default to full width.
-  - The agents tab context menu opens with Rename and Sleep for the session you clicked, above the scoped Sleep Right, Sleep Left, and Sleep Others actions.
-  - File references in the transcript read as ordinary links, and composer reference pills show their full path in a tooltip rather than a native title popup.
-  - Installed extensions show their author, and version labels are written the same way across the Store, your installed list, and Settings.
-  - Hermes sessions running under a named profile are recognized again, so chat no longer refuses every send while the composer is plainly on screen, thanks to @banozz.
-  - Agent commands that hop to another user or host, such as through `ssh`, no longer leave the agent CLI wedged in an editor at launch, thanks to @banozz.
-  - Project Board `start-work` dispatches the worker into the project you name instead of whichever project was touched most recently, thanks to @banozz.
-
-## 8.3.0 - 2026-08-30
-
-- Major
-  - Hermes Agent is now a first-class Session Chat agent, with its own transcript reader, model pill, welcome art, automatic session titles, hook allowlisting, and handoff hints.
-  - Agent questions asked by Pi, Hermes, and oh-my-pi are answerable straight from the chat card, each driven through that CLI's own picker, alongside the existing Claude and Codex support.
-  - Settings has a single Extensions page: the built-in features Ghostex ships sit above the extension store and your installed list, replacing the separate Customize page and the standalone Extensions window, and every menu, shortcut, and command-palette entry now opens it.
-  - A remote machine's project Actions load in the sidebar and run in the desktop command pane, so remote work no longer has to be started from a terminal by hand.
-- Minor
-  - Session Chat can give the transcript its own width, and the terminal view can use the full pane, match the chat width, or take an independent width of its own.
-  - Terminal notices can be answered with number keys, single-select questions submit as soon as you pick an option, and Claude's model-switch and paused pickers are answerable from chat.
-  - The composer's model and options pills stay as loading placeholders until the agent's screen is actually readable, instead of flashing empty labels while a CLI is still starting.
-  - Files and folders dragged from the desktop attach through their native paths, so local drops land as real attachments rather than unresolved names.
-  - Composer reference pills stay atomic, wrap with their own text, and no longer leak into the message the agent receives; pasting long text into the composer is noticeably faster.
-  - Empty draft sessions now stay until you delete or send them, instead of disappearing on their own.
-  - New installs open with an ice-tinted app chrome and a lighter accent color, and Accent Color now also marks advanced rows in Settings.
-  - First-launch setup finishes only when your first project starts — Escape and the close button no longer end it halfway — and its Skills step sets up the Ghostex CLI for you when a selected skill needs it.
-  - Chinese, Japanese, and Korean input works properly in the terminal: the composition caret is drawn in place, and Backspace edits the composition instead of deleting text behind it.
-  - Opening a file in Code from agent chat or the Agents Hub is queued until the editor is ready, instead of failing when the request beats the workbench.
-  - Spaces respond to trackpad swipes, and the Space switcher and its overflow menu are rounder and easier to hit; Settings moved into the sidebar's More menu.
-  - Prompt search no longer fills up with the title, commit-message, and sub-agent scaffolding turns that agents write into the same transcripts.
-  - Kanban card conversation links display again on large shared boards, and jumping to a dead linked session resumes the agent conversation rather than an empty shell.
-  - Custom agents keep their activity across identity updates and resume through their own CLI family.
-  - Saved Prompts lets you change tags and favorites on prompts you already saved, not only while saving them.
-  - Session Chat pins an agent-working indicator above the composer, so a running turn stays visible no matter where the transcript is scrolled.
-  - Interrupting a Codex session no longer trips a hook-output error, because the Ghostex notify hook now returns the response Codex's Interrupt event accepts.
-  - Long automation prompts stay inside their detail cards, chat surfaces no longer show stray browser focus rings, and child windows open centered on the main display.
-  - The Terminal View button previews the agent's CLI on hover with a readable tail, and Summary mode shows its state as its own icon.
-  - Markdown ordered lists keep the numbering the agent wrote instead of being merged into one run.
-  - macOS 26 and later no longer crash the zmx daemon on exit, and Codex session files resolve correctly on macOS.
-  - Android and iOS gain the custom transcript width toggle; on iOS the chat view loads reliably again and Send & Attach File opens the document picker as expected.
-
-## 8.2.0 - 2026-08-28
-
-- Major
-  - Spaces let you organize projects into named working sets and filter each local or remote gxserver independently, while machine tabs make it quick to move between this computer and connected machines without losing each machine's selected Space.
-  - New agent sessions can begin as durable drafts: choose the agent, model, effort, view, and first prompt before Ghostex launches a terminal, then recover the draft across desktop, web, and Android after navigation, reconnects, or crashes.
-  - Forked conversations now appear as a family across Session Chat and Previous Sessions, with branch badges and an in-chat switcher that follows successor sessions without losing the shared transcript.
-  - Arch Linux users now get an official, hash-verified `ghostex-8.2.0-linux-x64.tar.zst` package alongside the DEB and RPM downloads; its prefix-preserving layout installs Ghostex under `/opt` with the `ghostex` and `gx` commands on `PATH`.
-- Minor
-  - Session Chat preserves atomic file references in Monaco, keeps synced drafts until delivery is confirmed, restores unsent Saved Prompt drafts, shows clearer terminal readiness and refusal feedback, and presents compaction summaries and file-open paths more clearly.
-  - Agent and remote-machine settings are simpler to scan and configure, terminal width can apply to command panes, and sidebar tooltip delay is adjustable down to instant display.
-  - Docs can delete folders, style supported documents, and include temporary project files that were previously hidden.
-  - Quick Access includes already-open projects and offers direct Close and Remove actions, while sidebar grouping, active-session state, and empty states stay consistent across local and remote sections.
-  - Export Transcript is now Handoff, with a clearer agent action bar and shortcuts for carrying a session into another agent or conversation.
-  - Extensions can open approved remote URL surfaces while preserving the extension host's launch, consent, and bridge boundaries.
-  - Quitting the desktop app can shut down the full Ghostex service stack, including gxserver and its managed sessions, when you explicitly choose that option.
-  - Usage analytics now has a complete public field inventory, immediate opt-out controls, and clear disclosure of the one-way hashed identity used to group a person's own machines; retired sidebar-layout dimensions are no longer reported.
-  - Titlebar dropdowns keep their final row visible and return focus reliably, empty command-pane titlebars explain their controls, and action tooltips keep their intended spacing and hit area.
-  - Android preserves sent drafts across navigation, adds a default agent-view preference, and uses the same Handoff terminology as the desktop and web apps.
-
-## 8.1.0 - 2026-08-27
-
-- Major
-  - Extensions now run as first-class Ghostex experiences: install hash-verified packages from the redesigned Store, pin live titlebar launchers, and open extension views in the chat bar, terminal panes, popups, or app modals, with gxserver managing their processes and lifecycle.
-  - Session Chat can attach multiple images, files, and whole folders as compact pills, walk dropped folders, open file references at the right line in Docs or Code, save transcript images to Downloads, and reach the agent's model, effort, delayed actions, transcript export, terminal handoff, and other session controls without leaving the conversation.
-  - The embedded Ghostty engine moves to a substantially newer upstream build that cuts terminal memory by roughly 75% in its libghostty path, releases GPU resources for hidden surfaces, accelerates terminal string parsing, and improves Kitty graphics, clipboard, paste, Unicode, and IME behavior.
-- Minor
-  - Kimi, Campfire, OpenClaude, Command Code, and Devin join the built-in agent catalog with their own icons, status recognition, launch and resume behavior, and title cleanup; Settings can choose Chat or Terminal per agent and guides you through installing required hooks before a supported agent opens in Chat.
-  - Agent terminals now share a focused bottom action bar across desktop and web, can be centered at a configurable width with horizontal and vertical padding, and can apply that layout to command and editor companion terminals too.
-  - Previous Sessions shows transcript sizes, session rows surface note and Saved Prompt counts, and prompt search produces more relevant matches and clearer excerpts while ignoring empty Cursor projects and injected envelopes.
-  - Session and project actions are grouped into clearer menus, app dialogs share one rounded modal shell, Docs rename uses that shell, and Quick Access, Add Project, missing-folder, extension, and titlebar panels have more consistent spacing and labels.
-  - Parked browser, chat, command, and terminal runtimes restore more reliably, terminal writers are serialized to prevent dropped input, forks wait for their composers, F12 minimizes a focused command pane, and agent status stays tied to the session's actual agent.
-  - Linux embeds its browser views as native Alloy child windows and stages the Code runtime on demand; Arch Linux is included through the official prefix-preserving `ghostex-8.1.0-linux-x64.tar.zst` package alongside the DEB and RPM downloads.
-  - Android gains streamed macOS uploads, machine-level session menus, a kill-session action, Saved Prompt draft handoff, stable session collection ordering, and refreshed adaptive icons.
-  - Anonymous usage analytics now report only coarse OS, feature, and count data, never prompts, paths, project names, or personal content, and can be disabled immediately in Settings > Privacy.
-  - File drops can be saved as message markdown, terminal media opens with the operating system, browser home URLs persist with project snapshots, remote Saved Prompts keep their tag IDs, and transcript exports and project pickers correctly correlate concurrent requests.
-
-## 8.0.0 - 2026-08-25
-
-- Major
-  - Every session can now carry a note — what you were doing, what to pick up next — attached to the agent's own conversation so it survives closing, resuming, and compaction, shown as a dot with a hover preview on the session row across the desktop, web, and Android apps, editable from the chat composer and the session menu, and readable from `ghostex session-note`.
-  - Stashed Prompts is now Saved Prompts and gained colored tags, a tag rail with an Untagged filter, and a Go to session action that takes you back to the conversation a prompt came from; saved prompts stay attached to that conversation even after the agent compacts it, Alt+S saves what is in the composer, and Cmd+Alt+S opens the list.
-  - Sessions you are not working on right now can be parked instead of closed: they leave the active list, collect in a collapsible Parked section at the bottom of their project, and keep their terminal — turn it on with Enable session parking.
-  - Scheduled automations now resume the durable agent session they created instead of starting a new conversation on every run, so a recurring job keeps its context, and an agent can link the session it is working in to the board card it came from.
-  - Session Chat shows the sub-agents Claude is running as their own strip with per-agent status and token counters, reports what the terminal is doing while a turn is in flight, and shows Claude's current permission mode as a pill you can change from the composer.
-  - Prompt search opens as its own window over whatever you were doing, on Cmd+Shift+F, instead of taking over the focused terminal, and now finds text inside prompts you pasted into Claude Code rather than only the collapsed "Pasted text" marker.
-  - Closing browser panes, chat surfaces, and terminals no longer leaves their renderer processes behind, so a long day of work releases memory instead of climbing into tens of gigabytes, and a chat surface you have not looked at for twenty minutes is unloaded and restored the moment you return to it.
-  - First launch now walks through a six-step setup that skips the steps your machine already satisfies and ends by creating your first project and session, so a new install is usable without a trip through Settings.
-  - Ghostex now has an extensions system with a Store and Installed browser, audited hash-verified packages, a titlebar launcher with pinnable live-badge icons, and view, chat-bar, terminal-pane, popup, and modal placements; the first catalog includes Storybook, Session Scratchpad, Lazygit, btop, Claude Usage, and Git extensions.
-  - The Linux app draws the same integrated titlebar and window controls as Windows and macOS, and Linux downloads now include a portable `.tar.zst` archive for Arch Linux and other distributions alongside the DEB and RPM packages.
-  - Ghostex ships a refreshed look: a new app icon, darker app chrome, one toggle and focus-ring shape across every control, restyled Kanban, Automate, and Settings surfaces, and new defaults for fresh installs — Session Chat as the agent interface, sessions grouped by project in the sidebar, and colored agent logos.
-- Minor
-  - Exporting a transcript now asks what to include first — the commands the agent ran, the patches it applied, and its reasoning — instead of always writing everything.
-  - Trycua can be installed from Settings on Windows and Linux, not only macOS, and Settings shows the exact command the button runs.
-  - Ghostex's bundled agent skills are consolidated behind one Ghostex CLI skill that covers orchestration, prompt-history search, and automations, and Project Board Beads is installable alongside it.
-  - A session that runs `/compact` no longer gets stuck reporting work forever, so its queued prompts keep being delivered.
-  - A Delayed Send now delivers the message staged in the chat composer instead of pressing Enter on an empty line and dropping it.
-  - Large tool outputs no longer disappear from the middle of a transcript, and very long ones are shortened for display with the full text still one click away in the file.
-  - Scrolling up in a chat keeps loading older messages on its own instead of stopping at a Load earlier button, and jumping back to the newest message animates instead of snapping.
-  - A session forked with `codex fork` keeps its chat instead of freezing on the conversation it was forked from.
-  - A terminal title that only repeats the working directory no longer becomes the session's name, and Grok's status prefixes are stripped out of generated titles.
-  - Renaming a session from chat now shows the name the agent picked as its own card in the conversation, and a command you type in the composer reads as your own turn instead of a system line.
-  - Claude's rotating status markers are recognized again, so live status shows while it works, and the messages it prints when it rejects a prompt — an unknown command, for example — now appear in the chat instead of the prompt silently vanishing.
-  - Images in a transcript render as compact thumbnails with a copy-path action on the thumbnail and in the preview, and Codex's generated images show the same way.
-  - Typing in the chat composer no longer loses the keyboard to the terminal behind it, and a chat draft is kept until the terminal confirms it was pasted.
-  - Ghostex's own bundled command-line tools are recognized on Linux, so the CLI installs and repairs correctly there.
-  - Sending a prompt now waits for the terminal to confirm it was queued, so a message can no longer be reported as sent while it was dropped.
-  - The macOS titlebar zooms on a double-click, the traffic lights and project name sit at a comfortable inset, and workarea switch hotkeys work from every surface.
-  - Resources now attributes an orphaned listener to the project that owns it.
-  - Browser and editor panes wait ten minutes before sleeping instead of five, and an agent terminal that has never been prompted is never put to sleep.
-  - Card association from an agent session contributed by [@banozz](https://github.com/banozz).
-
-## 7.13.0 - 2026-08-22
-
-- Major
-  - Prompts can now be queued from the chat composer with Tab or a long press on Send, and Ghostex delivers one each time the agent stops — with every client closed, the phone locked, or the desktop app quit — so you can line up a session's next few turns and walk away; queued prompts can be edited, sent immediately, deleted, or reordered, the sidebar and the terminal show how many are waiting, and a session with a queue is never put to sleep automatically.
-  - Your unsent chat draft now follows you between the desktop, web, and Android apps, and a newer draft from another device offers itself in a bar above the composer instead of overwriting what you were typing.
-  - A new Find Prompts surface, opened with Alt+F or from the command palette, searches every prompt this machine has ever sent to an agent — across Claude Code, Codex, grok, Pi, OpenCode, and Cursor Agent — and resumes or forks the session it came from, on the desktop, web, and Android apps, sharing its index and starred prompts with `gx f` in the terminal.
-  - grok sessions can now be opened in Session Chat, which follows its conversation, tool calls, and results as they happen, reads the model and reasoning effort off its statusline, and exports its transcript.
-  - The project board now draws your own custom bd statuses as their own columns instead of showing those cards as fresh work, and columns can be added, renamed, and removed from the board itself.
-  - Adding a project and cloning a repository are now one dialog: paste a repository or pick a folder, and a confirmation step shows where the clone will land, warns when the destination is already taken, and carries the branch name, main-only, and shallow options through to the clone.
-- Minor
-  - Cmd+K clears the focused terminal on macOS the way Ghostty's own binding does, dropping the scrollback and then the rows above the cursor so a half-typed command line lifts to the top, and Settings names the chord as reserved rather than letting a command take it.
-  - The chat transcript is set in one deliberate type scale instead of four sizes with per-host line heights, and opening chat no longer flashes a lighter panel before the conversation appears.
-  - Fenced code in a conversation is syntax highlighted, GitHub-style alerts render as callouts, and tables, file chips, and collapsible details read properly.
-  - A reasoning turn is now headed by its own opening line instead of a column of identical "Thinking" rows.
-  - The transcript shows what Claude Code is doing while it works — the status line it repaints on its terminal, and compaction with its progress — instead of staying empty until the turn lands.
-  - An on-screen picker the agent puts up, such as Claude Code's resume chooser, can now be answered from the chat surface, and it delivers the row you actually chose.
-  - The chat composer has a cut, copy, paste, and select-all context menu.
-  - The model and effort pills no longer sit under a loading skeleton forever on a session whose agent names neither, or on a session that has stopped.
-  - A message the agent CLI handles itself, such as `/usage` or `!ls`, is no longer reported as having failed to reach the agent.
-  - One "Open links in" setting under Browser now decides where every web link an agent sends opens — terminal Command-clicks, chat links, and detected dev servers — replacing two settings that answered the same question with opposite defaults.
-  - Agent menus mark every agent whose sessions can be opened in Session Chat, on the desktop and Android apps.
-  - A custom agent built on a supported provider now keeps that provider's icon on its sessions and can be opened in Session Chat.
-  - Browser tabs show the page's favicon in the sidebar, and a page that asks to close its own tab now closes it.
-  - The project board can be filtered by tag alongside priority and estimate, and the choice follows you into every project.
-  - Android loads Session Chat from assets bundled in the app, keeps Send Answer above the software keyboard, opens transcript search from the terminal overflow menu, and shows the sessions list with the same project rails, icons, tags, and grouping as the desktop sidebar.
-  - Creating a terminal on a remote machine now checks what that machine's gxserver can actually do and says which side needs updating, instead of failing with the daemon's own error text.
-  - Sidebar hover styling works again after switching back to the window, and tooltips dismiss when the pointer leaves.
-  - A project ticket taller than the window now scrolls inside it instead of losing its top and bottom past the screen edges.
-  - The Delayed Send dialog no longer sits low in its own window.
-  - The Stashed Prompts search field takes focus when the dialog opens.
-  - Browser Profiles is a normal Browser feature now rather than an experimental one.
-
-## 7.12.0 - 2026-08-20
-
-- Major
-  - A new Export Transcript agent action writes the session's conversation to a markdown file — your messages, the agent's replies, the commands it ran with their output, and the files it changed — and offers to start a fresh conversation that already mentions the export, so you can hand a session's context to another agent without copying anything by hand. Available on the desktop, web, and Android apps and from the `ghostex` command line.
-- Minor
-  - Automatic sleep no longer retires a session you are looking at, including one showing its chat surface with the terminal parked behind it, or a session with a Delayed Send still waiting to fire.
-  - Removing an installed agent hook or bundled skill now happens in Settings > Agents next to the control that installed it, with a remove action on each row and one Uninstall All for the whole set.
-  - Remote settings now labels a saved machine's action as Install or Update depending on whether it already runs gxserver, and shows the installed version on the same row.
-  - The project board now explains a refused action — closing an issue that still has open blockers or children, an impossible dependency, an issue id that does not exist — and offers the step that resolves it, instead of reporting the board as unavailable and telling you to reinstall Beads.
-  - The Code tab is now disabled for remote projects, where it would have opened this machine's files rather than the remote ones, and offers to copy the remote path instead.
-  - The session persistence warning in Tips now opens the settings page that actually holds that setting.
-  - Desktop Control settings now reads the real accessibility and screen recording permission state instead of reporting it incorrectly.
-  - The sidebar's scroll fade now settles correctly after a project or collection finishes animating open.
-
-## 7.11.0 - 2026-08-19
-
-- Major
-  - Chat now tells you when the agent's terminal needs you, showing a notice for the CLI screen that is waiting and flagging a message the CLI swallowed instead of leaving it silently unanswered.
-  - Back and forward navigation moves through recently visited sessions from the sidebar buttons or a hotkey, on both the desktop and web apps.
-  - The chat composer can now attach project files by typing `@` and picking from the session's project, with the picker opening wherever the mention is typed in the draft.
-  - The Monaco prompt editor now ships inside the macOS app, so Ctrl+G opens it on installed builds instead of quietly falling back to the machine's default terminal editor.
-  - A new Command Pane Side setting docks the command pane as a full-height column to the right of the workspace instead of a strip along the bottom, remembering its own width per project.
-- Minor
-  - Programs running in the terminal can copy to the system clipboard again.
-  - Switching a session from the terminal to chat now carries whatever you had typed into the agent CLI over to the chat composer, on the desktop and Android apps.
-  - Pictures in a conversation can now be saved to disk from the chat image viewer.
-  - Long thinking blocks are capped with an expand toggle, so a single reasoning dump no longer owns the whole transcript scroll.
-  - An agent's background task notifications now read as one status row with its result, instead of a block of raw tags.
-  - The chat composer no longer behaves like a code editor, and F1 opens its command palette instead of typing a stray character.
-  - Sessions you are viewing from your phone are no longer put to sleep by the owning machine's automatic sleep sweep.
-  - Reconnect on Android now replaces the dead terminal instead of reporting success while the exited process stayed on screen.
-  - The Add Project dialog can create a new folder in place and start the project in it.
-  - Renaming a Claude Code session from Ghostex now updates the sidebar card as soon as Claude confirms the new name.
-  - Settings sorts the bundled agent skills into recommended and optional, adds a Ghostex Computer Use skill, and offers the one-time Cua Driver setup the machine-automation skills need.
-  - First launch now shows a single setup flow that opens with the tutorial video, instead of a separate video window followed by setup.
-  - Notifications stay attached to the Ghostex window instead of floating above whatever app you switch to.
-  - Opening a link from a browser page in a new tab now reveals that tab's row in the sidebar, including background middle-click tabs.
-  - Launching an agent session on a remote machine works again instead of reporting a failure and dropping the workflow prompt.
-  - Resources now reports process memory the way Activity Monitor does and lists one row per dev server, so its totals stop being inflated.
-  - Delayed Send in the web app now runs on the machine hosting the session, matching the desktop and phone apps.
-  - Project bodies and sidebar sections animate open and closed again instead of snapping shut.
-  - Chat no longer shows prompts that were revised or re-sent before the agent replied, so the conversation matches what the agent actually ran.
-  - Sending a chat message to a resumed Claude session now answers its resume-usage prompt first, so the message reaches the agent instead of being swallowed as menu keystrokes.
-  - Clicking a picture in chat now toggles between fitted and full size, zooming to the spot you clicked and panning by scroll.
-  - Interactive prompt cards now ask one question at a time with numbered shortcut keys, a collapsible header, and a free-text answer row in the composer's place.
-  - Sending a chat message scrolls it into view without leaving an empty gap above the composer.
-  - Copying one of your own chat turns now includes its image references, so pasting it into another composer still attaches the same pictures.
-  - The sidebar session filter menu gained a No tag row for isolating sessions that carry no marker.
-  - Sessions from agents that use half-circle spinner glyphs now report working status correctly and keep those glyphs out of the session title.
-  - The Docs pane in Manage now fills the full height of the pane and follows the shared app theme.
-
-## 7.10.0 - 2026-08-17
-
-- Major
-  - Delayed Send is now owned by the machine hosting the session, so timers and agent-stop triggers keep counting down and still fire after Ghostex is closed or reconnected, including for remote sessions.
-- Minor
-  - Agent sessions set to open in Chat now start directly in Chat with the composer focused instead of briefly showing the terminal first.
-  - Clicking inside a chat now moves keyboard focus there instead of leaving typed keys going to the terminal behind it.
-  - Narrow chat panes now place session options and prompt actions on separate rows and widen chat search, so the controls stay reachable instead of crowding each other.
-  - Android chat now uses the full screen width and reserves Enter for new lines, keeping sending a deliberate tap.
-  - Opening an existing conversation no longer flashes the new-session welcome screen while the transcript loads.
-
-## 7.9.1 - 2026-08-16
-
-- Major
-  - Windows upgrades and same-version repairs now install without the extra already-installed confirmation and reopen Ghostex automatically.
-- Minor
-  - Windows keeps downloaded runtime components across installer replacement and fetches them with its built-in HTTPS stack instead of relying on a system curl executable.
-
-## 7.9.0 - 2026-08-16
-
-- Major
-  - Remote terminals now reconnect automatically through network interruptions and system sleep, preserving the remote session and scrollback instead of dropping to a local shell, thanks to @NiTE.
-- Minor
-  - Session Chat adds a per-session Verbose control that remembers whether thinking and tool activity should start expanded, thanks to @banozz.
-  - Default Agent View now switches compatible agents into Chat automatically, remembers each session's chosen view across restarts, and keeps the terminal live in the background.
-  - Session Chat detects model and reasoning options during agent startup instead of leaving them blank until a later refresh.
-  - Supported agents launched inside an existing terminal are recognized as soon as their identity appears, making Chat available without reopening the session.
-  - Chat and terminal action tooltips now show the configured keyboard shortcuts for faster discovery.
-  - Large sidebars reduce CPU and remote traffic by rate-limiting project Git-stat checks and updating only rows whose state changed.
-  - Remote project groups show only the actually focused session instead of also exposing an unrelated first session, thanks to @NiTE.
-  - GitHub releases now link directly to every customer installer and explain how to request the iOS TestFlight through the Ghostex Discord.
-
-## 7.8.0 - 2026-08-15
-
-- Major
-  - Ghostex now uses the latest upstream Ghostty terminal engine to improve terminal performance while lowering RAM and CPU use.
-  - Session Chat can search the full conversation and jump between matching results on desktop, web, and Android.
-  - Session Chat can mention installed agent skills by typing `$` and choosing from the session's available skills.
-  - Session Chat now puts Claude and Codex model, reasoning effort, Fast Mode, permission mode, and Plan mode controls directly in the chat workflow.
-  - Automations can run once after a countdown timer or at a chosen date and time.
-  - Recent Projects can open a real project-scoped terminal on a connected remote machine.
-  - Project Board can initialize, update, and migrate Beads in the connected environment.
-- Minor
-  - The Ghostty update fixes a terminal crash that could occur when hyperlinks reflowed.
-  - Windows ARM64 now uses an optimized native Ghostty terminal build.
-  - Session Chat makes agent activity easier to scan with grouped thinking, compact tool summaries, and optional Verbose Mode.
-  - Session Chat appearance settings now cover theme, custom font, and transcript width on desktop and Android.
-  - Session Chat drafts can be stashed directly from the composer.
-  - Failed Session Chat sends restore the unsent message and show a clear error.
-  - Accepted Session Chat sends clear the composer and show the working state immediately.
-  - Session Chat keeps keyboard focus and Select All inside the composer on the desktop app.
-  - Expansion for sidebar collections and session groups stays local to each window and device.
-  - Sidebar item tooltips wait longer before appearing so they do not interrupt normal navigation.
-  - Toggle Chat View now defaults to `Alt+G`, and customized hotkeys can be reset individually.
-  - Manually launched Codex sessions reconnect to the correct conversation when process detection is delayed.
-  - macOS no longer lets Chromium clone the app bundle on every launch and leave gigabytes of temporary data behind.
-  - On-demand component cleanup now removes obsolete versions and abandoned installation artifacts.
-  - Source mode is disabled for remote projects where it cannot operate correctly.
-  - One-shot automations preserve their deadline across restarts and disable themselves after the due run is queued.
-
-## 7.7.1 - 2026-08-13
-
-- Major
-  - Ghostex releases are now planned around what actually changed, so updates are published faster and reach you sooner after a fix lands.
-- Minor
-  - Each release now includes a published record of how every download was produced, so a build can be traced back to its exact source.
-  - Release problems are detected before packaging begins, which reduces the chance of an incomplete or inconsistent update.
-  - The project README presents Ghostex more clearly for people evaluating it for the first time.
-
-## 7.7.0 - 2026-08-13
-
-- Major
-  - Windows now guides first-time setup by checking WSL, helping you choose a distribution, and preparing the Ghostex runtime before opening the workspace.
-  - Remote machines reconnect more reliably after sleep, wake, tunnel interruptions, and temporary network failures, while remote session renames stay synchronized.
-  - Command panes restore their linked sessions and Action tabs more faithfully, including live working and completion status when you return to the app.
-- Minor
-  - On-demand component installs now show clearer checking, download progress, and size information instead of an indeterminate wait.
-  - Project Board uses the Beads installation from each local, Linux, or WSL environment and provides clearer installation or migration guidance when attention is needed.
-  - First-launch setup, recent-project recovery, Session Chat controls, titlebar customization, and Windows terminal startup are more dependable.
-
-## 7.6.0 - 2026-08-12
-
-- Major
-  - Docs can mount an additional folder beside each project's own files, with clear copyable paths for everything in that collection, thanks to @banozz.
-  - Worktrees can rename both their folder and branch directly from the sidebar, thanks to @banozz.
-  - Project sessions are organized into collapsible Browser, Pinned, and Sessions sections so busy workspaces stay easier to scan.
-- Minor
-  - Session Chat presents tool activity and hidden work more clearly, keeps long output manageable, and adds a focused copy action to each final response.
-  - Browser panes can open their current page in the system browser, and titlebar customization is easier to reach from its context menu.
-  - Windows runtime setup, WSL terminal integration, session recovery, and on-demand component handling are more dependable.
-
-## 7.5.0 - 2026-08-10
-
-- Major
-  - Session Chat now protects unfinished drafts, moves prompts safely between chat and terminal, detects agent model and effort details, and keeps completed work compact until you choose to expand it.
-  - Project Board can start work with the agent assigned to a ticket, making it faster to move directly from planning into the right conversation, thanks to @banozz.
-- Minor
-  - Docs now discovers files in artifact and AI folders by default and handles find, replace, redo, and common editing shortcuts more naturally.
-  - Quick Access and sidebar modals rank results more clearly, preserve pinned-section boundaries, group stashed prompts by day, and make keyboard selection more dependable.
-  - Settings adds a preferred interface for newly launched agents, chat appearance controls, optional titlebar chrome, and more reliable plugin reinstalls.
-  - Focused terminals can be zoomed more easily, while Windows runtime startup, on-demand components, and WSL packaging are more dependable.
-  - The Android app adds light and dark Session Chat themes and a clearer outline around the active session.
-
-## 7.4.0 - 2026-08-08
-
-- Major
-  - Project Board now remembers your filters and sorting, offers both sort directions, shows ticket creators and assignees, and can resume linked conversations even after project or ticket names change.
-  - Quick Access can progressively load older sessions, while command panes and existing agent conversations reconnect more reliably when you return to them.
-- Minor
-  - Global Actions are available directly from project rows and refresh immediately after changes, thanks to @banozz.
-  - Stashed Prompts, Previous Sessions, project collections, session groups, and sidebar drag-and-drop have clearer controls and more dependable behavior.
-  - Project Board scrollbars can be clicked and dragged normally, and completed lanes default to showing the newest work first, thanks to @banozz.
-  - Session Chat loads images and completed Codex messages more smoothly, while the Android chat stays ready in the background and handles the on-screen keyboard more reliably.
-  - Windows terminal sessions, agent hooks, remote cloning, project icons, support diagnostics, and long-running gxserver connections are more dependable.
-
-## 7.3.0 - 2026-08-07
-
-- Major
-  - Quick Access now brings the Command Pane, Recent Projects, and Recent Sessions into one fast, tabbed workflow with consistent search and keyboard shortcuts.
-  - Remote projects can open Source and Prompt Editor through their connected machine, while Docs can browse and manage files on that remote workspace.
-- Minor
-  - Remote machines can be reordered directly in the sidebar, sidebar sections collapse more smoothly, and active sessions stay clearly visible through collapsed groups.
-  - Previous-session search preserves exact word and phrase matches, and choosing an already-running conversation focuses its existing terminal instead of opening a duplicate agent.
-  - Windows browser keyboard input and popup focus are more reliable, while menus, tooltips, and scrollbars have cleaner sizing and placement across the desktop app.
-  - Terminal selection, agent waits, prompt delivery, support logs, and live session tracking are more dependable during longer-running work.
-  - The Android app shows useful working, attention, and awake counts when machine and project sections are collapsed.
-
-## 7.2.0 - 2026-08-06
-
-- Major
-  - Switching between projects and machines now preserves each workspace's live terminal panes, tabs, scrollback, and chat state, so returning to a project restores the view exactly where you left it without dropping sessions.
-  - Project groups now offer quiet, header, and branched visual styles, a broader color palette across desktop and Android, and a new CLI command that can create a group or move a project into one by name.
-- Minor
-  - Remote projects can create and open workspace terminals more reliably from the desktop app, with safer connection and session validation.
-  - Existing installations get a safer storage migration that keeps legacy gxserver and log paths working while moving data into the operating system's standard locations.
-  - Web terminals keep their connections mounted across tab and chat switches while keyboard focus follows only the active terminal.
-  - OMP sessions now keep the correct conversation identity, show cleaner live titles, and use refreshed full-color branding across desktop and Android.
-  - Popup menus on macOS stay open reliably when invoked from the active Ghostex window.
-
-## 7.1.0 - 2026-08-05
-
-- Major
-  - Ghostex now keeps settings, app data, caches, logs, and runtime files in the standard locations for each operating system, automatically migrating existing installations while preserving compatibility with saved prompts, attachments, agent hooks, and bundled tools.
-- Minor
-  - Stashed prompts save and refresh more reliably, including prompts tied to a specific project or session.
-  - New sidebar opacity controls let you tune group and project surfaces independently on desktop and Android.
-  - Remote chat attachments and pasted images consistently use the connected machine's configured Ghostex storage location.
-  - Tooltips and compact controls are clearer and more consistent across the desktop workspace, Project Board, Settings, and the web app.
-
-## 7.0.0 - 2026-08-04
-
-- Major
-  - Ghostex for Windows now uses installable x64 and ARM64 packages with built-in automatic updates from GitHub Releases; existing 6.x Windows users need to install 7.0.0 once to move onto the new updater.
-  - Session Automations can wait for agents to finish before sending a prompt, while missing project folders are detected and can be relocated without losing the project setup.
-  - Session Chat adds attach-anything uploads, larger image previews, broader agent transcript support, continuation tracking, and clearer live model and action state across desktop, web, and Android.
-  - Ghostex can download large app components only when needed and provides a dedicated Plugins window, reducing the size of the core desktop installation.
-- Minor
-  - Existing Codex and other agent integrations automatically repair Ghostex hook paths after the storage-folder migration, preventing PreToolUse and UserPromptSubmit hook failures.
-  - Global Actions can appear directly in the tab strip, and Global Defaults can configure common project settings once for every project, thanks to @banozz.
-  - Remote project collections, flexible GitHub clone inputs, terminal background images, multi-monitor popup placement, session reconciliation, and Windows startup reliability make everyday workspace management steadier, with Windows startup improvements from @yossifyahya16.
-  - The Android app adds Session Automations, chat attachment uploads, a simpler unified terminal menu, clearer quick actions, and the latest session-status improvements.
-
-## 6.13.0 - 2026-08-01
-
-- Major
-  - Session Chat lets you read and reply to agent conversations directly from Ghostex on desktop, web, and Android without switching back to the terminal.
-  - Chat conversations update live with complete transcripts, tool activity, working status, question choices, and session actions so you can follow and guide agents more naturally.
-  - The chat composer adds rich editing, slash commands, image paste, and attachment support for faster, more expressive prompts.
-- Minor
-  - Mobile adds clearer Session Chat entry points, agent actions, live host state, and context menus that stay compact and fit the available screen.
-  - Shared Project Boards keep their established Beads issue prefix when the same board is opened from multiple projects.
-
-## 6.11.0 - 2026-07-31
-
-- Major
-  - Add Project now guides you through opening or cloning repositories with source-control discovery and destination selection across the desktop, web, and Android apps.
-  - Automations now reliably deliver their prompts to newly created agent sessions and record the agent’s real result instead of timing out or mistaking echoed instructions for completion.
-- Minor
-  - Remote projects remain selected while you work, and on macOS, opening a Browser pane for a remote project now shows that machine’s listening ports.
-  - Mouse clicks and selections in terminal panes stay aligned with the pointer more reliably.
-  - Windows and Linux use platform-appropriate default shortcuts and display shortcut labels in their familiar native style.
-  - Working sessions keep a steadier order based on when the current work began, while project menus and Add Project dialogs remain better positioned and easier to use.
-
-## 6.10.0 - 2026-07-30
-
-- Major
-  - The new optional Inbox sidebar provides a position-stable view of sessions across every project and machine, with the Classic sidebar remaining the default.
-  - Inbox sessions can be settled, snoozed until a chosen time, restored, or automatically moved aside after inactivity while working and blocked sessions remain visible.
-  - Inbox can group sessions into collapsible projects, combine the same repository across machines, and keep pinned, browser, worktree, and Quick sessions easy to reach.
-  - New worktree sessions can be created directly from Inbox with an agent, base branch, optional first prompt, automatic project setup, and safe cleanup when the last session closes.
-  - Prompt Editor drafts can now be stashed, searched across the current project or all projects, and inserted back into a terminal without sending them.
-- Minor
-  - Session cards can show branch, changed-line totals, pull request state, working duration, machine, and worktree details without reordering as activity changes.
-  - Project icons are discovered from repository metadata, while project grouping and custom ordering make larger workspaces easier to scan.
-  - Switching projects and refreshing Git information causes fewer stalls, and Settings opens reliably even when older saved preferences need normalization.
-  - Session renaming is more reliable and the new Ghostex Auto Rename Session skill can name the current session from the work it contains.
-
-## 6.9.0 - 2026-07-28
-
-- Major
-  - Focused agent terminals now provide quick actions for opening Prompt Editor and attaching a file or folder without leaving the terminal.
-  - File and folder attachments work with local sessions and remote machines, including automatic upload and path handling for WSL workflows.
-- Minor
-  - Session renaming now reaches the active agent more reliably, including Pi’s dedicated naming command.
-  - App dialogs fit their content more naturally while keeping long prompts and rename text accessible.
-  - The first-run mobile guidance now points directly to the current React Native Android app.
-
-## 6.8.0 - 2026-07-28
-
-- Major
-  - Ghostex for Windows now ships beta x64 and ARM64 installer EXEs designed for running agent terminals and project tools through WSL2.
-  - Browser camera and microphone access now uses clear permission prompts, while browser and terminal keyboard input behaves more reliably.
-  - Creating several project terminals at once and receiving live session updates is more dependable under heavy activity.
-  - The Android app adds customizable agent hotkeys, better scrollback controls, and more reliable terminal interactions.
-- Minor
-  - Project headings can create WSL-backed terminals directly, Settings can remember a preferred WSL distribution, and Automate is available without the experimental-features switch.
-  - Linux x64 users can install the current GPUI app through updated DEB and RPM packages.
-  - Fixed app dialogs scroll more naturally, session tooltips align to their rows, and sidebar search and remote-machine controls are easier to use.
-  - Resource usage is attributed to the most specific matching project, including nested worktrees.
-
-## 6.7.0 - 2026-07-25
-
-> **A quick note:** Ghostex now runs on its cross-platform, Rust-based app framework instead of Swift and AppKit. There may still be a few small issues, so please report anything you find on the [Ghostex Discord](https://discord.gg/df7b3G92CS) and I’ll get it sorted as soon as possible.
-
-- Major
-  - Workspace tabs now keep the order you chose instead of reshuffling as agent activity changes, and new terminals are added predictably at the end of their pane.
-  - Terminal panes now show quick buttons for jumping to the top or bottom when you are far into the scrollback.
-  - Delayed Send and Close After Done actions from the mobile app now reach the connected machine reliably.
-  - Disabled Settings controls now explain why they are unavailable and what needs to change before you can use them.
-- Minor
-  - Mobile context menus stay inside the visible screen more consistently, and terminal key feedback uses the platform’s native haptics.
-  - Git status and changed-file information preserve meaningful whitespace more accurately when read from remote machines.
-  - Settings and update actions from the macOS app menu open more reliably, including when Ghostex starts outside a normal terminal environment.
-  - Git commit dialogs, command-pane controls and drag feedback, and session tooltips have cleaner sizing and placement.
-
-## 6.6.0 - 2026-07-24
-
-> **A quick note:** Ghostex now runs on its cross-platform, Rust-based app framework instead of Swift and AppKit. There may still be a few small issues, so please report anything you find on the [Ghostex Discord](https://discord.gg/df7b3G92CS) and I’ll get it sorted as soon as possible.
-
-- Major
-  - Keyboard shortcuts, terminal input, Tab navigation, and app commands now reach the correct terminal, browser, or Ghostex surface more reliably.
-  - New terminals and splits open more consistently inside the active project or worktree, including restored and persistent sessions.
-  - The Source editor starts more predictably and now offers a clear retry when its embedded code workspace cannot load.
-  - The mobile app now updates session actions and project organization immediately while safely reconciling them with the connected machine.
-  - Mobile terminal controls add expanded agent hotkeys, pageable extra keys, clearer modifier state, and optional haptic feedback.
-- Minor
-  - New mobile terminals can start in the current session’s folder, while Tailscale status, logs, attention clearing, and live session indicators are easier to use.
-  - Mobile session menus stay within the visible screen and add richer actions, project appearance controls, and clearer session details.
-  - Projects can be dragged out of collections more naturally, and nested sidebar scrolling, tooltips, and project-list visuals feel steadier.
-  - Session search shows clearer loading feedback while older sessions are being resolved.
-  - Remote terminals now honor the user’s configured login shell more consistently.
-
-## 6.5.1 - 2026-07-23
-
-- Major
-  - The new Ghostex mobile app is now available as a signed Android APK, with a fresh React Native experience replacing the old Termux-based package.
-  - Each project and worktree now remembers its own terminal pane arrangement, active tabs, and visible sessions when you switch away and return.
-  - Mobile sessions now have long-press action menus, a cleaner terminal header and tab bar, clearer live status indicators, and more reliable keyboard composition and terminal sizing.
-  - Delayed Send and Close After Done can now be controlled from the Ghostex command line, making it easier to queue follow-ups and automatically close finished sessions.
-- Minor
-  - Mobile session details and project information now more closely match the desktop sidebar, including richer remote-session context.
-  - The mobile app can show Tailscale connection status, open Tailscale directly, and fully quit its Android background session from a confirmation prompt.
-  - Project cards and collection panels are easier to distinguish, while Settings navigation follows a more natural page order.
-  - Terminal views refresh more reliably after attaching to an existing persistent session.
-
-## 6.4.0 - 2026-07-22
-
-- Major
-  - Settings search now works across every page and guides you directly to matching sections, including Agents, Integrations, Remote, Projects, Actions, Open In, and About.
-  - Delayed Send can now wait until every agent in a project has finished working, while active schedules and countdowns survive workspace refreshes.
-  - Project collections can be reordered directly in the sidebar with clearer drag previews and more reliable project and group dragging.
-  - The mobile terminal now keeps its controls above Android and iOS keyboards more reliably and can explicitly show or dismiss the keyboard from its toolbar.
-- Minor
-  - Clicking non-editable browser and sidebar chrome no longer pulls typing focus away from the active terminal.
-  - Settings pages share a more consistent content width, search layout, empty-state guidance, and navigation behavior.
-  - Sidebar section labels, remote-machine controls, session lists, scrollbars, drag feedback, and custom titlebar gradients are easier to read and use.
-  - Delayed Send opens more reliably from the command palette and more clearly shows whether a timer or agent-status trigger is active.
-
-## 6.3.0 - 2026-07-21
-
-- Major
-  - The sidebar now has a clearer visual hierarchy for machines, project groups, projects, browsers, and sessions, with remote project groups and connection status shown consistently.
-  - Saved remote machines reconnect automatically after Ghostex launches, and newly created remote sessions open their terminal immediately.
-  - Delayed Send can now wait until an agent has stopped working before sending, while keeping the session awake and showing its live status.
-  - Android’s project sidebar now more closely matches the desktop experience with grouped projects and quick session actions.
-- Minor
-  - Sleeping browser tabs return more reliably, and remote machine controls are easier to reach directly from sidebar headers.
-  - Terminal keyboard navigation, macOS Retina layout, updater controls, notifications, and other native integrations behave more consistently.
-  - Sidebar menus open in more natural positions, project cards are easier to scan, and terminal sections use the clearer “Sessions” label.
-
-## 6.2.1 - 2026-07-20
-
-- Major
-  - This macOS maintenance release republishes the latest Ghostex app with a smoother, more reliable update package.
-- Minor
-  - Remote connections continue using the proven gxserver packages from Ghostex 6.2.0, so remote machines do not need a server upgrade.
-
-## 6.2.0 - 2026-07-16
-
-> **A quick note:** Ghostex has moved from Swift and AppKit to a cross-platform, Rust-based app framework. There may be a few small issues in this release, so please report anything you find on the [Ghostex Discord](https://discord.gg/df7b3G92CS) and I’ll get it sorted as soon as possible.
-
-- Major
-  - Ghostex for macOS now runs on its new Rust-based foundation while keeping the terminal, browser, project, agent, and workspace experience in one app.
-  - Connecting to a Linux remote can now install the matching gxserver automatically on x64 and ARM64 machines, making first-time remote setup simpler and keeping the app and server in sync.
-  - Workspaces now preserve project groups, selected panes, visible sessions, browser state, and terminal state more consistently across launches and remote connections.
-  - A new gxserver-hosted web workspace lets you reach Ghostex sessions and terminals from a browser, including connections to multiple machines.
-- Minor
-  - Terminal focus, keyboard input, selection, themes, links, copy and paste, and restored-session behavior are more reliable in the new macOS app.
-  - Sidebar collections are easier to scan and organize with session counts, reordering, appearance controls, machine-based recent projects, and collapse-all controls.
-  - Titlebar panels, prompt editing, keyboard zoom, menus, settings, update controls, and native macOS integration now behave more consistently.
-  - Android remote sessions attach more reliably and stay compatible with the updated gxserver and persistent-session connection flow.
-
-## 6.0.1 - 2026-07-15
-
-- Major
-  - Windows now prefers persistent WSL2 terminals with gxserver and zmx when available, while retaining native PowerShell as an automatic fallback and explicit setting.
-  - The modular nightly release now publishes separate Debian x64, Fedora x64, Windows x64 and ARM64, Android, macOS ARM64, Linux gxserver, and Windows WSL bootstrap artifacts.
-  - Ghostex-owned zmx attachments now require gxserver to initialize the provider first, preventing attach races from creating incomplete shell sessions.
-  - The GPUI app now fully adopts the Ghostex name across its macOS bundle, helper apps, window titles, and packaged surfaces.
-- Minor
-  - GPUI sidebar, titlebar, session loading, prompt-editor focus, zoom, and workspace visibility behavior is steadier across native and embedded surfaces.
-  - Settings adds a Windows terminal backend selector, an About page, and the updated Fable 5.6 orchestration skill.
-  - macOS release packaging consumes the same checksum-pinned Linux gxserver assets published for remote and WSL use.
-  - This 6.0.1 distribution is a nightly prerelease and does not notify existing macOS installations through Sparkle.
-
-## 6.0.0 - 2026-07-13
-
-- Major
-  - Ghostex now ships the GPUI app across macOS, Linux x64, Windows x64 and ARM64, and Android from one modular GitHub Actions release pipeline.
-  - GPUI workspace, browser, agent GUI, terminal, project grouping, and remote-session workflows are substantially closer to the established macOS experience.
-  - The Rust gxserver and Ghostex CLI foundations now support slimmer cross-platform runtime packages and improved session wake and resume behavior.
-- Minor
-  - GPUI restores per-project titlebar selections and provides steadier dropdown, focus, reload, and workspace-session handling.
-  - Sidebar project headers show awake terminal and browser counts, keep browser sessions ordered consistently, and dismiss menus when focus leaves the sidebar.
-  - Terminal input, selection, clipboard, IME, links, rendering, cursor behavior, and Ghostty-host integration are improved across the GPUI app.
-  - This initial 6.0.0 distribution is published as a nightly prerelease and does not advance the production Sparkle feed.
-
-## 5.6.1 - 2026-07-07
-
-- Major
-  - Native terminal panes avoid redundant Ghostty resize and content-scale refreshes, improving stability during mode switches and restored zmx sessions.
-  - Project Board issue details now include comment bodies when opened through gxserver-backed actions.
-- Minor
-  - Surfaced zmx terminals now skip unchanged grid refreshes so mode switches are quieter and steadier.
-  - Terminal pane layout now avoids unnecessary frame relayouts when pane geometry has not changed.
-
-## 5.6.0 - 2026-07-06
-
-- Major
-  - Hotkeys now prioritize VS Code when VS Code is visible.
-  - Prompt Editor is now a separate helper app, so it launches faster.
-  - Prompt Editor content is preserved if the main Ghostex app crashes.
-  - App stability is improved.
-  - Changing Ghostex settings no longer rewrites unrelated Ghostty settings.
-  - The sidebar Git commit workflow now opens through the app modal host bridge for a more native review experience.
-- Minor
-  - Prompt Editor windows now use the Ghostex app title.
-  - Prompt Editor native tabs now show the originating terminal session name.
-  - Native terminal scrollbars are easier to see while scrolling.
-  - CEF crash reports capture more useful artifacts.
-  - The `ghostex` and `gx` CLIs can now set or clear sidebar session tags directly.
-  - Sidebar group panels have calmer styling.
-  - Bundled agent brand icons are refreshed.
-  - Duplicate toast descriptions are omitted.
-- GPUI
-  - Ghostex is starting to work on Linux and Windows now, and help is welcome on the GPUI project using Rust and Zed's UI framework to make Ghostex cross-platform.
-  - GPUI has new Windows CEF adapter groundwork.
-  - GPUI has new Linux CEF adapter groundwork.
-  - GPUI browser shells now share more plumbing across platforms.
-  - GPUI terminal engine can now be enabled per session.
-  - GPUI terminal panes support richer input.
-  - GPUI terminal panes support selection.
-  - GPUI terminal panes support clipboard operations.
-  - GPUI terminal panes support IME input.
-  - GPUI terminal panes support more Ghostty surface behavior.
-  - GPUI terminal rendering is improved.
-  - GPUI terminal file-path links can now be opened.
-  - GPUI titlebar controls are closer to the macOS app.
-  - GPUI hotkeys are closer to the macOS app.
-  - GPUI Automate workarea access is closer to the macOS app.
-  - GPUI sidebar collapse behavior is closer to the macOS app.
-  - GPUI first-responder pane borders are closer to the macOS app.
-  - GPUI command panes can attach to gxserver.
-  - GPUI engine terminals focus more reliably after keyboard tab cycling.
-  - GPUI engine terminals sleep cleanly with command terminals.
-  - GPUI Cmd+F terminal search receives typed keys.
-
-## 5.5.0 - 2026-07-03
-
-- Major
-  - Releases now use a phased, resumable flow with fast preflight checks, live verification, and checksum-sealed on-demand assets for remote gxserver packages and the Project board `bd` tool.
-  - GPUI now covers much more desktop parity, including Sparkle updates, Developer ID signing, native app menus, window-frame restore, quit behavior, support logs, crash reports, `ghostex://` links, Finder file opens, and titlebar update controls.
-  - GPUI browser, board, portless, agent, session-history, onboarding, and terminal workflows now behave closer to the macOS app while the new libghostty-vt terminal engine groundwork moves the shell toward cross-platform terminals.
-  - Terminal and sidebar workflows are steadier, with embedded-browser link opens, terminal link diagnostics, stabilized sidebar drag selection, project ghost fixes, better GPUI IME handling, and first-prompt rename reliability.
-  - Manage file context menus now support Reveal in Finder, Add to Session Context, create-here actions, and clearer relative path copying.
-- Minor
-  - Automate WKWebViews now receive the Project Board bridge and automation agent lists exclude unlaunchable agents.
-  - Sidebar multi-select avoids accidental drag capture, keeps pane-hidden rendered rows selectable, and adds New Group / Move to New Group affordances when supported.
-  - Hermes Agent is now available in the default sidebar list with matching Android and iOS session icons.
-  - GPUI hides the App Icon picker where that native subsystem is unavailable and records GPUI-specific diagnostic log files alongside the existing macOS scenarios.
-
-## 5.4.0 - 2026-07-02
-
-- Major
-  - Sidebar lag was fixed by reducing repeated gxserver Git checks, duplicate native status updates, and fast zmx title-observer retries.
-  - Sidebar session cards now support multi-select bulk actions for sleep, wake, pin, unpin, tag, full reload, and close.
-  - GPUI now has more app parity, including named session groups, local gxserver startup feedback, app toasts, configured hotkeys, folder picking, Close After Done, and previous-session text search.
-  - Manage HTML previews now run as interactive browser documents, so generated docs can use their own scripts, forms, frames, and fullscreen behavior.
-- Minor
-  - GPUI terminals now handle link opens, bells, title updates, and working-directory updates from Ghostty runtime actions.
-  - GPUI project and session workflows now cover more repository folder and workspace folder picker paths.
-  - README wording around Excalidraw docs is clearer.
-
-## 5.3.0 - 2026-07-01
-
-- Major
-  - `ghostex` and `gx` now open the promoted GX 2 terminal UI by default, with `gx 2` kept as a compatibility alias.
-  - Automations Overview and project Automate pages now stay behind Enable Experimental Features while picker state and agent lists load more reliably.
-  - Docs and Manage are smoother, with duplicate file actions, isolated HTML previews, markdown annotations, and a folders shortcut.
-- Minor
-  - The menu-bar status dropdown now puts attention sessions first, working sessions second, and idle sessions by recent activity.
-  - Sidebar and modal chrome are calmer, with steadier pinned-session dragging, modal scroll caps, tooltip radius, session list polish, and stable Keep Awake styling.
-  - Remote and mobile flows are steadier, with Android attach latency improvements and iOS Zen bubble and scrolling polish.
-  - Terminal bell attention, remote edit drafts, color environment forwarding, and native workspace behavior are more consistent.
-
-## 5.2.0 - 2026-06-30
-
-- Major
-  - Automations now run through gxserver and can be launched from the sidebar, Project Board, and `ghostex`/`gx` CLI.
-  - Docs can scan additional project folders, collapse or expand the tree, copy file and folder paths, and show cleaner root actions.
-  - HTML Docs now open in isolated previews with better starter pages, Agentation feedback support, and slimmer embedded scrollbars.
-  - Settings has a simpler General layout, a clearer app icon picker, remembered page position, and a lighter prompt editor setup.
-  - Remote setup and attach flows show clearer install diagnostics, package selection, and session state.
-- Minor
-  - Sidebar project headers, empty states, context menus, scroll glow, tooltips, and session agent icons are easier to scan.
-  - Project editor chrome, sticky navigation, update download feedback, and first-launch dismissal are steadier.
-  - Prompt editing now uses the configured machine editor path when needed instead of relying on `gte`.
-  - Remote rows use cleaner zmx provider metadata, and zmx advertises editor capability correctly.
-  - Android SSH transport is more reliable, and iOS branding plus remote-session sidebar behavior are refreshed. Thanks @wiedymi.
-  - Apple Silicon releases now validate and bundle the Linux remote gxserver packages used for remote hosts.
-
-## 5.1.0 - 2026-06-29
-
-- Major
-  - App Shots now support both Shift and both Option hotkeys, return Ghostex to the front after capture, and keep metadata optional.
-  - Docs can show root Markdown, HTML, and Excalidraw files, plus rename or delete folders from the file tree.
-  - Settings and Keep Awake now live in the sidebar shortcut row with compact dropdowns.
-  - Settings uses faster native scrolling and keeps hook setup focused in Settings > Agents.
-- Minor
-  - Factory Droid session titles no longer show the status marker prefix.
-  - Sidebar session focus borders stay steadier during WebKit-to-native focus handoff.
-  - Sleeping pane placeholders can receive keyboard focus from directional hotkeys without waking early.
-  - Docs sidebar and editor header chrome are tighter and easier to scan.
-  - GPUI CEF bridge ownership is cleaner for the sidebar and helper process.
-
-## 5.0.0 - 2026-06-28
-
-- Major
-  - Docs replaces Manage as the project document workarea with folders, Markdown, HTML explainers, Excalidraw drawings, review annotations, and Agentation feedback.
-  - Settings are simpler, with persisted Show Advanced, clearer Enable Experimental Features naming, visible Agents Hub access, and calmer app-icon controls.
-  - Source and project editor panes switch more reliably, show native load errors clearly, and avoid shared runtime port conflicts.
-  - The GPUI app continues moving toward cross-platform parity with sidebar, Source, browser, settings, remote, and command workflow progress.
-  - The Rust gxserver path now covers more session status, title, renderer-command, activity, and lifecycle behavior.
-- Minor
-  - Custom app icons can update the running app, Dock tile, and bundle icon more consistently. Thanks @NiTE.
-  - Sidebar search, collapsed project drawers, and first-responder focus handoff are faster and steadier.
-  - Agent history search finds newer Codex prompts and very large Codex transcripts more reliably.
-  - Homebrew installs no longer show the old macOS requirement warning. Thanks @Yabuku-xD.
-  - Tips now point users toward Ghostex Browser Use, Ghostex Computer Use, and Faster Chrome DevTools setup.
-
-## 4.21.4 - 2026-06-21
-
-- Major
-  - Manage adds a beta-gated project workarea for file browsing, previews, editing, review annotations, and Excalidraw drawings.
-  - Settings native windows open more reliably after hydration.
-  - Settings > Integrations keeps hook and skill install, update, and uninstall actions together.
-  - Project Board now shows a first-open loading overlay and records safer title-generation diagnostics.
-- Minor
-  - Sidebar toggle and native pane-tab chrome are cleaner and easier to read.
-  - Selected sleeping tabs keep the active-tab visual treatment before wake.
-  - Browser page appearance now follows the current system behavior more consistently.
-  - First-launch setup buttons are disabled when there is no setup action to run.
-
-## 4.21.3 - 2026-06-19
-
-- Major
-  - Settings text fields, dropdowns, and color pickers keep focus while changes save.
-  - Browser panes follow the current macOS light or dark appearance again.
-  - Resources now shows running terminal sessions even when their pane is not loaded.
-  - The experimental Rust gxserver path now covers more agent, hook, skill, log, session, and project operations.
-- Minor
-  - Status menu right-click and Control-click actions work again from the macOS menu bar.
-  - Agent prompts send in smaller chunks so Cursor is less likely to collapse them into paste chips.
-  - The titlebar Resources and update controls have cleaner icon alignment.
-
-## 4.21.1 - 2026-06-19
-
-- Major
-  - `ghostex create-agent` now starts the agent process immediately after creating the session.
-  - Fresh agent panes no longer resume against raw Ghostex `G...` session IDs.
-  - Sleep, Wake, Close, and Close After Done are available from the command palette and Hotkeys.
-  - Browser panes use a light page canvas for transparent public pages.
-- Minor
-  - Option+Shift+S sleeps the focused terminal by default.
-  - Focused-session actions target command-pane terminals correctly.
-  - The Git commit review sidebar is quieter and easier to scan.
-
-## 4.21.0 - 2026-06-19
-
-- Major
-  - Agent setup is simpler, with gxserver-owned skill installs and Default Prompt Agent settings.
-  - Browser appearance and titlebar settings are cleaner and persist per project and origin.
-  - Sidebar search, session drag-and-drop, and gap right-click menus are easier to use.
-  - Project Board labels load faster and Kanban cards are easier to read.
-- Minor
-  - First-launch and Settings screens are calmer and easier to scan.
-  - Browser panes open the requested initial URL more reliably. Thanks @cuttothechaseo.
-  - Sidebar section header actions no longer overlap their labels. Thanks @cuttothechaseo.
-  - Source panes wait for code-server readiness before opening.
-  - Delayed Send timers restore correctly after restarting Ghostex.
-  - Scroll fades and debug diagnostics are cleaner while keeping private data redacted.
-
-## 4.20.1 - 2026-06-19
-
-- Major
-  - Titlebar Settings menu
-    - Global app actions now live in the far-right titlebar Settings menu instead of the sidebar overflow menu.
-    - The menu includes Settings, Commands, Hotkeys, Wake Pet, Pinned Prompts, Scratch Pad, Running when debugging UI is enabled, and Join Discord.
-    - The sidebar is simpler, with the Commands Pane launcher moved onto the Recent Projects header as a hover action.
-  - Browser appearance
-    - Chromium browser panes now default pages to Light mode, even when the hidden browser toolbar color-scheme control is not visible.
-    - System, Light, and Dark browser appearance choices now update page `prefers-color-scheme` behavior in Chromium panes instead of only storing the menu value.
-- Minor
-  - Source pane settings
-    - Changing VS Code settings-link options now waits briefly before restarting the shared code-server runtime, so rapid Settings changes apply once using the final choice.
-    - Only awake Source panes trigger that restart, reducing unnecessary runtime churn.
-  - Native pane polish
-    - The native pane action button now uses a compact layout icon instead of the old hamburger glyph.
-    - First-launch setup copy points users back to Settings > Integrations for later setup tasks.
-
-## 4.20.0 - 2026-06-18
-
-- Major
-  - Command palette and session search
-    - Cmd+Shift+P now exposes more app-level commands, including Previous Sessions, pinned prompts, running sessions, Scratch Pad, Agents Hub, Actions, Open Targets, Hotkeys, setup, changelog, quick terminal, quick browser tab, Automations, and project actions.
-    - Open Current Project in Finder and visible Open In targets can be launched from command mode without leaving the current workspace.
-    - Cmd+P session search is focused on visible session titles, so hidden metadata such as project paths and generic default agent titles no longer pull unrelated sessions into results.
-    - Previous-session search ranks stopped sessions by close time and hides placeholder agent names while keeping meaningful user and agent titles searchable.
-  - Setup, Tips, and tutorial flow
-    - First-launch setup is simplified to Welcome, Agent Hooks, and Bundled Agent Skills.
-    - Skipping hook or bundled-skill setup now shows a focused warning with the install action beside the deliberate continue action.
-    - The Features entry points now open a dedicated Ghostty tutorial video modal, with the older Highlighted Features tour kept out of the main flow.
-    - The titlebar Tips menu is shorter and clearer, adds Docs, keeps Features, Setup, and Changelog handy, and can install missing agent hooks directly from its warning notice.
-  - Agent hooks and recovery controls
-    - Advanced Settings adds searchable Uninstall Hooks and Uninstall Skills actions for removing Ghostex-owned setup artifacts.
-    - gxserver can uninstall Ghostex-owned hook entries from supported agent CLI configs without touching user-managed provider hooks.
-    - Agent hook status checks prioritize Codex, Claude, and Pi first, then continue through the rest of the supported agent CLIs so setup status appears progressively.
-    - Hook warnings now explain that automatic session naming, In Progress/Needs Attention state, and sleep/resume reliability depend on current hooks.
-- Minor
-  - Native pane and titlebar polish
-    - Sleeping a terminal now keeps its split slot as a wake placeholder instead of collapsing the layout.
-    - Blank titlebar dragging is more reliable across the WebKit-to-native handoff.
-    - Open Folder now opens the selected workspace folder itself in Finder instead of revealing it from the parent folder.
-    - Native app modal sizing and tutorial video loading are tuned for the new help surfaces.
-  - Sidebar and settings polish
-    - Empty sidebars with no projects now guide first-time users toward the Projects plus button.
-    - Settings Actions editors can delete both custom actions and default actions from the edit surface.
-    - Projects settings include a project removal control.
-    - Highlighted Features arrow and keyboard navigation stop at the first and last item instead of wrapping.
-  - CLI, delayed send, and docs
-    - The CLI preserves live-written Monaco prompt edits as saved if the native bridge closes before the normal status callback.
-    - Delayed Send focuses the minutes field more reliably in native child windows and pressing Enter in the duration fields schedules the timer.
-    - README screenshots, Android/iOS download presentation, previous-session search docs, and feature-gallery copy were refreshed for the current app.
-    - The local agent instructions now explicitly avoid restarting the app unless requested.
-
-## 4.14.2 - 2026-06-17
-
-- Major
-  - Highlighted Features and screenshots
-    - The macOS app bundle now includes the latest supplied Highlighted Features screenshots instead of the older package images.
-    - The feature tour and README media use the exact committed PNG captures for the agent splits, Chromium design mode, embedded editor, Kanban board, and rich prompt editor views.
-  - Titlebar Actions
-    - Custom titlebar Actions are preserved on startup when gxserver has not imported action content yet.
-    - Legacy saved Action icon colors are stripped so Action icons inherit the native chrome color consistently.
-- Minor
-  - Native pane chrome
-    - Focused pane borders keep their top and right edges visible against clipped pane edges.
-
-## 4.14.0 - 2026-06-16
-
-- Major
-  - UX and settings
-    - Settings and many parts of the app have been simplified.
-    - Sidebar and titlebar controls are easier to scan and tune.
-    - Discover Ghostex now includes clearer mobile download and onboarding entry points.
-  - Performance and reliability
-    - Performance has been improved substantially across app startup, sidebar refreshes, session restore, and packaged runtime flows.
-    - Creating, restoring, waking, and closing panes is steadier.
-    - New terminals show a mounting placeholder while the terminal surface catches up.
-    - Startup focus targets are preserved more reliably.
-  - Sessions and gxserver
-    - Close After Done timers can close completed sessions after they stay done.
-    - Previous-session search, restore, project jumps, rename focus, and command-palette focus are more stable.
-    - gxserver status now distinguishes running, missing, sleeping, and persistence-disabled sessions more clearly.
-    - Packaged gxserver now includes the Rust daemon packaging path and stricter packaged-runtime validation.
-  - Theme and onboarding
-    - Dark theme colors are now in place.
-    - Light theme colors are coming soon.
-    - First-run and Highlighted Features now show a replayable feature tour before setup.
-- Minor
-  - CLI, TUI, and automations
-    - The installed CLI adds the experimental `gx 2` / `ghostex 2` TUI path.
-    - The default `gx` TUI remains unchanged.
-    - Automations are coming soon.
-    - The TUI session switcher clamps vertical navigation at list edges.
-    - Held Up and Down movement repeats faster without raw terminal repeat bursts.
-  - Browser, projects, and App Shots
-    - 4.14.1 keeps image thumbnails in the floating prompt editor clickable across the whole thumbnail shelf.
-    - Project editor, browser, and App Shots surfaces have tighter lifecycle and persistence behavior.
-    - Browser and project surfaces avoid blank new-tab states.
-    - Floating prompt-editor work is preserved during app lifecycle closes.
-    - Newly created project sessions appear more reliably.
-  - Git, history, and diagnostics
-    - Titlebar Git controls add a direct remote sync action.
-    - `zehn` history search now opens as a flat relevance list by default.
-    - Day-group browsing remains available behind Ctrl-D.
-    - Support logs trim old history, sample high-volume diagnostics, and keep privacy checks tightened.
-  - Mobile, docs, and community
-    - Android includes the centered factory droid icon.
-    - Android download links now point at the latest release.
-    - Checked-in README media was sanitized for core Ghostex workflows.
-    - Huge thank you to @saleem-hadad for helping a ton with improving the app's UX.
-
-## 4.12.0 - 2026-06-14
-
-- Major
-  - Command palette search is now centered on sessions by default. Cmd+P opens session search, Cmd+Shift+P opens command mode with `>`, and results include current sessions, active projects, collapsed projects, and previous sessions ranked by recent activity.
-  - Native pane focus follows the surface that actually owns keyboard input. Focused borders track the AppKit first responder, directional focus uses rendered pane geometry, and command panels plus project-editor companion panes avoid stale retargeting.
-  - Sleeping panes behave like selected panes instead of empty gaps. Their tab chrome remains visible, placeholders show "Press Any Key to Wake", and normal key presses wake the sleeping terminal in place.
-  - Sidebar tag filters can be reordered, hidden, disabled, and reset from Settings. Hidden or disabled tags are removed from active filtering so old filter state does not keep sessions invisible.
-- Minor
-  - Sparkle's titlebar update button now fades only while an accepted update is actively downloading.
-  - App Shots is opt-in by default and marked as Beta in Settings.
-  - The TUI session switcher throttles held Up and Down arrow repeats while still responding immediately to the first key press.
-  - Long project session lists use a regular "Show N more" session row and restore scroll position more predictably when collapsed.
-  - Session card tooltips include clearer active, sleeping, and not-loaded state text plus colored metadata rows.
-  - Native modal and window polish tightens Add Worktree padding and close behavior, startup overlay layering, Exit Focus styling, command-panel resize hover feedback, toast entry animation, and browser profile routing.
-
-## 4.11.0 - 2026-06-13
-
-- Major
-  - Native workspace layout now keeps titlebar, sidebar, divider, pane, webview, and terminal regions in stricter non-overlapping frames, reducing click and focus misses.
-  - Sidebar dividers, native pane tabs, and titlebar chrome have more predictable hit targets because each surface owns its own input region.
-  - New terminals, forks, and restored panes wait for terminal-ready state before focus moves, so keyboard focus lands in the intended session.
-  - Pane tabs recover more reliably while gxserver presentation reconnects, including sleeping, waking, closing, and remote-backed rows.
-  - Previous Sessions and session search preserve provider, agent, and restore identity more accurately when ranking, restoring, or reattaching to older sessions.
-  - Stale local gxserver rows are pruned from the native sidebar so dead sessions do not compete with live provider state.
-- Minor
-  - Sidebar session cards, overflow menus, command palette input, and search surfaces received tighter interaction polish for dense daily use.
-  - Project Board and Tickets cards are denser, placeholders are clearer, and bulk actions and group labels are easier to scan.
-  - First-launch preferences and skill-install status rows are simpler, with status presented in the action area.
-  - Claude Code and Codex terminal keybindings line up with the current prompt-editor and terminal shortcut model.
-  - Android startup recovery handles empty-service startup more reliably.
-
-## 4.10.0 - 2026-06-12
-
-- Native workspace panes are better integrated with the macOS host, reducing click-routing misses.
-- Direct project-tab titlebars, app modal windows, and toast routing are better integrated with the macOS host, reducing titlebar/sidebar focus churn.
-- Passive sidebar terminal restore preserves split layouts while the sidebar catches up.
-- Workspace-pane materialization preserves restored split layouts instead of merging panes while the sidebar catches up.
-- Project Board focus is steadier during passive refreshes.
-- GitHub mode focus is steadier during passive refreshes.
-- Directly mounted project tab titlebars route clicks to the intended workspace surface.
-- Worktree deletion can clean up related branch metadata from the UI.
-- Prompt-editor capability routing reduces stale agent attention after dismissed work.
-- Terminal Escape reporting reduces stale agent attention after dismissed work.
-- The titlebar adds a compact sidebar collapse button beside the project name.
-- Empty Tips unread sections stay hidden.
-- Resources recovery is clearer with Restart plus Reload App when gxserver is off.
-- Add Worktree, Git Commit, and other native child-window modals have tighter macOS sizing and padding.
-- Compact dialogs stay compact while commit review gains room on the right diff side.
-- The `ghostex` and `gx` CLI commands use gxserver session inventory.
-- The `ghostex` and `gx` CLI commands add a sidebar toggle.
-- The `ghostex` and `gx` CLI commands install as wrapper commands outside `Ghostex.app` so macOS policy assessment does not kill direct app-bundled script execution.
-- Agent support expands with Kiro CLI.
-- Agent support expands with OMP hook sidecars.
-- Agent support expands with mobile session status ingestion.
-- Agent support expands with Claude bare `/rename` staging for first-prompt titles.
-- Agent support expands with path-based live-process identity repair.
-- Agent support expands with a default Accept All mode setting.
-- App Shots now stage captured desktop context in the focused or recent live agent session instead of being Codex-only.
-- App Shots create the configured default prompt-agent session only when no agent target is available.
-- Sidebar and settings polish adds a collapse command and hotkey.
-- Sidebar and settings polish adds Copy Session Details.
-- Ghostty settings are folded into the main settings sections.
-- Agent Hub file contents load only when opened.
-- iOS refresh indicators stay tied to active refresh requests.
-- Packaged macOS runtime validation checks the bundled code-server Node 22 runtime.
-- Packaged macOS runtime validation no longer executes sealed native modules during validation.
-
-## 4.1.5 - 2026-06-10
-
-- Installed agent hooks now run through Ghostex-owned bundled runtimes instead of `/usr/bin/python3` or user-installed Node interpreters.
-- Hook sidecars and command status updates keep working on machines without Python.
-- Claude sessions migrated from Ghostex 3.6 can wake more reliably because gxserver repair backfills transcript paths and saved resume commands.
-- Wake resolves Claude's real session id before running `claude --resume` instead of trusting a sidebar title.
-- Context-menu Sleep no longer parks a row as sleeping while the zmx provider is still alive.
-- Wake and intentional close flows still show immediate sleeping feedback until the host snapshot confirms the same state.
-- Project board ticket creation reconciles each project's Beads issue prefix before mutations.
-- Local board actions send both project id and project path so gxserver can reject stale URL/id mismatches.
-- The sidebar adds a configurable Show less row count.
-- The sidebar adds a Close menu visibility setting.
-- The sidebar adds remote-session edit entry points for quicker day-to-day session management.
-- Chromium-embedded panes support standard zoom in, zoom out, and reset shortcuts from the toolbar.
-- Waking zmx sessions no longer replays stale working/attention activity from the pre-sleep snapshot.
-- Project and Kanban flows require Ghostex's bundled Beads CLI and ignore unrelated `bd` binaries already on PATH.
-- Future macOS Sparkle, GitHub, and Homebrew releases ship Apple Silicon builds only.
-
-## 4.1.0 - 2026-06-09
-
-- Remote machines can now save SSH passwords in macOS Keychain.
-- Remote machines can use saved SSH passwords for SSH, SCP, and tunnel connections without storing raw passwords in settings.
-- Remote machines show clearer saved-password state and authentication guidance.
-- Agent hook updates now reject cross-wired agent identities.
-- Session-state updates now reject cross-wired agent identities.
-- Cross-wired identity protection reduces cases where one agent terminal could inherit another row's title, status, completion state, or resume identity.
-- Ctrl+G prompt editing returns focus to the correct terminal more reliably.
-- Monaco prompt-editor dismissal returns focus to the correct terminal more reliably.
-- Prompt-editor focus repair includes sessions launched through gxserver global references.
-- Sidebar presentation updates apply smaller live patches for session groups.
-- Sidebar presentation updates apply smaller live patches for HUD chrome.
-- Smaller sidebar live patches reduce refresh churn and terminal focus steals while sessions are added, removed, reordered, or updated.
-- Session context menus hide Copy Resume by default behind an explicit setting.
-- Session context menus hide Copy Attach Command by default behind an explicit setting.
-- Sleep Below and Close Below now target the rendered rows beneath the clicked card across project groups.
-- Remote sections received visual polish for denser daily use.
-- Recent Projects search received visual polish for denser daily use.
-- Active sidebar search received visual polish for denser daily use.
-- Titlebar resource copy received visual polish for denser daily use.
-- Command icons, tag menus, drag handles, and sidebar panel spacing received visual polish for denser daily use.
-- The Ghostex TUI now uses a neutral gray-blue default theme.
-- The Ghostex TUI has clearer Help/Hotkeys and Quit Ghostex labels.
-- The Ghostex TUI has broader built-in agent labels so restored desktop sessions are easier to recognize from the terminal switcher.
-- Embedded code-server packaging is more reliable across Apple Silicon and Intel builds.
-- Embedded code-server packaging includes target-architecture ripgrep materialization.
-- Embedded code-server packaging includes authenticated GitHub artifact fetches during release builds.
-- The Android download badge now points at the 4.1.0 release APK.
-
-## 4.0.3 - 2026-06-08
-
-- Remote session and group clicks now open a local Ghostty terminal that SSH-attaches to the selected remote session with the stable `ghostex attach` contract.
-- Copy Attach Command still copies the SSH command for external terminals.
-- Remote attach carrier terminals stay hidden from the local Quick section, so focus and active styling remain on the owning remote machine row.
-- Remote machine setup failures now show more actionable stage-specific messages for SSH, install, token, tunnel, streaming, and transport problems instead of raw loopback or WebKit errors.
-- gxserver request failures now show more actionable stage-specific messages for SSH, install, token, tunnel, streaming, and transport problems instead of raw loopback or WebKit errors.
-- Remote settings are easier to scan with compact saved-machine cards.
-- Remote settings include inline Tailscale setup help.
-- Remote settings include clearer optional SSH identity-file guidance.
-- The Quick section header can launch the selected agent directly.
-- The Quick section header uses the same agent picker as project headers.
-- New Quick agent chats stay projectless.
-- The titlebar now disables GitHub mode when the active project has no GitHub remote.
-- The titlebar now disables GitHub and Kanban mode for Quick sessions.
-- Embedded code-server editor panes now use Ghostex-owned bundled settings by default.
-- Embedded code-server editor panes start with the Dark 2026 theme on new profiles.
-- Embedded code-server editor panes keep local VS Code settings as an explicit opt-in.
-- Sparkle update checks repeat quietly while Ghostex is running.
-- The titlebar update button can appear on first render.
-- Update download and extraction progress windows stay hidden while the release notes and relaunch prompts remain available.
-- The native sidebar/workarea divider keeps its resize cursor and visible separator aligned during hover and live resizing.
-- Installed macOS app bundles are smaller because release packaging prunes duplicate Beads payloads before notarization.
-- Installed macOS app bundles are smaller because release packaging prunes wrong-architecture node-pty prebuilds before notarization.
-
-## 4.0.2 - 2026-06-08
-
-- Installed macOS builds now package the full embedded code-server runtime.
-- Installed macOS builds reuse the embedded code-server Node 22 binary for gxserver.
-- Installed macOS builds include the bundled Beads CLI.
-- Installed macOS builds validate the packaged runtime during release builds.
-- Source tab packaging is more reliable because the embedded VS Code runtime carries its ripgrep helper files.
-- Source tab packaging cleans up temporary build metadata after packaging.
-- Terminal image paste can convert clipboard images into previewable Markdown links with Cmd+V or Ctrl+V.
-- Settings -> Terminal Behavior now includes a Paste previewable images toggle for users who want normal clipboard behavior.
-- gxserver presentation updates now carry stable attention event IDs.
-- macOS can play completion sounds and notifications once for fresh attention events.
-- Completion sounds and notifications do not replay during startup or stream recovery.
-- Command-pane completions keep using the action completion sound path.
-- Command-pane completions write status updates through per-process temp files.
-- Command-pane completions reduce missed completion sounds during concurrent status updates.
-- Git agent workflows no longer pin duplicate persistent "running" toasts when the visible agent terminal already shows the workflow progress.
-- Ghostex Android auto-scroll now follows new output only from the actual live bottom row.
-- Scrolling up even one row keeps history anchored without selecting text first.
-
-## 4.0.1 - 2026-06-08
-
-- Upgrades from Ghostex 3.x can now recover missing gxserver project and session rows even when a completed migration marker was already written, including last-resort recovery from the pre-cutover shared-state backup.
-- Passive terminal-title and sidebar refreshes no longer steal keyboard focus from the terminal while you are typing, and sidebar session clicks start native focus/layout work before the React sidebar highlight catches up.
-- Git commit review is more useful as a workspace: Show All can concatenate changed-file diffs, diff display preferences persist across app restarts, changed files can copy their path from a right-click menu, and the modal opens directly into review content.
-- Quick terminal/browser/file containers no longer trigger project-scoped Git status probes or Git error toasts, and worktree project header menus prioritize Copy Path over a redundant Open action.
-- Source tab startup in local development now validates the embedded VS Code payload and Git extension native module before opening, showing actionable setup guidance instead of a raw code-server 500 page or delayed Git activation failure.
-- Local starts on Apple Silicon build and launch arm64 Ghostex resources even when the invoking shell is running under Rosetta, and stale zmx/zehn artifacts are rebuilt when their Mach-O architecture does not match.
-- The titlebar update button stays available until Sparkle confirms the installed app is current, so opening or closing the update dialog no longer hides a still-applicable update.
-- Sparkle appcasts generated by the release flow now embed the matching changelog notes so the update dialog can show release details directly.
-- Project editor companion switching avoids unnecessary editor host relayout when the editor is already stable, reducing flashes while moving between companion sessions.
-- The transparent native sidebar resize strip keeps the left-right resize cursor while hovered or dragged.
-
-## 4.0.0 - 2026-06-08
-
-- Session tags can be applied, displayed on cards, filtered in Active and Previous Sessions, and preserved in manual sidebar order across restore and Previous Sessions.
-- Git commit review adds inline changed-file diff inspection so review prompts can inspect file patches without leaving the modal.
-- First-prompt title generation is more reliable, including Grok Build support, staged rename handling, guards for skipped or stale generated titles, and retry after cancellation.
-- zmx Ctrl+G prompt editing follows the currently attached client capability, keeping desktop Monaco available while SSH, mobile, and TUI attaches use terminal-native `gte`.
-- Cmd+T creates a terminal tab next to the focused tab, Cmd+N opens a browser tab next to the focused tab, and Option+1 through Option+4 switch Agents, Source, GitHub, and Kanban views.
-- Closing the active tab in a split pane promotes the adjacent tab in that pane before layout materialization, preserving split layout instead of collapsing unrelated panes.
-- Sleep Inactive and Agent Auto Sleep keep terminals with active Delayed Send timers awake until the scheduled send fires, and focused agent sessions are always excluded from Agent Auto Sleep.
-- Agent working indicators and session titles are steadier during spinner-heavy Codex, Claude, Cursor, and Pi activity, reducing attention flicker and repeated no-op sidebar refreshes.
-- Background sleep, close, and auto-sleep transitions preserve the focused pane/tab instead of pulling focus away from the active session.
-- Agent hook installation covers supported CLIs through gxserver, and installed hooks can report working, attention, idle, first-prompt, and resume metadata directly to gxserver for more reliable status across clients.
-- Duplicate completion sounds and macOS notifications are suppressed when the same attention event is replayed from hook or gxserver state.
-- Codex-powered title generation, board-title generation, and other internal prompt jobs run as ephemeral/internal work so they do not create restorable Codex sessions or overwrite a real session's resume identity.
-- Codex resume validates exact ids and falls back through filtered title lookup, avoiding internal `codex exec` title-generation transcripts.
-- Agent Auto Sleep waits when zmx title-observer health is starting, retrying, or failed instead of treating unavailable working-status detection as idle.
-- Full reload for zmx sessions reloads the clicked session in place instead of creating a duplicate sidebar row, and Ctrl+G prompt editing checks the bundled zmx binary instead of a stale PATH zmx.
-- New projects and embedded editor panes appear in the sidebar earlier, and code-server startup failures surface as row errors and toasts instead of failing silently.
-- Installed macOS builds validate the packaged gxserver Node 22 native-module runtime and show actionable reinstall or Node setup guidance when the runtime does not match.
-- Installed macOS builds bundle `ghostex` and `gx` CLI binaries with session display-title support and packaged runtime roots.
-- Previous Sessions hides command-pane runs, ranks rows by true last activity, and restores durable session tags, restored-from identity, and saved manual sidebar order.
-- Sidebar Last Active labels keep ticking from the client clock even when React Compiler caches the row render.
-- `gx find` / zehn history results are grouped by last-active day, show source session titles above matched prompt text, include compact last-active times, and stay quiet unless the user explicitly runs `zehn update`.
-- Provider session ids in terminal panes are hidden by default and remain available through the explicit session-id overlay setting.
-- Native terminal Cmd+C uses Ghostty's copy action so selected terminal text reaches the system clipboard consistently.
-- Native workspace focus, pane-tab close button chrome, centered sidebar context menus, and visible-row Cmd+number shortcuts are tighter across nightly sidebar interactions.
-- Rename Session > Generate Name keeps the visible "Generating title" overlay active until the generated rename is applied or submitted.
-- Clone & Add can be submitted as soon as locally valid repository and destination fields are present, while existing-destination previews still block cloning.
-- Delayed Send timers keep the leading clock visible over tags and deadline-only projections, and native terminal badges relayout immediately when timers start or cancel.
-- Sleep and close actions for presentation-backed zmx sessions use gxserver provider transitions even when older local session metadata is incomplete.
-- Ghostex-launched app, gxserver, zmx, agent-hook, Git, Beads, clone, and local dev subprocesses keep ANSI color capability even when the parent shell exports `NO_COLOR`.
-- Native sidebar web bundles use the React Compiler build path for smoother sidebar interactions.
-- Debug logs stay quiet in normal use, rotate before growing too large, and show a titlebar warning while Debug logging and UI is enabled.
-- Support diagnostics avoid writing raw title previews, command output previews, session id lists, paths, and stderr snippets while keeping counts and timing useful for troubleshooting.
-- Dragging images onto inactive terminal panes accepts drops reliably, and restarting Ghostex no longer relaunches the app when closing an installed build.
-- Project board and Tasks flows improve ticket routing, comments, placeholders, and Create & Start handoff behavior.
-
-## 4.0.0-beta.3 - 2026-06-07
-
-- Beta distribution remains available through GitHub Releases and Homebrew DMG installs while Sparkle automatic-update feeds stay on the current public release.
-- Agent working indicators and session titles are steadier during spinner-heavy Codex, Claude, Cursor, and Pi activity, reducing attention flicker and repeated no-op sidebar refreshes.
-- Background sleep, close, and auto-sleep transitions preserve the focused pane/tab instead of pulling focus away from the active session, and focused agent sessions are always excluded from Agent Auto Sleep.
-- New projects and embedded editor panes appear in the sidebar earlier, and code-server startup failures now surface as row errors and toasts instead of failing silently.
-- Installed macOS builds validate the packaged gxserver Node 22 native-module runtime and show actionable reinstall or Node setup guidance when the runtime does not match.
-- Codex-powered title generation, board-title generation, and other internal prompt jobs now run as ephemeral/internal work so they do not create restorable Codex sessions or overwrite a real session's resume identity.
-- Codex resume now validates exact ids and falls back through filtered title lookup, avoiding internal `codex exec` title-generation transcripts.
-- Cancelling first-prompt title generation no longer lets a stale result rename the session, and a later user prompt can retry title generation.
-- Agent Auto Sleep waits when zmx title-observer health is starting, retrying, or failed instead of treating unavailable working-status detection as idle.
-- Agent hook installation now covers supported CLIs through gxserver, and installed hooks can report working, attention, idle, first-prompt, and resume metadata directly to gxserver for more reliable status across clients.
-- Duplicate completion sounds and macOS notifications are suppressed when the same attention event is replayed from hook or gxserver state.
-- Full reload for zmx sessions now reloads the clicked session in place instead of creating a duplicate sidebar row, and Ctrl+G prompt editing checks the bundled zmx binary instead of a stale PATH zmx.
-- Previous Sessions hides command-pane runs and ranks rows by true last activity instead of recent metadata refreshes.
-- Sidebar Last Active labels keep ticking from the client clock even when React Compiler caches the row render.
-- `gx find` / zehn history results are grouped by last-active day, show source session titles above matched prompt text, include compact last-active times, and stay quiet unless the user explicitly runs `zehn update`.
-- Ghostex-launched app, gxserver, zmx, agent-hook, Git, Beads, clone, and local dev subprocesses keep ANSI color capability even when the parent shell exports `NO_COLOR`.
-- Native sidebar web bundles are compiled through the React Compiler build path for smoother nightly sidebar interactions.
-- Support diagnostics avoid writing raw title previews, command output previews, session id lists, paths, and stderr snippets while still keeping counts and timing useful for troubleshooting.
-
-## 4.0.0-beta.2 - 2026-06-06
-
-- Beta distribution remains available through GitHub Releases and Homebrew DMG installs while Sparkle automatic-update feeds stay on the current public release.
-- Ctrl+G prompt editing in zmx sessions now follows the currently attached client capability, so desktop Monaco remains available while SSH, mobile, and TUI attaches stay on terminal-native `gte`.
-- Restoring Previous Sessions preserves session tags, restored-from identity, and saved manual sidebar order when that order was explicitly stored.
-- Cmd+T now creates a terminal tab next to the focused tab, Cmd+N opens a browser tab next to the focused tab, and Option+1 through Option+4 switch Agents, Source, GitHub, and Kanban views.
-- Closing the active tab in a split pane now promotes the adjacent tab in that pane before layout materialization, preserving split layout instead of collapsing unrelated panes.
-- Sleep Inactive and Agent Auto Sleep now keep terminals with active Delayed Send timers awake until the scheduled send fires.
-- Default terminal panes no longer show provider session ids unless the session-id overlay setting is explicitly enabled.
-- Native terminal Cmd+C now uses Ghostty's copy action directly so selected terminal text reaches the system clipboard consistently.
-- Reference-sidebar Previous Sessions rows now align with normal project-session row spacing.
-- Debug logs are quieter in normal use, rotate before growing too large, and show a titlebar warning while Debug logging and UI is enabled.
-- zmx title updates keep working-state heartbeats alive without flooding gxserver or sidebar presentation with repeated spinner frames.
-- Ghostex-generated launch, resume, fork, restore, Search by Text, and command-pane scripts now avoid being saved into Atuin shell history.
-- Rename Session > Generate Name keeps the visible "Generating title" overlay active until the generated rename is applied or submitted.
-- Clone & Add enables as soon as locally valid repository and destination fields are present, while existing-destination previews still block cloning.
-- Delayed Send timers now keep the leading clock visible even when a session is tagged or only the deadline is projected, and native badges relayout immediately when timers start or cancel.
-- Sleep and close actions for presentation-backed zmx sessions now use gxserver provider transitions even when older local session metadata is incomplete.
-
-## 4.0.0-beta.1 - 2026-06-05
-
-- Beta distribution is available through GitHub Releases and Homebrew DMG installs while Sparkle automatic-update feeds remain on the current public release.
-- Session tags can now be applied, displayed on cards, filtered in Active and Previous Sessions, and kept in manual order without unexpected resorting.
-- Git commit review adds inline changed-file diff inspection so review prompts can inspect file patches without leaving the modal.
-- First-prompt title generation is more reliable, including Grok Build support, staged rename handling, and guards that avoid submitting skipped or stale generated titles.
-- Native workspace focus, tab chrome, and sidebar shortcuts are tighter: visible Cmd+number slots match painted session rows, session-click focus is reinforced, context menus are centered, and close buttons use cleaner pane-tab chrome.
-- Zmx-backed terminals can refresh stale persisted pane state for resize repair, and gxserver no longer carries legacy zmux chat project behavior into nightly sessions.
-- Project board and Tasks flows improve ticket routing, comments, placeholders, and create/start handoff behavior.
-- Window geometry, sidebar default width, title-agent previews, and `gx find` Accept All policy handling have been improved for nightly builds.
-
-## 3.26.2 - 2026-06-02
-
-- Native command bridge probes the login shell PATH once at launch so GUI-started agents can find OpenCode, mise, npm, and other tools installed through shell startup files.
-- OpenCode integration setup refreshes the session plugin for newer OpenCode event APIs and reports installed when the Ghostex plugin file is present.
-
-## 3.26.1 - 2026-06-01
-
-- Mobile and remote CLI session commands fall back to persisted sidebar session state when the live Ghostex bridge is unavailable, so Android and other clients no longer show a misleading empty session list.
-- Sidebar CLI bridge failures now return clearer JSON errors and more helpful guidance when a stale bridge token or closed socket causes the command to fail.
-
-## 3.26.0 - 2026-05-30
-
-- Project board adds a Backlog swim lane before Todo, per-lane + ticket creation, status selects with friendly labels, and more reliable Create & Start that launches the agent session before secondary board refresh work.
-- Start Work prompts now ask agents to leave bead comments after each turn and include backlog/in-progress/test/review workflow commands.
-- Starting work from the Kanban page focuses the created agent session immediately, matching sidebar session-card behavior.
-- Command pane defaults restore to 125px (up from the prior smaller default), can grow up to 90% of the workspace height, and native Beads updates accept the backlog status.
-- Dropdowns, selects, popovers, and tooltips share the same visible border as sidebar tooltips.
-- Titlebar Tips & Tricks copy was refreshed for pinning sessions and using the Kanban board with agents.
-
-## 3.25.0 - 2026-05-30
-
-- Added a titlebar Tips & Tricks menu with unread tracking, read-all, and persistent read state for built-in workflow hints.
-- Project board filtering now uses Priority and Estimate controls instead of lane status, with the search icon inside the search field and cleaner ticket metadata layout.
-- Ghostty terminal scrollbars and scroll-to-top/bottom overlay buttons are square instead of rounded.
-- Session rows show only one Delayed Send countdown clock in the leading identity slot instead of duplicating it in the header agent area.
-
-## 3.24.0 - 2026-05-30
-
-- Collapsed macOS agent and priority selects now show friendly labels instead of raw persisted values in Git commit review, session rename, worktree creation, agent configuration, settings, and Project board dialogs.
-- Project name hovers in the sidebar now show a richer tooltip with project kind, path, git file counts, and current session/worktree totals.
-- Native workarea, commands pane, and titlebar button separators use a subtler shared boundary color for cleaner chrome alignment.
-- The Commands pane footer tooltip opens to the left of its icon so it no longer covers footer controls while the rest of the sidebar keeps below-trigger labels.
-- First-prompt title generation overlay copy now reads "Generating title" without trailing ellipsis.
-
-## 3.23.0 - 2026-05-30
-
-- Migrated the sidebar to Base UI and refreshed the app theme styling for a more consistent control surface across modals, menus, and session chrome.
-- Added a first-launch preferences page so new installs can set common defaults before opening sessions.
-- Improved Git workflows with Sync with Main, a split Git menu by action type, prompt-agent Git PR review, and a unified merge flow.
-- Added first-prompt title generation with a native terminal overlay, tighter auto-rename behavior for agents and slash commands, and sidebar wiring for the new flow.
-- Improved Git and worktree status toasts with persistent running notices, spinner styling, success/error tints, and clearer completion when sessions close or worktrees delete.
-- Removed the macOS Pane Gap setting and tightened native workspace chrome with flush tab bars, square status indicators, workarea separators, and zero default pane spacing.
-- Improved sidebar and project-header tooltips so labels open below their triggers with a consistent square bordered surface.
-- Refined session working/attention indicators so they sit closer to the row edge and the working spinner renders as a rounded ring again.
-- Improved the titlebar update tooltip placement and aligned right-side titlebar controls flush with the window edge.
-
-## 3.22.0 - 2026-05-29
-
-- Fixed Homebrew installs on newer macOS releases by keeping the Ghostex cask minimum requirement at macOS Ventura.
-- Improved the titlebar update button tooltip so it opens to the side and no longer sits under the promoted sidebar layer.
-
-## 3.21.0 - 2026-05-29
-
-- Added Cursor Agent support for prompt generation so session rename, Git review, worktree prompts, and Project board title generation work when Cursor is the selected prompt agent.
-- Improved agent prompt staging so Ghostex waits for the terminal to be ready and uses consistent step delays before sending rename and prompt commands.
-- Fixed Search by Text in Previous Sessions so it opens in the active project instead of the Quick/projectless terminal area.
-- Improved project header action tooltips with portaled labels that stay visible inside narrow sidebar webviews.
-- Shortened the Commands Pane footer hover label while keeping the full accessible button name.
-
-## 3.20.0 - 2026-05-29
-
-- Fixed session attention updates so they refresh pane chrome without stealing keyboard focus from the terminal you are typing in.
-- Fixed Git commit review and New Worktree modals so session activity updates no longer reset in-progress drafts or agent selections.
-- Improved sidebar session snapshots so unchanged HUD data keeps stable references across attention and activity updates.
-
-## 3.19.0 - 2026-05-29
-
-- Added Clone Repository from the Projects header and command palette, including native folder picking, flexible repository URL paste formats, and automatic project creation after a successful clone.
-- Added bundled zehn prompt-history search through `gx find` and `gx f`, while keeping `gx s` as the sessions alias.
-- Added Search by Text in Previous Sessions to open a fresh terminal running `gx f` beside the existing agent prompt workflow.
-- Added per-modal prompt agent selection so Git commit review and other modals remember their own agent choice until Settings changes the default.
-- Improved new-install defaults with completion bell and Accept All enabled, longer default auto-sleep for code, Git, and project panes, and tighter workspace chrome defaults.
-- Improved the macOS titlebar on narrow layouts by hiding crowded controls below 620px, compacting Git primary labels, and counting agent-owned process trees correctly in Resources.
-- Improved session focus so keyboard focus stays on visible panes and reference sidebar rows no longer show a passive working timer spinner.
-- Improved the Project board with a create-and-start flow, clearer missing-Beads setup guidance, and Cua Driver permission status in Integrations.
-- Improved Git commit review by moving the prompt agent selector into the footer and removing the duplicate review toast when the modal opens.
-- Improved project header action tooltips so labels open below their buttons without clipping at the sidebar edge.
-- Bundled Ghostex agent skills with the CLI install path.
-- Removed session-card shortcut badges and the unused show-hotkeys-on-cards setting.
-
-## 3.18.0 - 2026-05-28
-
-- Added bundled zehn prompt-history search through `gx find` and `gx f`, while keeping `gx s` as the existing sessions alias.
-- Added pinned sessions so important agent terminals stay at the top of a project, remain manually reorderable in last-activity mode, and can be toggled from the CLI with `pin-session`.
-- Added auto-sleep controls for browser and project panes so idle embedded surfaces follow the same sleep policies as terminals.
-- Improved the Project board with pasted image path storage, clearer ticket editor layout, and grouped ticket actions.
-- Improved macOS worktree flows with tighter OS integration and clearer worktree delete confirmation copy.
-- Improved browser session cards, tooltips, and the rich prompt editor by trimming trailing blank lines on save.
-- Stopped auto-installing agent hooks on app startup; hook installation now requires explicit consent from first-launch setup or Settings -> Integrations.
-
-## 3.17.0 - 2026-05-27
-
-- Improved command-panel terminals so they appear in project session tracking, CLI session lists, project batch actions, and favorite controls instead of drifting outside the normal project session model.
-- Improved project Sleep Inactive, Wake, and Reload actions so idle zmx-backed command terminals are included while working or attention sessions stay awake.
-- Improved restored and restarted terminal handling so Ghostex waits for native terminal surfaces to finish attaching before treating a temporary missing-surface report as a failed pane.
-
-## 3.16.0 - 2026-05-27
-
-- Improved Cursor Agent resume so transcript paths captured from Cursor hooks are recognized as Cursor sessions even when a terminal previously inherited another agent identity.
-- Improved agent activity status during launch, resume, fork, and manual startup so transient spinner or done titles are less likely to leave sessions stuck in attention state.
-- Added an Editor setting to show untracked line counts in project-header diff stats only when there are no tracked line changes, while keeping tracked-only Starship-style counts as the default.
-
-## 3.15.0 - 2026-05-27
-
-- Added Ghostex-named agent skills for Browser Use, Computer Use, Agent Orchestration, and Generate Title, with CLI install commands and bundled app resources so agents can discover the right Ghostex workflows after Homebrew install.
-- Improved first-launch setup and Settings -> Integrations with the public Ghostex Browser Use and Ghostex Computer Use names, including Desktop Control readiness checks for both Cua Driver and the Ghostex Computer Use skill.
-- Improved `ghostex browser open` / `gx browser open` so agent-created browser panes are scoped to the current project or worktree and reuse existing same-origin or exact tabs instead of creating duplicates.
-- Added Recent Projects right-click actions for Copy Path, Open in Finder, and Remove Project.
-- Added Power Settings access from the titlebar keep-awake menu, icon-only keep-awake controls, and an option to hide the keep-awake titlebar control.
-- Improved project headers by allowing larger four-digit changed-line counts before compact diff stats are capped.
-- Removed legacy IDE and Canary attachment paths so browser and workspace actions stay centered on Ghostex's own panes.
-
-## 3.14.0 - 2026-05-27
-
-- Changed the short Ghostex CLI command from `gtx` to `gx`, with Homebrew setup checking for an existing non-Ghostex `gx` command before linking the alias.
-- Added Ghostex browser DevTools MCP support so agents can inspect embedded browser panes, read console logs, take snapshots and screenshots, and interact with pages through the bundled CLI skill.
-- Expanded first-launch setup with CLI, mobile app, and browser-skill guidance, including installed-CLI detection so Homebrew users are not asked to reinstall unnecessarily.
-- Improved browser feedback tooling so browser panes honor the selected Agentation or React Grab tool and Agentation opens directly into feedback mode.
-- Improved sleeping-session wake and focus behavior so pane tabs, command tabs, focus mode, and restored zmx/tmux/zellij sessions reopen in the expected pane instead of reshuffling visible layouts.
-- Improved sidebar polish with unified tooltip styling, tighter Storybook/native layout matching, literal Show less limits for long project lists, and broader Sleep Inactive coverage for idle terminals.
-- Improved Android companion behavior with background session-status refresh, attention notifications, sleeping-session icons, persisted project disclosure, and long-list Show more / Show less controls.
-- Improved iOS companion builds with Ghostex-branded local device installs, safer CloudKit handling for debug builds, and a two-row customizable terminal accessory bar.
-
-## 3.13.0 - 2026-05-25
-
-- Added the Ghostex terminal TUI as the default `ghostex` / `gtx` experience, while keeping direct session attach available through the attach shortcuts.
-- Added a first-launch setup experience with Ghostex workspace artwork, agent hook readiness, and install/refresh actions for supported agents.
-- Added Git release workflow actions for reviewing changes, creating split commits, and handing off multicommit release work from the app.
-- Improved Git review flows with a richer commit modal, changed-file diff inspection, and clearer project/worktree ordering.
-- Improved Project board refresh behavior so ticket moves, edits, copied work prompts, and nearby Beads changes show up without manual refresh while large boards stay capped for smoother scrolling.
-- Improved the Ghostex terminal TUI with the Herdr-backed terminal runtime, hotkey overlay polish, full zmx replay, and synced working/attention/idle status from persisted sessions.
-- Improved titlebar and workspace chrome behavior with cleaner resource controls, tighter traffic-light alignment, and safer modal/menu click handling above native panes.
-- Improved cross-platform Ghostex parity for project workflows, workspace persistence, browser/code/git panes, settings, modals, and release packaging.
-- Improved mobile and persistent-session stability with clearer Android remote-session activity, more responsive iOS direct attach, and better cleanup for zmx, zellij, and other persisted terminal sessions.
-- Restored Monaco as the default local Ctrl+G prompt editor while preserving terminal-native prompt editing for SSH sessions.
-
-## 3.12.0 - 2026-05-23
-
-- Improved restored persistent sessions so focusing an already-running tmux, zmx, or zellij-backed terminal no longer sends restore text or resume commands into the live prompt.
-- Improved app modal click handling so Settings and Agents Hub stay fully interactive above native pane tabs and workspace chrome in narrow layouts.
-- Improved Ghostex iOS direct attach with paced terminal rendering, smoother scrollback gestures, and better responsiveness during animated terminal output.
-
-## 3.11.0 - 2026-05-23
-
-- Added a beads-backed Project board in Project mode with kanban lanes, full-text search, status filters, comments, labels, image previews, and Linear-style ticket keys.
-- Added reversible session focus mode with pane-tab controls, session-card focus behavior, and a titlebar Exit Focus action.
-- Added Ghostex CLI session selectors plus read/send message commands for scripting live sessions from the terminal.
-- Improved Code, Git, and Project side-pane behavior so clicking a session while the companion pane is hidden returns to Agents view and focuses the selected session.
-- Improved Settings on narrow windows so top tabs and section navigation wrap cleanly instead of clipping.
-- Improved zmx and iOS remote attach stability with visible-only replay, better resume fallback behavior, and smoother direct SSH terminal rendering.
-
-## 3.10.0 - 2026-05-23
-
-- Added a beads-backed Project board in Project mode with draggable kanban columns for creating, moving, and commenting on project issues.
-- Added reversible session focus mode from pane tabs and session cards so one pane tab group can be isolated while Code, Git, or Project surfaces restore on unfocus.
-- Added agent hook status and install controls in Settings -> Agents so reliable-resume agents show machine-local hook setup and can be installed from the app.
-- Improved titlebar Quit actions so Resources can terminate the live PIDs shown in the menu instead of relying only on sidebar sleep.
-- Improved zmx attach and resume through visible-only replay for live sessions, saved fallback resume commands, and clearer failed-resume panes.
-- Improved Settings modals hosted in the sidebar with a dimmed backdrop that dismisses on click, matching full-window modal behavior.
-- Improved Ghostex iOS direct SSH attach responsiveness with batched terminal output and clearer attach progress.
-
-## 3.9.1 - 2026-05-23
-
-- Made `gte` the default Ctrl+G prompt editor so new installs open the terminal-native editor without extra setup.
-- Improved terminal shortcut routing so Cmd+G opens agent prompt editing, and common Mac editing shortcuts reach terminal apps such as `gte` instead of being swallowed by the app menu.
-- Improved sidebar and toast layering so sidebar navigation stays clickable while app toasts are visible and toast-only overlays no longer steal workspace clicks.
-- Improved the Delayed Send terminal countdown badge with more padding for better readability.
-- Improved iOS direct SSH attach responsiveness by batching remote terminal output, reducing render spam, and showing clearer attach progress.
-
-## 3.9.0 - 2026-05-23
-
-- Added hidden restorable launchers for Rovo Dev, Hermes Agent, CodeBuddy, and Qoder with matching icons and cleaner session-title restore support.
-- Added Agentation as the default browser-pane feedback tool, with a Settings option to switch the browser action back to React Grab.
-- Improved agent session restore by capturing native agent session ids through installed hooks and showing the captured id in session-card tooltips.
-- Improved terminal defaults with the GitHub Dark profile, JetBrains Mono, a lighter font weight, more scrollback, protected clipboard behavior, and one-to-one mouse scrolling.
-- Improved rich prompt editing with the renamed `gte` terminal editor option, system-inherited editing, and custom editor commands.
-- Improved terminal mouse behavior so Command-clicks and modifier changes are reported reliably to terminal apps.
-- Improved app modal and workspace chrome behavior so Escape closes full-window modals reliably and native pane controls keep receiving clicks.
-- Improved project drag previews so insertion lines stay stable while dragging across expanded project groups.
-- Added native Ghostty terminal groundwork for the iOS app and local iPhone build/install scripts.
-- Added mobile app availability notes for TestFlight and Android APK downloads.
-
-## 3.8.0 - 2026-05-21
-
-- Added Quit controls to the titlebar Resources menu so individual resource groups or all managed sessions can be closed from one place.
-- Improved the Resources menu for zmx users with clearer persistence guidance, less crowded header actions, and collapsed diagnostic resources by default.
-- Improved the pet overlay so attention/completed session cards appear ahead of active working cards while preserving sidebar order within each status.
-- Improved embedded Code, Git, and browser panes so command-pane resizing stays visually stable during live drag gestures.
-- Improved compact sidebar layouts so collapsed Quick and Projects sections no longer create extra hidden scroll space.
-
-## 3.7.0 - 2026-05-21
-
-- Improved embedded Code, Git, and browser panes so showing or hiding the command pane no longer shifts page content upward over repeated resizes.
-- Improved Delayed Send with a clearer floating countdown badge in terminal panes, non-blocking scheduling feedback, and a timer dialog that selects the minutes field when opened.
-- Improved restart recovery so sessions that quit while working or needing attention wake again on the next launch.
-- Simplified the sidebar by removing hidden legacy Agents, Actions, Browsers, and project-header surfaces from the React sidebar.
-- Improved project group reordering with a compact cursor-following drag preview for large expanded projects.
-
-## 3.6.0 - 2026-05-21
-
-- Added Cursor CLI, Antigravity CLI, and Amp CLI as built-in agents with matching icons, launch commands, title cleanup, and working/done detection.
-- Added global and per-agent Accept All controls for supported agent CLIs, including a first-launch setup surface for choosing the default behavior.
-- Added project worktree workflows for creating a new worktree from a prompt, launching an agent into it, reviewing changed files, and optionally cleaning up the worktree after git actions.
-- Improved sidebar Actions so each project can keep its own action list while worktrees inherit their parent project's actions.
-- Improved the Ghostex CLI so running `ghostex` or `gtx` with no subcommand lists sessions in the same project order as the app, and zmx-backed resume can recreate a missing named session when possible.
-- Improved the pet overlay with actionable status badges, a Go to Ghostex menu action, a Sleep Pet action, and an additional pet sprite.
-- Made the floating prompt editor open faster after startup by warming the editor host before the first real prompt edit.
-- Improved Delayed Send reliability by preserving pending deadlines with restored terminal sessions.
-- Added a Storybook regression story for large real project lists so sidebar scrolling and project reachability are easier to verify.
-
-## 3.5.0 - 2026-05-18
-
-- Added a much more complete Ghostex Android remote workflow with built-in connection handling, session attach, remote actions, session creation, file upload, and shareable phone-side diagnostics without requiring phone-side OpenSSH or sshpass setup.
-- Improved Ghostex Android navigation with a cleaner drawer, quick refresh, explicit Machines, Settings, and Exit controls, collapsible project groups, project reordering, and project-level session creation.
-- Added Ghostex Android terminal settings inside the drawer for common terminal behavior and display options.
-- Improved zmx-backed terminal stability on macOS so panes refresh more reliably after resize, mode switches, pop-out changes, and sleeping-session wake.
-- Improved sleeping-session wake behavior so restored sessions return to the focused tab group instead of unexpectedly reappearing as separate split panes.
-
-## 3.4.1 - 2026-05-17
-
-- Added visible Delayed Send countdowns in the sidebar, native pane tabs, and terminal panes so scheduled sends are easy to spot before they fire.
-- Improved Delayed Send controls so reopening an active timer shows the remaining time and lets you cancel or reschedule it.
-
-## 3.4.0 - 2026-05-17
-
-- Added a native right-click menu in terminal panes with Copy and Paste actions.
-- Improved Last Active timestamps so sleeping and restored terminal sessions keep accurate sidebar times and sorting after restart.
-- Improved the titlebar Resources menu so Browser Tabs only count Ghostex embedded browser helpers and use clearer browser process labels.
-
-## 3.3.0 - 2026-05-17
-
-- Added image paste support to the rich prompt editor, including durable local image references, thumbnail previews, full-size preview popups, and one-click image removal.
-- Improved Open In menus and Settings with recognizable editor brand icons for Cursor, VS Code, Zed, Antigravity, VSCodium, and JetBrains-family editors.
-- Added Show less / Show more controls for long project session lists so large projects stay easier to scan.
-- Added configurable hotkeys for pane actions and the first five custom Actions, including browser pane, rotate panes, merge tabs, delayed send, fork, reload, and pop out.
-- Improved sleeping persisted sessions so sleeping releases the underlying provider runtime and external `ghostex` / `gtx` attach resumes sleeping sessions correctly.
-- Improved the titlebar Resources menu so browser memory rows show the actual tab title and URL instead of raw browser process labels.
-- Moved the Wake/Sleep Pet control into the sidebar overflow menu so pet controls live next to session tools while the titlebar stays focused on workspace actions.
-- Improved rich prompt editor focus so clicking blank editor chrome reliably keeps typing inside the prompt editor.
-
-## 3.2.0 - 2026-05-16
-
-- Added a titlebar Resources menu that shows live CPU and memory usage grouped by project, session, Ghostex runtime, and browser tabs.
-- Added a one-click titlebar action to sleep inactive agent sessions from the Resources menu.
-- Added persistent hide/show behavior for the agent side pane in Code, Git, and Project modes, with a titlebar restore button when the pane is hidden.
-- Improved custom terminal actions so command panes are reused by action title and duplicate action titles are blocked before saving.
-- Improved project headers with more reliable right-click menus and easier-to-scan agent launcher icons.
-
-## 3.1.0 - 2026-05-16
-
-- Added a full-window Command Palette on `Cmd+K` for Ghostex actions, project actions, Settings, pane controls, and pet controls.
-- Added sidebar display presets for Codex, Minimal, and Detailed layouts so users can quickly choose how quiet or information-rich the sidebar should be.
-- Improved Agents Hub editing so saved files update immediately in the open modal and external editor buttons open the right folder with the selected file focused.
-- Moved browser pane sessions into their project groups and removed the separate Browsers sidebar section so project work stays grouped together.
-- Improved project Git/browser panes with project tabs, browser toolbar support, and more reliable active project selection.
-- Improved Previous Sessions search with the newer modal styling and multiline query input.
-- Improved the `ghostex` / `gtx` CLI help and session listing so commands are easier to scan and sessions follow the sidebar's Last Active order.
-
-## 3.0.0 - 2026-05-15
-
-- Added a Tips & Tricks guide inside Ghostex with practical pages for workspace basics, agents and sessions, actions and browsers, Codex setup, and remote access from a phone or another machine.
-- Added bundled `ghostex` and `gtx` command-line launchers to the app so Homebrew installs both commands automatically for session listing, attach, wake, focus, and sleep workflows.
-- Changed new session labels to shorter `g-MMDD-HHMMSS` identities so sidebar numbers and tmux, zmx, or zellij session names are easier to read and reuse.
-- Improved sleeping-session restore behavior so waking a session puts it back into the active tab group instead of disrupting the current split layout.
-- Polished project workspace controls with clearer titlebar modes, better project panel behavior, and a cleaner path from empty project headers into a first terminal.
-- Improved native pane and browser stability around focus, tab scrolling, titlebar actions, and embedded browser resizing.
-- Improved rename handling so pasted titles are cleaned into readable session names before they are saved.
-
-## 2.7.0 - 2026-05-15
-
-- Completed the Ghostex public naming cleanup across release, app, Homebrew, and generated CEF helper surfaces.
-- Added Factory Droid and Grok Build as built-in agent options with bundled icons, sidebar labels, and session metadata support.
-- Renamed the default Pi launch option to Pi Agent while keeping `pi` as the command.
-- Changed directional pane focus defaults to `Cmd+Alt+Arrow` so normal `Cmd+Arrow` text-editing behavior is not stolen by workspace navigation.
-- Added a searchable action icon picker in Settings so custom sidebar actions can choose icons faster and keep accessible labels visible.
-- Moved project git diff stats into project headers and removed the separate code-editor sidebar row so project groups scan more compactly.
-- Added titlebar modes for Agents, Code, Git, and Project so project/editor surfaces can be reached from the native titlebar without crowding the sidebar.
-- Renamed the tasks-backed titlebar surface to Project while keeping its placeholder bundled locally and preserving existing internal mode IDs.
-- Removed the Back to Agents View button from code/git companion panes so the companion titlebar only exposes pane dismissal.
-- Kept the titlebar mode switcher's active pill animation visible while moving between distant modes.
-- Moved Rotate Panes into the pane overflow menu, added Merge All Tabs, and improved command-panel tab creation in clicked tab groups.
-- Kept workspace pane tabs readable with a wider minimum tab width while preserving horizontal scrolling in narrow multi-tab panes.
-- Improved prompt editor hit routing, collapsed command-panel sizing, previous-session restore targeting, favorite backfill, and semantic Last Active tracking.
-- Preserved full generated session titles in stored titles and hover tooltips even when live terminal titles report an ellipsized prefix.
-- Hid tmux, zmx, and zellij persistence-provider letters from session-card agent icons while keeping provider metadata available for attach commands and tooltips.
-- Fixed reference-sidebar primary labels so descenders remain visible in New Session, Agents Hub, Plugins, Search, Settings, and Recent Projects rows.
-- Added Tasks placeholder bundling and Git/browser mode helpers for the new native workspace modes.
-- Ignored legacy pre-rename generated web assets so old `zmuxHost` build output does not appear as source work.
-
-## 2.6.0 - 2026-05-15
-
-- Improved Agents Hub profile tooltips with structured profile labels, instruction file paths, target paths, and Finder actions that stay readable for dense local agent configurations.
-- Added a setting to hide Last Active timestamps on active session cards while letting titles use the full card width without overlapping status dots or close buttons.
-- Hid browser page history from the Previous Sessions modal so the restore flow stays focused on agent sessions.
-- Polished Previous Sessions and session-card metadata alignment, including fixed timestamp columns, project-label positioning, and clearer brand-colored agent icons.
-- Simplified the sidebar overflow menu by removing completion sound, persistence, and remote-access controls from that compact menu while keeping scratch tools, running state, hotkeys, and help.
-- Updated Next Tab and Previous Tab navigation to follow the visible sorted sidebar order, including collapsed Combined sections.
-- Improved project-editor and command-pane hit routing so active editor surfaces, companion panes, command tabs, and resize handles receive the intended native clicks.
-- Added native activation diagnostics and CEF layout logging to investigate focus steals and browser-pane geometry drift from app lifecycle and native frame snapshots.
-- Added pane-tab geometry diagnostics, adjusted workspace tab-bar sizing, and made non-command tab add buttons use square chrome.
-- Added provider/session context labels and first-run persistence notices for tmux, zmx, and zellij-backed terminal sessions.
-- Kept macOS attention notifications minimal by using the session name as the title and project name as the body.
-
-## 2.5.1 - 2026-05-15
-
-- Published a native Intel x86_64 build beside the Apple Silicon build, with a separate Intel Sparkle feed and an architecture-aware `ghostex` Homebrew cask.
-- Clarified the README install flow so the same `brew install --cask maddada/tap/ghostex` command automatically selects Apple Silicon or Intel.
-- Changed sidebar actions to always use an explicit icon, defaulting new and legacy actions to the Play glyph with editable color.
-- Added a titlebar pet control that toggles the floating pet overlay through persisted settings and keeps the overlay state synchronized.
-- Resized the floating pet overlay to fit the sprite when no activity bubbles are visible while preserving the wider activity panel when messages appear.
-- Improved Commands panel focus restoration so collapsing command terminals returns keyboard focus to the previous workspace terminal.
-- Improved Reload Session placement so reloaded terminals replace the clicked pane/tab instead of appending as a new split.
-- Polished Previous Sessions rows with centered restore content, an X delete control, and active-session icon hover behavior that does not dim the focused row.
-- Consolidated sidebar resize ownership, aligned pane tab heights, and hid active pane borders in single-pane workspaces.
-- Updated local native launch behavior so `bun run start` uses architecture-specific DerivedData paths for arm64 and x86_64 builds.
-
-## 2.5.0 - 2026-05-14
-
-- Added dual-architecture release pipeline support for separate Apple Silicon and Intel DMGs, separate Sparkle feeds, and an architecture-aware Homebrew cask.
-- Renamed the public app surface from Ghostex to Ghostex while keeping internal repository, code, storage, bundle id, and historical asset names under `ghostex`.
-- Changed the public CLI command to `ghostex`, with `gtx` as the short alias, and intentionally stopped documenting `ghostex` as a CLI compatibility command.
-- Updated README install and CLI examples so `brew install --cask maddada/tap/ghostex` is the public install command.
-- Updated the reference sidebar workflows with a combined-only layout, improved command panel behavior, searchable settings sections, refined hotkey navigation, and cleaner Previous Sessions rows.
-- Improved Agents Hub so it loads the real local catalog, supports in-place saving, and avoids bundling private placeholder profile data.
-- Added floating Monaco prompt editing with resize/move behavior, save/cancel status handling, and safer terminal-close persistence.
-- Improved native pane chrome, focus/resize hit ownership, project editor routing, commands panel tab controls, and embedded browser pane handling.
-- Restored direct native terminal scrollbar behavior so embedded Ghostty surfaces keep scrollback geometry, scrollbar rendering, and precise trackpad momentum.
-- Added a floating pet overlay with clickable activity bubbles that bring Ghostex forward and focus the exact session shown above the pet.
-- Added release handover docs and updated the release workflow so future agents keep GitHub Releases, Sparkle, and Homebrew aligned for both architectures.
-
-## 2.3.2 - 2026-05-10
-
-This patch release adds session attention notifications and tightens project editor row alignment.
-
-- Added optional macOS attention banners for sessions that need attention, including Settings control, native notification permission handling, click-to-focus routing, and sidebar rate limiting.
-- Kept attention notifications separate from completion sounds so users can enable clickable system routing without audible alerts.
-- Improved project editor diff-row alignment in the reference sidebar and expanded Storybook fixture coverage for open editor rows with diff stats.
-
-SHA256: `61d2d71547b492eb732483d09193df3cb3de2b475f86f7916f75344d89daf220`
-
-## 2.3.0 - 2026-05-10
-
-This minor release improves the 2.x workspace with stronger hotkey editing, richer prompt editing, native runtime fixes, and more predictable sidebar behavior.
-
-- Added a shortcut recorder for hotkey settings so Command chords are captured directly instead of typed into text fields.
-- Updated split-count shortcuts to single-chord defaults and added direct Split More / Split Less actions for faster workspace layout control.
-- Added opt-in Rich Prompt Editing with gte, including Settings UI, native install routing, environment injection, and zsh startup shims that keep gte in charge after shell profiles load.
-- Added installed-app CLI proxying so terminal commands such as `ghostex --help` and `ghostex sessions` run the bundled Node CLI before the macOS app starts.
-- Improved native command execution by normalizing GUI-launched process `PATH` values so background commands can find common developer tools.
-- Improved terminal search keyboard behavior, centering, and neutral styling for embedded Ghostty panes.
-- Added active-project names to the macOS title bar while keeping chat workspaces labeled as Ghostex.
-- Added focused native pane-reorder diagnostics and rejected stale title-bar hits so bottom-edge terminal selection does not become pane dragging.
-- Changed provider-backed terminal recreation so reload, wake, restore, and previous-session restore follow the current Settings provider while attach-command inspection still uses stored provider metadata.
-- Separated project agent launching from plain terminal creation so project headers have distinct agent and terminal controls.
-- Changed the Combined sidebar top row to New Session so it creates in the active project/chat context while chat creation stays in the Chats section.
-- Added persistent sidebar collapse state and a Settings toggle for showing project editor changed-file counts.
-- Polished sidebar spacing and session-title truncation so reference layout controls and session cards scan more cleanly.
-- Updated README development setup and feature wording for the current Ghostty fork and 2.3 workflow.
-
-SHA256: `aabfea87f042ab59e1eb8aabd371226108df5a980edccbee80f58b26d7a80d70`
-
-## 2.2.0 - 2026-05-09
-
-This minor release tightens the new 2.x interface with the latest workspace, settings, and release workflow polish.
-
-- Added a unified tabbed Settings dialog that brings Settings, Agents, Actions, and Hotkeys into one configuration surface.
-- Added lazy `~/.ghostex` folder usage stats and an Open ghostex Folder action from Settings.
-- Added menu bar session status indicators while making floating desktop indicators independently optional.
-- Renamed orange agent status from running to working so agent activity is distinct from live runtime state.
-- Improved project editor rows so opening and error states stay visible, show diagnostics, and can be retried instead of disappearing.
-- Improved session card and Previous Sessions row chrome with hover close controls, clearer last-active placement, and refined editor diff labels.
-- Added a separate `start:dev` app startup path for `ghostex-dev` so normal `bun s` keeps release-like behavior.
-- Updated README presentation and feature wording for the current Ghostex positioning.
-
-SHA256: `73340ec06d57c3b16a585ee9c5566513c91fd5e0a6cba9477ae5982a122521c9`
-
-## 2.1.0 - 2026-05-08
-
-- Continued the 2.x UI refresh messaging: ghostex now presents the redesigned simplified Codex-style workspace, refreshed project groups, action controls, tooltips, session cards, settings surfaces, and updated screenshots.
-- Continued the 2.x stability and performance focus across native sidebar sync, AppKit relayout avoidance, shared storage writes, diagnostic filtering, and workspace visibility.
-- Added the macOS application icon from agent-manager-x so Finder, Dock, app switcher, and signed release builds use the intended branded icon instead of a generic app icon.
-- Compiled the icon through Xcode's `AppIcon` asset catalog so signed and notarized release bundles carry the same icon metadata as local builds.
-
-SHA256: `6bbd2a95f1f585df20a2811c8f2cae492ad53492bc13814b4b085c5a906e9ced`
-
-Install with Homebrew: `brew install --cask maddada/tap/ghostex`
-
-## 2.0.0 - 2026-05-08
-
-- Changed the whole ghostex UI around the simplified Codex-style workspace: refreshed top chrome, project groups, action controls, tooltips, session cards, Previous Sessions rows, settings surfaces, icons, and README screenshots.
-- Added native workspace visibility helpers and tests so sidebar/native sync can avoid unnecessary workspace work while preserving visible pane behavior.
-- Improved restore and fork actions for native terminal title bars, including Codex and Claude fork command paths.
-- Fixed first-prompt auto-rename so meaningful terminal-synced titles are preserved instead of being overwritten by redundant generated rename commands.
-- Updated Storybook sidebar scenarios, interaction readiness, and fixtures so visual checks match current local settings and the redesigned sidebar behavior.
-
-SHA256: `da519a720e65a955ce182f0655ba36a6cb02c188aab441142dc2bf9747f70456`
-
-Install with Homebrew: `brew install --cask maddada/tap/ghostex`
-
-## 1.4.11 - 2026-05-08
-
-- Added reference-style sidebar action flows, modal flows, story fixtures, and Combined layout refinements.
-- Added Pi as a supported agent option with icon assets, tests, and agent configuration UI wiring.
-- Improved sidebar group, session-card, search, modal, and scroll styling to better match the reference layout.
-- Improved floating session status indicators with refined drawing, attention/working visual treatment, and additional settings support.
-- Improved session title, activity, rename, and first-prompt metadata handling so loading and restored-title states are more reliable.
-
-## 1.4.10 - 2026-05-08
-
-- Added human-facing `ghostex` CLI session commands for listing, attaching, resuming, killing, sleeping, waking, and focusing running terminal sessions.
-- Added provider-backed attach metadata so tmux, zmx, and zellij sessions keep their stored provider, show sidebar badges, and expose copyable attach commands.
-- Added a Settings control for floating session status indicator size, plus updated indicator drawing, tooltip wrapping, and settings-control polish.
-- Fixed main window chrome restore so ghostex reopens at the prior size, position, and display while avoiding offscreen IDE-attachment coordinates.
-- Fixed Find Previous Session routing so the footer button opens the prompt even with an empty modal search field and logs the modal/native bridge path.
-- Improved session title sync by rejecting Ghostty ghost placeholder titles and protecting trusted restored titles from automatic rename overwrite.
-
-## 1.4.9 - 2026-05-07
-
-- Improved embedded code-server editor panes so VS Code panel/sidebar drag and drop keeps live hover and drop targeting while using CEF.
-- Fixed embedded browser/editor pane teardown so closing a pane from the sidebar does not close the top-level app window.
-- Improved project editor persistence so VS Code workbench layout survives app restarts without putting code-server into a fresh Chromium profile.
-- Improved zmx session persistence so empty sessions attach directly, startup commands run only for new sessions, and inherited zmx session variables do not hijack app-managed names.
-- Improved zellij session persistence so generated session names stay within provider limits and new sessions launch under the same name used for restart attach.
-- Enlarged README screenshots for clearer GitHub documentation.
-
-## 1.4.8 - 2026-05-06
-
-- Added embedded code-server editor panes so project groups can open a native CEF-backed code editor surface.
-- Added project header controls for opening project-scoped browser panes and project editor panes from the clicked group.
-- Added zellij as an opt-in terminal session persistence provider alongside tmux and zmx.
-- Added a sidebar side setting so users can choose left or right placement from Settings, including startup restore and legacy side migration.
-- Added modified-setting indicators with per-setting reset-to-default tooltips in Settings.
-- Replaced native `title` attributes across sidebar controls with shadcn/Radix app tooltips and shared local brand icons.
-- Improved project editor panes so middle-click closes the editor surface while preserving project diff stats and runtime sleep behavior.
-- Improved code-server editor drag/drop by disabling native pane resize/header reorder interception while editor panes are visible and logging passive CEF drag diagnostics.
-- Fixed right-side sidebar layout so the resize divider sits between the workspace and sidebar instead of on the outside edge.
-- Fixed Combined-mode project groups so empty project groups remain expandable for editor cards while browser and non-project groups still auto-collapse.
-- Removed versioned Sparkle release-note markdown files from the repository.
-
-## 1.4.7 - 2026-05-06
-
-- Added persistent terminal session providers so terminal metadata, restore inputs, and provider state can survive app restarts.
-- Added Chromium CEF native browser support with vendored CEF build wiring, persistent browser storage, and cookie flushing on app termination.
-- Added shared Ghostty settings so terminal configuration can be reused across the native host and sidebar settings surfaces.
-- Added native floating session status indicators for working, attention, and available session counts, including click-to-focus routing back into the workspace.
-- Added a Configure Actions modal with readable action rows plus create, edit, and delete flows for sidebar project actions.
-- Added Previous Sessions restore for archived terminal session records so restored sessions keep agent identity, first-message metadata, title provenance, favorites, and resume inputs.
-- Filtered placeholder Previous Sessions entries so default titles such as `Terminal Session` and `Codex Session` are not saved as low-signal history cards.
-- Improved Previous Sessions project restore by switching back to the original project, reviving Recent Projects entries, or recreating the project when needed.
-- Fixed sparse Combined sidebar scrolling so empty/collapsed project lists stay pinned instead of rubber-banding or preserving stale scroll offsets.
-- Fixed Combined-mode Chats grouping so the synthetic Chats group marker survives sidebar-store normalization.
-- Improved native pane drag and reorder handling so hit testing stays scoped to pane headers while terminal/body interactions keep their expected routing.
-- Improved terminal close cleanup by skipping redundant Ghostty close requests once a process has already exited.
-- Adjusted native sidebar and Storybook layout so project panels can use the right edge rail without being clipped.
-
-## 1.4.6 - 2026-05-05
-
-- Replaced native title-bar action controls with compact sidebar Actions dropdowns for project commands and Open In targets.
-- Added explicit Open In choices for Finder, Visual Studio Code, and Zed, including brand icons and persisted primary target selection.
-- Added removable Actions dropdown rows so configured project actions can be deleted from the same menu that runs them.
-- Moved custom workspace color selection into the workspace Theme context menu with a recent-color palette, removing the separate workspace config modal.
-- Improved empty Combined-mode Chats and project groups so they auto-collapse while empty, expand when sessions appear, and show static folder/chat icons instead of inactive chevrons.
-- Improved Recent Projects styling to match normal sidebar group rows and show preserved session counts inline.
-- Expanded Codex first-prompt hook installation to existing Codex profile homes so first-prompt auto-title capture works when `CODEX_HOME` points at a profile directory.
-- Finished native-only cleanup by removing the retired VS Code extension/workspace webview sources from Storybook and TypeScript configuration.
-
-## 1.4.5 - 2026-05-05
-
-- Added native title-bar split controls for primary Actions and Open In commands while keeping empty title-bar space draggable.
-- Added React-rendered title-bar dropdown menus for configured ghostex actions and Open In targets, reusing the existing sidebar command and selected-IDE state.
-- Improved terminal focus sync so passive layout/status updates no longer steal focus from the terminal or modal the user is actively typing in.
-- Improved embedded Ghostty terminal color handling by removing inherited color-disabling environment keys at the native surface boundary.
-- Added optional CEF prototype scaffolding for future Chromium browser panes while keeping the default WKWebView build path buildable without the Chromium SDK.
-
-## 1.4.4 - 2026-05-04
-
-- Added Combined sidebar mode so native ghostex can show one project group per project across all projects, while preserving Separated mode for the previous per-project layout.
-- Added a Recent Projects drawer with fuzzy project/path search and startup cleanup for empty combined-mode projects.
-- Added project context actions for opening project config, setting project theme, copying the project path, opening the folder in Finder, opening it in the selected IDE, and closing projects into Recent Projects.
-- Fixed sidebar resize drags to use stable window coordinates so the sidebar does not jump while dragging.
-- Added color-environment diagnostics for agent launches so monochrome CLI sessions can be traced to inherited terminal environment values.
-- Added long-paste rename handling that summarizes pasted session text before syncing the rename into the agent CLI.
-
-## 1.4.3 - 2026-05-03
-
-- Added an opt-in Browser Panes mode that opens browser actions as first-class workspace panes instead of Chrome Canary windows.
-- Added native browser pane controls for address navigation, reload, DevTools, React Grab, and profile selection.
-- Persisted browser pane URLs, favicons, and browser-auto titles so sidebar cards and app restarts reflect the current page.
-
-## 1.4.2 - 2026-05-02
-
-- Fixed Sparkle update detection by publishing releases with a monotonic `CFBundleVersion` build number.
-- Kept the native AppKit pane resizing changes from 1.4.1 available in the update feed.
-
-## 1.4.1 - 2026-05-02
-
-- Moved split pane resizing into the native AppKit terminal workspace so Ghostty and WKWebView panes resize from the same layout owner.
-- Removed the React workspace resize overlay and tests that no longer apply to native pane sizing.
-- Removed whole-cell terminal body stepping so pane chrome and terminal renderer widths stay aligned during native resize.
-
-## 1.4.0 - 2026-05-02
-
-- Added Sparkle appcast update support with signed appcast metadata for native macOS updates.
-- Added draggable workspace pane resizing with double-click equalize behavior for pane rows and columns.
-- Added a standard native macOS app menu with About, Check for Updates, Settings, Services, Hide, and Quit.
-- Added a setting to hide the native IDE title-bar attach button without disabling IDE attachment.
-- Improved IDE attachment behavior so the floating Show IDE button raises or launches the configured IDE for the current workspace.
-- Kept the local release workflow skill available on this machine while removing it from the public repository tree.
-
-## 1.3.0 - 2026-04-30
-
-- Added Ghostty config actions and a recommended Ghostty config that includes ghostex-managed color, cursor, font, scroll, and split-opacity settings.
-- Added a cyan Ghostty palette default to improve terminal color readability with the recommended ghostex-managed config.
-- Added a local agent release skill for repeatable split commits, release notes, GitHub releases, and Homebrew cask publishing.
-- Added Generate Name diagnostics across the sidebar, bridge, and controller paths so silent session-name failures are easier to trace.
-- Fixed terminal title bars so long titles are measured from raw text and use available pane width before truncating.
-- Improved attached IDE refocus timing so ghostex resurfaces faster when the IDE is already active or when activation retries succeed quickly.
-- Hid bare agent status words such as `Working`, `Done`, `Idle`, `Thinking`, and `Error` from visible terminal titles.
-
-## 1.2.0 - 2026-04-29
-
-- Added terminal scroll multiplier settings for precision devices and discrete mouse wheels.
-- Synced Ghostty mouse-scroll-multiplier values into the shared Ghostty config and reloads scroll-only changes immediately.
-- Added native AVFoundation sound playback for completion/action sounds and settings previews, with sound assets bundled in the app.
-- Gated non-error native/sidebar diagnostics behind Debugging Mode and reduced high-frequency focus/title logging.
-- Improved terminal close cleanup by terminating processes still attached to the closed terminal tty.
-- Improved embedded terminal search behavior so Escape closes search before reaching terminal programs.
-- Changed embedded terminal cursor rects to use the default pointer cursor instead of always showing the I-beam.
-
-## 1.1.0 - 2026-04-29
-
-- Improved previous-session search launching by routing modal input through the sidebar/native command bridge.
-- Fixed agent wrapper process launch so interactive CLIs stay attached to the foreground terminal TTY and receive resize signals.
-- Added agent wrapper debug logging for TTY/process details used to diagnose resize and child-process issues.
-- Fixed native embedded terminal layout to step pane sizes to whole Ghostty character cells, including configured terminal padding.
-- Expanded native terminal resize diagnostics with core Ghostty grid, padding, backing-pixel, and pane geometry metrics.
-
-## 1.0.4 - 2026-04-28
-
-- Added configurable app hotkeys, including native AppKit handling while terminal panes have focus.
-- Added saved first-message metadata for agent sessions and a copyable "View 1st Message" modal in active and previous session flows.
-- Added terminal workspace background color settings and native pane-gap/background rendering.
-- Added automatic Zed workspace syncing after ghostex workspace switches, controlled by a setting.
-- Added native main-window size persistence between launches.
-- Added native terminal search bar rendering and focus preservation improvements for modal workflows.
-- Improved sidebar sessions to default to last-activity ordering and keep agent-icon mode blank for iconless sessions until hover.
-- Expanded command/workspace icon choices and kept the icon picker search fixed while the icon list scrolls.
-- Improved Previous Sessions by using the search field for "Find Session" prompts and keeping the native full-window modal compact.
-- Added Scratch Pad focus diagnostics to help trace terminal-first-responder focus steals without logging note text.
-
-## 1.0.3 - 2026-04-28
-
-- Added native terminal title bars with rename, fork, reload, sleep, and close actions.
-- Added visible native Ghostty scrollbars and disabled middle-click paste in embedded terminals.
-- Added workspace configuration for dock name, theme, Tabler icon, and uploaded image.
-- Added `ghostex-dev` build/run flavor with separate diagnostics storage and shared workspace/session state.
-- Added shared sidebar storage files for projects, previous sessions, and settings outside WKWebView localStorage.
-- Added managed native sidebar action sessions with command run indicators and close-on-exit behavior.
-- Improved first-prompt auto-title logic so meaningful existing titles are not overwritten.
-- Improved session rename modal Enter-key submission.
-- Improved IDE attachment settings so Zed and Zed Preview are distinguishable.
-- Removed the browser section tab-count badge.
-- Removed persistent helper terminal mode in favor of the embedded Ghostty SurfaceView backend.

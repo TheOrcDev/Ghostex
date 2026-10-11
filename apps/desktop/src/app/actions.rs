@@ -11,6 +11,7 @@ gpui::actions!(
         PasteIntoFocusedTerminal,
         FindInFocusedTerminal,
         OpenBrowserHistory,
+        ReloadFocusedBrowser,
         FindNextInFocusedBrowser,
         FindPreviousInFocusedBrowser,
         ZoomInFocusedSurface,
@@ -22,12 +23,10 @@ gpui::actions!(
         StopGpuiGxserverFromTitlebar,
         RestartGpuiGxserverFromTitlebar,
         OpenGpuiPortlessSetupModalFromTitlebar,
-        CycleFocusedTabForward,
-        CycleFocusedTabBackward,
         CloseFocusedSurface,
         CloseFocusedSurfaceMenuOnly,
         ToggleGpuiSidebarCollapsed,
-        ToggleProjectEditorCompanion,
+        ToggleViewPanel,
         SleepFocusedSession,
         WakeFocusedSession,
         NewTerminalTab,
@@ -43,6 +42,7 @@ gpui::actions!(
         SwitchManageWorkarea,
         OpenGpuiSettingsModal,
         OpenGpuiExtensionsModal,
+        OpenGpuiAccountsModal,
         OpenGpuiHotkeysModal,
         OpenGpuiCommandPaletteModal,
         OpenGpuiPreviousSessionsModal,
@@ -55,7 +55,6 @@ gpui::actions!(
         OpenGpuiPowerSettingsModal,
         SleepGpuiPetOverlay,
         GoToGhostexFromGpuiPetOverlay,
-        GpuiKeepAwakeMenuLabel,
         FocusWorkspaceLeft,
         FocusWorkspaceRight,
         FocusWorkspaceUp,
@@ -70,12 +69,21 @@ gpui::actions!(
         QuitGhostexGpuiAndBackgroundServices,
         MinimizeGhostexGpuiWindow,
         ZoomGhostexGpuiWindow,
+        NewGhostexGpuiWindow,
+        CycleGhostexGpuiWindows,
         GpuiEditMenuCut,
         GpuiEditMenuCopy,
         GpuiEditMenuPaste,
         GpuiEditMenuSelectAll
     ]
 );
+
+/// Window menu: bring one workspace window to the front (app/workspace_windows/).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ActivateGhostexGpuiWindow {
+    pub(crate) number: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
 #[action(namespace = ghostex_gpui, no_json)]
@@ -116,6 +124,12 @@ pub(crate) struct ToggleFocusModeForPane {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
 #[action(namespace = ghostex_gpui, no_json)]
 pub(crate) struct MergeAllTabsForPane {
+    pub(crate) pane_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct CloseAgentsPane {
     pub(crate) pane_id: u64,
 }
 
@@ -280,6 +294,13 @@ pub(crate) struct CloseBrowserTabInPane {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
 #[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct SleepBrowserTabInPane {
+    pub(crate) pane_id: u64,
+    pub(crate) tab_id: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
 pub(crate) struct RunBrowserFeedbackTool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
@@ -314,10 +335,83 @@ pub(crate) struct SleepGpuiTitlebarView {
     pub(crate) mode_index: u64,
 }
 
+/// The view panel's tab strip. Every row identifies its view by `TitlebarMode::switcher_index`, the
+/// same id the older view actions use, so a menu row and a hotkey name the same view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct OpenGpuiViewTab {
+    pub(crate) mode_index: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct OpenNewBrowserTabFromViewMenu;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct CloseGpuiViewTab {
+    pub(crate) mode_index: u64,
+}
+
+/// Pin or unpin a tab of the view panel's strip. `browser_tab_id` names one of the Browser's pages;
+/// without it the row is the view `mode_index` names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ToggleGpuiViewStripTabPinned {
+    pub(crate) mode_index: u64,
+    pub(crate) browser_tab_id: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct PopOutGpuiViewTab {
+    pub(crate) mode_index: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ToggleGpuiViewPanelMaximized;
+
+/// `Show in ▸ This Project` and `Show in ▸ This Space`: one override each, ticked when the view is
+/// currently shown there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ToggleGpuiViewProjectScope {
+    pub(crate) mode_index: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ToggleGpuiViewSpaceScope {
+    pub(crate) mode_index: u64,
+    pub(crate) space_key: String,
+}
+
+/// `Hidden here ▸`: clear the override that hides this view in this project, so it comes back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct ShowGpuiHiddenViewHere {
+    pub(crate) mode_index: u64,
+}
+
+/// "Choose where it's shown…": Settings, on the Extensions page, with this view's scope editor open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct OpenGpuiViewScopeSettings {
+    pub(crate) mode_index: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
 #[action(namespace = ghostex_gpui, no_json)]
 pub(crate) struct RunGpuiTitlebarAction {
     pub(crate) action_index: u64,
+}
+
+/// One row of the titlebar's ⋯ menu, by its position in `GpuiTitlebarMoreMenuItem::ALL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = ghostex_gpui, no_json)]
+pub(crate) struct OpenGpuiTitlebarMoreMenuItem {
+    pub(crate) item_index: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]

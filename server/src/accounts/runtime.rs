@@ -20,6 +20,7 @@ pub(crate) struct AccountRuntime {
     pub setup_jobs: super::setup::SetupJobs,
     pub mutations: Mutex<()>,
     pub history: Arc<super::history::HistoryRuntime>,
+    pub recovery: Arc<super::recovery::RecoverySignals>,
     poll_gate: Mutex<()>,
 }
 impl AccountRuntime {
@@ -49,6 +50,19 @@ impl AccountRuntime {
         {
             return cached;
         }
+        self.discover_all(home)
+    }
+    /// Refreshes unless the cached snapshot started after `since`, so a reading already in flight when a reset was claimed cannot stand in for the post-claim one.
+    pub fn refresh_since(&self, home: &Path, since: Instant) -> Snapshot {
+        let _gate = self.poll_gate.lock().unwrap_or_else(|e| e.into_inner());
+        let cached = self.snapshot();
+        if cached.fetched_at.is_some_and(|t| t > since) {
+            return cached;
+        }
+        self.discover_all(home)
+    }
+    fn discover_all(&self, home: &Path) -> Snapshot {
+        let started = Instant::now();
         let mut next = Snapshot::default();
         std::thread::scope(|scope| {
             let tasks: Vec<_> = [Provider::Claude, Provider::Codex]
@@ -73,7 +87,7 @@ impl AccountRuntime {
                 }
             }
         });
-        next.fetched_at = Some(Instant::now());
+        next.fetched_at = Some(started);
         *SNAPSHOT.write().unwrap_or_else(|e| e.into_inner()) = next.clone();
         next
     }

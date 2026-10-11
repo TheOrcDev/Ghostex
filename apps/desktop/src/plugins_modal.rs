@@ -11,7 +11,6 @@ const GXSERVER_LINUX_ARM64_ASSET: &str = "gxserver-linux-arm64";
 enum PluginsModalStatus {
     Installed,
     NotInstalled,
-    Required,
     Cached,
     NotCached,
     Installing(component_store::ComponentStoreProgressPhase),
@@ -23,7 +22,6 @@ impl PluginsModalStatus {
         match self {
             Self::Installed => "Installed".to_string(),
             Self::NotInstalled => "Not installed".to_string(),
-            Self::Required => "Required".to_string(),
             Self::Cached => "Cached".to_string(),
             Self::NotCached => "Not cached".to_string(),
             Self::Failed => "Install failed".to_string(),
@@ -41,7 +39,7 @@ impl PluginsModalStatus {
 
     fn color(self) -> Hsla {
         match self {
-            Self::Installed | Self::Required | Self::Cached => rgb(0x67d391).into(),
+            Self::Installed | Self::Cached => rgb(0x67d391).into(),
             Self::Installing(_) => rgb(0x70a7ff).into(),
             Self::NotInstalled | Self::NotCached => rgb(0xffffff).opacity(0.50).into(),
             Self::Failed => rgb(0xff9da5).into(),
@@ -67,6 +65,8 @@ impl PluginsModalStatus {
 enum PluginsModalAction {
     InstallCodeServer,
     UninstallCodeServer,
+    InstallWebRuntime,
+    UninstallWebRuntime,
     HideCodeViewTab,
     ShowCodeViewTab,
     HideKanbanViewTab,
@@ -78,8 +78,8 @@ enum PluginsModalAction {
 impl PluginsModalAction {
     fn label(self) -> &'static str {
         match self {
-            Self::InstallCodeServer => "Install",
-            Self::UninstallCodeServer => "Uninstall",
+            Self::InstallCodeServer | Self::InstallWebRuntime => "Install",
+            Self::UninstallCodeServer | Self::UninstallWebRuntime => "Uninstall",
             Self::HideCodeViewTab => "Hide Code view tab",
             Self::ShowCodeViewTab => "Show Code view tab",
             Self::HideKanbanViewTab => "Hide Kanban view tab",
@@ -161,6 +161,21 @@ impl GpuiPluginsModalWindow {
                 })
                 .map_err(|error| error.to_string())
                 .and_then(|result| result),
+            PluginsModalAction::InstallWebRuntime => self
+                .main_app
+                .update(cx, |app, cx| app.install_web_runtime(false, cx))
+                .map_err(|error| error.to_string()),
+            PluginsModalAction::UninstallWebRuntime => self
+                .main_app
+                .update(cx, |app, cx| {
+                    app.uninstall_web_runtime(cx);
+                    app.plugin_settings_action_errors
+                        .get("cef")
+                        .cloned()
+                        .map_or(Ok(()), Err)
+                })
+                .map_err(|error| error.to_string())
+                .and_then(|result| result),
             PluginsModalAction::HideCodeViewTab => self
                 .main_app
                 .update(cx, |app, cx| {
@@ -204,9 +219,13 @@ impl GpuiPluginsModalWindow {
         match result {
             Ok(()) => {
                 self.notice = match action {
-                    PluginsModalAction::InstallCodeServer => None,
+                    PluginsModalAction::InstallCodeServer
+                    | PluginsModalAction::InstallWebRuntime => None,
                     PluginsModalAction::UninstallCodeServer => {
                         Some((false, "VS Code IDE was uninstalled.".to_string()))
+                    }
+                    PluginsModalAction::UninstallWebRuntime => {
+                        Some((false, "The web runtime was uninstalled.".to_string()))
                     }
                     PluginsModalAction::HideCodeViewTab => {
                         Some((false, "The Code view tab is hidden.".to_string()))
@@ -252,7 +271,10 @@ impl GpuiPluginsModalWindow {
         action: PluginsModalAction,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let primary = action == PluginsModalAction::InstallCodeServer;
+        let primary = matches!(
+            action,
+            PluginsModalAction::InstallCodeServer | PluginsModalAction::InstallWebRuntime
+        );
         let background: Hsla = if primary {
             rgb(0x377bd8).into()
         } else {
@@ -511,7 +533,7 @@ impl Render for GpuiPluginsModalWindow {
                     .py(px(10.0))
                     .text_size(px(10.5))
                     .text_color(rgb(0xffffff).opacity(0.40))
-                    .child("Required components stay installed. Removed runtime packages download automatically when they are needed again."),
+                    .child("Optional components download only when you install them here or from the view that needs them."),
             )
     }
 }
@@ -534,17 +556,18 @@ impl GhostexGpuiApp {
         }
 
         let window_size = size(px(PLUGINS_MODAL_WIDTH), px(PLUGINS_MODAL_HEIGHT));
+        let window_bounds =
+            gpui::Bounds::centered_at(self.main_window_bounds.center(), window_size);
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(gpui::Bounds::centered_at(
-                self.main_window_bounds.center(),
-                window_size,
-            ))),
+            window_bounds: Some(WindowBounds::Windowed(window_bounds)),
             app_id: gpui_platform_window_app_id(),
             focus: true,
             icon: gpui_platform_window_icon(),
             show: true,
             is_resizable: false,
-            display_id: self.main_window_display_id,
+            display_id: self
+                .main_window_popup_owner()
+                .display_for(window_bounds, cx),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Ghostex Plugins".into()),
                 appears_transparent: false,
@@ -609,100 +632,28 @@ impl GhostexGpuiApp {
                     }
                 }
             }
-            "cef" => self.reinstall_cef_plugin(cx),
+            // Install when the runtime is missing or broken, Reinstall otherwise.
+            "cef" => {
+                let reinstall = matches!(
+                    crate::app::helpers::web_runtime::web_runtime_state(),
+                    crate::app::helpers::web_runtime::WebRuntimeState::Installed
+                        | crate::app::helpers::web_runtime::WebRuntimeState::Running
+                );
+                self.install_web_runtime(reinstall, cx);
+            }
             _ => {}
         }
     }
 
-    fn begin_plugin_settings_action(
+    /// Settings' Uninstall for a runtime component; only the web runtime offers it there.
+    pub(super) fn uninstall_plugin_from_settings(
         &mut self,
-        plugin_id: &'static str,
-        phase: component_store::ComponentStoreProgressPhase,
-        cx: &mut gpui::Context<Self>,
-    ) -> u64 {
-        let generation = self
-            .plugin_settings_action_generations
-            .get(plugin_id)
-            .copied()
-            .unwrap_or(0)
-            .wrapping_add(1);
-        self.plugin_settings_action_generations
-            .insert(plugin_id, generation);
-        self.plugin_settings_action_errors.remove(plugin_id);
-        self.plugin_settings_action_progress
-            .insert(plugin_id, phase);
-        self.refresh_gpui_plugins_modal(cx);
-        generation
-    }
-
-    fn finish_plugin_settings_action(
-        &mut self,
-        plugin_id: &'static str,
-        generation: u64,
-        result: Result<(), String>,
+        plugin_id: &str,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .plugin_settings_action_generations
-            .get(plugin_id)
-            .copied()
-            != Some(generation)
-        {
-            return;
+        if plugin_id == "cef" {
+            self.uninstall_web_runtime(cx);
         }
-        self.plugin_settings_action_progress.remove(plugin_id);
-        match result {
-            Ok(()) => {
-                self.plugin_settings_action_errors.remove(plugin_id);
-            }
-            Err(message) => {
-                self.plugin_settings_action_errors
-                    .insert(plugin_id, message);
-            }
-        }
-        self.refresh_gpui_plugins_modal(cx);
-        cx.notify();
-    }
-
-    fn reinstall_cef_plugin(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.plugin_settings_action_progress.contains_key("cef") {
-            return;
-        }
-        let generation = self.begin_plugin_settings_action(
-            "cef",
-            component_store::ComponentStoreProgressPhase::Checking,
-            cx,
-        );
-        let (progress_tx, mut progress_rx) = mpsc::unbounded();
-        cx.spawn(async move |this, cx| {
-            while let Some(progress) = progress_rx.next().await {
-                let _ = this.update(cx, |this, cx| {
-                    if this.plugin_settings_action_generations.get("cef").copied()
-                        != Some(generation)
-                    {
-                        return;
-                    }
-                    this.plugin_settings_action_progress.insert("cef", progress);
-                    this.refresh_gpui_plugins_modal(cx);
-                });
-            }
-        })
-        .detach();
-        let background = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            let result = background
-                .spawn(async move {
-                    cef_component_window::reinstall_and_verify_cef_component(progress_tx)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if result.is_ok() {
-                    cef_component_window::configure_cef_framework_path_for_process();
-                }
-                this.finish_plugin_settings_action("cef", generation, result, cx);
-            });
-        })
-        .detach();
     }
 
     fn remove_cached_plugin_asset(
@@ -893,10 +844,23 @@ pub(super) fn plugin_settings_status_message(app: &GhostexGpuiApp) -> serde_json
             if let Some(progress) = app.plugin_settings_action_progress.get(id).copied() {
                 row.status = PluginsModalStatus::Installing(progress);
             }
-            let error_message = app.plugin_settings_action_errors.get(id).cloned();
-            if error_message.is_some() {
+            let mut error_message = app.plugin_settings_action_errors.get(id).cloned();
+            // The web runtime's row keeps the state it reads (a refused Uninstall does not make it
+            // "failed"); a failed install or start shows its message.
+            if id == "cef" {
+                if error_message.is_none()
+                    && let crate::app::helpers::web_runtime::WebRuntimeState::Failed(message) =
+                        crate::app::helpers::web_runtime::web_runtime_state()
+                {
+                    error_message = Some(message);
+                }
+            } else if error_message.is_some() {
                 row.status = PluginsModalStatus::Failed;
             }
+            let can_uninstall = row
+                .actions
+                .contains(&PluginsModalAction::UninstallWebRuntime)
+                && !app.web_runtime_started_in_process();
             let can_reinstall = match id {
                 "code" => store
                     .as_ref()
@@ -911,6 +875,7 @@ pub(super) fn plugin_settings_status_message(app: &GhostexGpuiApp) -> serde_json
             let (status, status_label) = plugin_settings_status_wire(row.status);
             serde_json::json!({
                 "canReinstall": can_reinstall,
+                "canUninstall": can_uninstall,
                 "errorMessage": error_message,
                 "id": id,
                 "sizeBytes": row.size_bytes,
@@ -928,9 +893,7 @@ pub(super) fn plugin_settings_status_message(app: &GhostexGpuiApp) -> serde_json
 
 fn plugin_settings_status_wire(status: PluginsModalStatus) -> (&'static str, String) {
     let wire = match status {
-        PluginsModalStatus::Installed
-        | PluginsModalStatus::Required
-        | PluginsModalStatus::Cached => "installed",
+        PluginsModalStatus::Installed | PluginsModalStatus::Cached => "installed",
         PluginsModalStatus::NotInstalled | PluginsModalStatus::NotCached => "notInstalled",
         PluginsModalStatus::Failed => "failed",
         PluginsModalStatus::Installing(phase) => match phase {
@@ -945,71 +908,69 @@ fn plugin_settings_status_wire(status: PluginsModalStatus) -> (&'static str, Str
     (wire, status.label())
 }
 
+/// The web runtime's row: its state comes from app/helpers/web_runtime.rs, and it offers Install
+/// and Uninstall like the Code editor, because it is an optional component
+/// (CDXC:CefRuntime 2026-09-28 there).
 fn cef_row(
     store: Option<&component_store::ComponentStore>,
     warning: &mut Option<String>,
 ) -> PluginsModalRow {
+    use crate::app::helpers::web_runtime::{WebRuntimeState, web_runtime_state};
+    let state = web_runtime_state();
+    let bundled_path = bundled_cef_runtime_path();
+    let mut version = compiled_cef_version();
+    let mut size_bytes = 0;
+    let mut managed_installed = false;
+    let managed = store
+        .and_then(|store| store.component(CEF_COMPONENT))
+        .is_some();
     if let Some(store) = store
         && let Some(component) = store.component(CEF_COMPONENT)
     {
-        let version = component.component_version.clone();
-        return match store.query_current(CEF_COMPONENT) {
-            Ok(installed) => PluginsModalRow {
-                actions: Vec::new(),
-                description: "Chromium runtime used by Ghostex web surfaces. Required.",
-                id: "cef",
-                name: "Chromium runtime (CEF)",
-                size_bytes: installed.size_bytes,
-                status: if installed.installed {
-                    PluginsModalStatus::Required
-                } else {
-                    PluginsModalStatus::NotInstalled
-                },
-                version,
-            },
-            Err(error) => {
-                set_first_warning(warning, error);
-                unavailable_cef_row(version)
+        version = component.component_version.clone();
+        match store.query_current(CEF_COMPONENT) {
+            Ok(installed) => {
+                managed_installed = installed.installed;
+                size_bytes = installed.size_bytes;
             }
-        };
+            Err(error) => set_first_warning(warning, error),
+        }
     }
-
-    let path = bundled_cef_runtime_path();
-    let size_bytes = path
-        .as_deref()
-        .map(component_store::path_size_bytes)
-        .transpose()
-        .unwrap_or_else(|error| {
+    if !managed_installed && let Some(path) = bundled_path.as_deref() {
+        size_bytes = component_store::path_size_bytes(path).unwrap_or_else(|error| {
             set_first_warning(warning, error);
-            None
-        })
-        .unwrap_or(0);
+            0
+        });
+    }
+    let status = match state {
+        WebRuntimeState::Installing(phase) => PluginsModalStatus::Installing(phase),
+        WebRuntimeState::Failed(_) => PluginsModalStatus::Failed,
+        WebRuntimeState::Installed | WebRuntimeState::Running => PluginsModalStatus::Installed,
+        WebRuntimeState::NotInstalled => PluginsModalStatus::NotInstalled,
+    };
+    let mut actions = Vec::new();
+    if !matches!(status, PluginsModalStatus::Installing(_)) {
+        if managed && !managed_installed && bundled_path.is_none() {
+            actions.push(PluginsModalAction::InstallWebRuntime);
+        }
+        if managed_installed && bundled_path.is_none() {
+            actions.push(PluginsModalAction::UninstallWebRuntime);
+        }
+    }
     PluginsModalRow {
-        actions: Vec::new(),
-        description: "Chromium runtime used by Ghostex web surfaces. Required and bundled.",
+        actions,
+        description: CEF_ROW_DESCRIPTION,
         id: "cef",
         name: "Chromium runtime (CEF)",
         size_bytes,
-        status: if path.is_some() {
-            PluginsModalStatus::Required
-        } else {
-            PluginsModalStatus::NotInstalled
-        },
-        version: compiled_cef_version(),
-    }
-}
-
-fn unavailable_cef_row(version: String) -> PluginsModalRow {
-    PluginsModalRow {
-        actions: Vec::new(),
-        description: "Chromium runtime used by Ghostex web surfaces. Required.",
-        id: "cef",
-        name: "Chromium runtime (CEF)",
-        size_bytes: 0,
-        status: PluginsModalStatus::NotInstalled,
+        status,
         version,
     }
 }
+
+/// CDXC:CefRuntime 2026-09-28 SEE-ALSO: the Settings Extensions page says the same
+/// (settings_modal/tabs/extensions/data.rs `CEF_DESCRIPTION`).
+const CEF_ROW_DESCRIPTION: &str = "Optional web runtime for the Browser, the Code view, website and extension views, and HTML files in Files. Installed when you first use one of them.";
 
 fn release_asset_row(
     store: Option<&component_store::ComponentStore>,

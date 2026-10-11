@@ -14,18 +14,24 @@ code_server_node_distribution_arch() {
 
 code_server_node_distribution_sha256() {
 	local distribution_arch="$1"
-	if [[ "$CODE_SERVER_APP_NODE_VERSION" == "24.18.1" ]]; then
-		case "$distribution_arch" in
-		arm64)
-			printf '1d60b703fe5d7e7072489be8187f430f1a095a658c31e5e1e281331a5873fac3\n'
-			return 0
-			;;
-		x64)
-			printf 'f892c7895720f40d3750bde24f3554242d36f23602b5167b5b73ec4d13938aef\n'
-			return 0
-			;;
-		esac
-	fi
+	case "$CODE_SERVER_APP_NODE_VERSION:$distribution_arch" in
+	24.20.0:arm64)
+		printf 'b7bf7707070b950ba1ec5f1af3bb6de0f2b1962c5033973d94068ab021ef3014\n'
+		return 0
+		;;
+	24.20.0:x64)
+		printf '26fc30891004603d094eed11de5efcd03bbd2efbc35c177fc72648d5d7a7701b\n'
+		return 0
+		;;
+	24.18.1:arm64)
+		printf '1d60b703fe5d7e7072489be8187f430f1a095a658c31e5e1e281331a5873fac3\n'
+		return 0
+		;;
+	24.18.1:x64)
+		printf 'f892c7895720f40d3750bde24f3554242d36f23602b5167b5b73ec4d13938aef\n'
+		return 0
+		;;
+	esac
 	echo "Unsupported code-server Node distribution: v$CODE_SERVER_APP_NODE_VERSION darwin-$distribution_arch" >&2
 	echo "Update code_server_node_distribution_sha256 before changing code-server/.node-version." >&2
 	return 1
@@ -155,7 +161,7 @@ Restore the checkout:
   git -C $REPO_ROOT submodule update --init .dependencies/code-server
 
 If you moved the tree elsewhere, point the build at it instead:
-  GHOSTEX_CODE_SERVER_ROOT=/path/to/code-server bun run start
+  GHOSTEX_CODE_SERVER_ROOT=/path/to/code-server cargo xtask start
 EOF
 			exit 1
 		fi
@@ -171,7 +177,7 @@ gitlink, so your checkout stayed where it was and .dependencies/code-server is
 empty. Refusing to package an app whose Code tab cannot start.
 
 Unblock this build without moving anything:
-  GHOSTEX_CODE_SERVER_ROOT=$legacy_root bun run start
+  GHOSTEX_CODE_SERVER_ROOT=$legacy_root cargo xtask start
 
 Repair the checkout (keeps node_modules and the built VS Code payload):
   cd $REPO_ROOT
@@ -280,6 +286,11 @@ code_server_node_payload_digest() {
 		--path "$CODE_SERVER_ROOT/tsconfig.json"
 }
 
+# CDXC:CodeEditor 2026-09-27 WHY: VS Code's remote (server) dependencies include native modules (@vscode/spdlog, @vscode/native-watchdog, @parcel/watcher, @vscode/fs-copyfile) that only exist after their npm install scripts compile them. A user-level `ignore-scripts=true` in ~/.npmrc wins over VS Code's `remote/.npmrc`, which does not set it, so local builds shipped without them: the editor's file watcher crashed and extension-host logging was off. The VS Code install turns scripts on for itself, and this compiled module is the proof an install (or a staged payload) is complete.
+code_server_native_module_marker() {
+	printf '%s\n' "node_modules/@vscode/spdlog/build/Release/spdlog.node"
+}
+
 ensure_code_server_payload() {
 	local vscode_target="$1"
 	local vscode_release_root="$CODE_SERVER_ROOT/lib/vscode-reh-web-$vscode_target"
@@ -312,17 +323,18 @@ ensure_code_server_payload() {
 	commit="$(git -C "$CODE_SERVER_ROOT" rev-parse HEAD 2>/dev/null || printf 'development')"
 	payload_digest="$(code_server_vscode_payload_digest "$vscode_target" "$node_identity" "$npm_version" "$package_version" "$commit")"
 	payload_cache_key="code-server-vscode-payload-$GHOSTEX_MACOS_ARCH"
-	# CDXC:CodeEditor 2026-06-09-17:06: Embedded VS Code search depends on @vscode/ripgrep/bin/rg. Rebuild the generated REH web payload when code-server packaging inputs change, server-main.js is missing, or ripgrep is missing/wrong-arch so `bun run start` and release builds cannot reuse a stale payload that opens but fails search.
-	if ! cache_matches "$payload_cache_key" "$payload_digest" "$vscode_release_root/out/server-main.js" "$vscode_ripgrep_bin" ||
+	# CDXC:CodeEditor 2026-06-09-17:06: Embedded VS Code search depends on @vscode/ripgrep/bin/rg. Rebuild the generated REH web payload when code-server packaging inputs change, server-main.js is missing, or ripgrep is missing/wrong-arch so `cargo xtask start` and release builds cannot reuse a stale payload that opens but fails search.
+	if ! cache_matches "$payload_cache_key" "$payload_digest" "$vscode_release_root/out/server-main.js" "$vscode_ripgrep_bin" "$vscode_release_root/$(code_server_native_module_marker)" ||
 		! binary_supports_macos_arch "$vscode_ripgrep_bin" "$GHOSTEX_MACOS_ARCH"; then
 		(
 			cd "$CODE_SERVER_ROOT/lib/vscode"
 			# CDXC:CodeEditor 2026-09-14 WHY:
 			# A submodule update can leave node_modules from the previous VS Code revision, failing gulp on newly required packages.
 			# VS Code's install state covers its root, build, remote, and extension dependencies as well as the Node version.
-			if ! "$CODE_SERVER_NODE_BIN" --input-type=module -e 'import { isUpToDate } from "./build/npm/installStateHash.ts"; process.exit(isUpToDate() ? 0 : 1)'; then
+			if ! "$CODE_SERVER_NODE_BIN" --input-type=module -e 'import { isUpToDate } from "./build/npm/installStateHash.ts"; process.exit(isUpToDate() ? 0 : 1)' ||
+				[[ ! -f "remote/$(code_server_native_module_marker)" ]]; then
 				echo "Installing VS Code dependencies from the current lockfiles..."
-				env PATH="$CODE_SERVER_NODE_DIR:$PATH" "$CODE_SERVER_NPM_BIN" ci --no-audit --no-fund
+				env PATH="$CODE_SERVER_NODE_DIR:$PATH" npm_config_ignore_scripts=false "$CODE_SERVER_NPM_BIN" ci --no-audit --no-fund
 			fi
 		)
 		(
@@ -379,7 +391,7 @@ package_code_server_if_needed() {
 		--path "$CODE_SERVER_ROOT/.node-version" \
 		--path "$CODE_SERVER_ROOT/src/browser")"
 	# CDXC:CodeEditor 2026-06-08-12:17: The app bundle must contain a self-contained code-server runtime at Web/code-server and the single shared Node executable at Web/code-server/lib/node. Missing code-server resources are build failures instead of installed-user Node prompts.
-	if cache_matches "code-server-package-$GHOSTEX_MACOS_ARCH" "$package_digest" "$target_dir/out/node/entry.js" "$target_dir/lib/vscode/out/server-main.js" "$target_dir/lib/vscode/node_modules/@vscode/ripgrep/bin/rg" "$target_dir/lib/node" "$target_dir/node_modules" "$expected_node_pty_prebuild" &&
+	if cache_matches "code-server-package-$GHOSTEX_MACOS_ARCH" "$package_digest" "$target_dir/out/node/entry.js" "$target_dir/lib/vscode/out/server-main.js" "$target_dir/lib/vscode/node_modules/@vscode/ripgrep/bin/rg" "$target_dir/lib/node" "$target_dir/node_modules" "$expected_node_pty_prebuild" "$target_dir/lib/vscode/$(code_server_native_module_marker)" &&
 		node_pty_prebuilds_match_arch "$target_dir" &&
 		binary_supports_macos_arch "$target_dir/lib/node" "$GHOSTEX_MACOS_ARCH" &&
 		binary_supports_macos_arch "$target_dir/lib/vscode/node_modules/@vscode/ripgrep/bin/rg" "$GHOSTEX_MACOS_ARCH"; then
@@ -469,7 +481,10 @@ published_code_server_component_asset() {
 	if ! command -v gh >/dev/null 2>&1; then
 		return 1
 	fi
-	published_asset_names="$(gh release view "$component_tag" --repo maddada/Ghostex --json assets --jq '.assets[].name' 2>/dev/null || true)"
+	# Component tags live in the components repository (GHOSTEX_COMPONENTS_REPO, resolved by components-repo.mjs).
+	local components_repo
+	components_repo="$(node "$REPO_ROOT/tooling/release-gpui/components-repo.mjs")"
+	published_asset_names="$(gh release view "$component_tag" --repo "$components_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
 	printf '%s\n' "$published_asset_names" | grep -Fxq "$asset_name" &&
 		printf '%s\n' "$published_asset_names" | grep -Fxq "$sidecar_name"
 }
@@ -526,7 +541,7 @@ stage_code_server_component_asset() {
 	if published_code_server_component_asset; then
 		reused_published_component=1
 		gh release download "$component_tag" \
-			--repo maddada/Ghostex \
+			--repo "$(node "$REPO_ROOT/tooling/release-gpui/components-repo.mjs")" \
 			--pattern "$(basename "$asset_path")" \
 			--pattern "$(basename "$asset_sidecar")" \
 			--dir "$asset_dir" \

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
@@ -11,73 +10,21 @@ use crate::app::model::*;
 use crate::*;
 
 impl GhostexGpuiApp {
+    /// Asks the store's client for that machine for a full snapshot, after a remote add, clone,
+    /// restore or command pane attach that the machine's stream may not have reported.
+    ///
+    /// CDXC:RemoteMachines 2026-09-25 WHY:
+    /// This read used to fetch `/api/readPresentationSnapshot` for the app runtime's copy of the
+    /// machine, which is gone. The machine the sidebar draws is the Rust store's
+    /// (gx_store/remote_clients.rs), so the same pull is its resubscribe, on its own socket, or with
+    /// its next connect when that socket is the broken part (CDXC:AddProject 2026-07-30).
     pub(crate) fn refresh_gpui_remote_gxserver_presentation_in_background(
         &mut self,
-        remote_machine_id: String,
-        mark_failed_on_error: bool,
-        cx: &mut gpui::Context<Self>,
+        remote_machine_id: &str,
     ) {
-        let Some(target) = self.gpui_remote_gxserver_request_target(&remote_machine_id) else {
-            return;
-        };
-        let refresh_stream_generation = self
-            .remote_gxserver_connections
-            .get(&remote_machine_id)
-            .and_then(|connection| connection.presentation_stream_generation);
-        let background = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            let result = background
-                .spawn(async move {
-                    gpui_remote_gxserver_rpc_result(
-                        &target,
-                        "/api/readPresentationSnapshot",
-                        &serde_json::json!({}),
-                        Duration::from_secs(15),
-                    )
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if !refresh_stream_generation.is_some_and(|generation| {
-                    !this.gpui_remote_gxserver_presentation_stream_is_current(
-                        remote_machine_id.as_str(),
-                        generation,
-                    )
-                }) {
-                    match result {
-                        Ok(result) => {
-                            if let Some(snapshot) = result.get("snapshot").cloned() {
-                                this.dispatch_gpui_sidebar_remote_event(
-                                    serde_json::json!({
-                                        "payload": {
-                                            "snapshot": snapshot,
-                                            "type": "presentationSnapshot",
-                                        },
-                                        "remoteMachineId": remote_machine_id.as_str(),
-                                        "type": "remoteGxserverPresentation",
-                                    }),
-                                    cx,
-                                );
-                            } else if mark_failed_on_error {
-                                this.dispatch_gpui_remote_machine_status(
-                                    remote_machine_id.as_str(),
-                                    "failed",
-                                    cx,
-                                );
-                            }
-                        }
-                        Err(_) if mark_failed_on_error => {
-                            this.dispatch_gpui_remote_machine_status(
-                                remote_machine_id.as_str(),
-                                "failed",
-                                cx,
-                            );
-                        }
-                        Err(_) => {}
-                    }
-                }
-            });
-        })
-        .detach();
+        self.gx_store
+            .remote
+            .request_full_snapshot(remote_machine_id);
     }
 
     pub(crate) fn next_gpui_remote_gxserver_connect_generation(
@@ -207,17 +154,6 @@ impl GhostexGpuiApp {
                             return false;
                         }
                         match message {
-                            GpuiRemoteGxserverPresentationStreamMessage::Event(payload) => {
-                                this.dispatch_gpui_sidebar_remote_event(
-                                    serde_json::json!({
-                                        "payload": payload,
-                                        "remoteMachineId": remote_machine_id.as_str(),
-                                        "type": "remoteGxserverPresentation",
-                                    }),
-                                    cx,
-                                );
-                                true
-                            }
                             GpuiRemoteGxserverPresentationStreamMessage::Failed => {
                                 this.dispatch_gpui_remote_machine_status(
                                     remote_machine_id.as_str(),
@@ -365,6 +301,10 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn stop_gpui_remote_gxserver_connection(&mut self, remote_machine_id: &str) {
+        self.remote_attach_requests
+            .cancel_machine(remote_machine_id);
+        self.pending_keep_view_remote_focus
+            .retain(|key| key.remote_machine_id != remote_machine_id);
         self.stop_remote_browser_tunnel(remote_machine_id);
         if let Some(mut connection) = self.remote_gxserver_connections.remove(remote_machine_id) {
             connection.terminate();
@@ -374,12 +314,18 @@ impl GhostexGpuiApp {
     }
 
     pub(crate) fn stop_all_gpui_remote_gxserver_connections(&mut self) {
+        self.remote_attach_requests.clear();
+        self.pending_keep_view_remote_focus.clear();
         for (_, tunnel) in self.remote_browser.tunnels.drain() {
             tunnel.stop();
         }
         for (_, mut connection) in self.remote_gxserver_connections.drain() {
             connection.terminate();
         }
-        gpui_stop_all_easy_connect_forwards();
+        // The Easy Connect forwarders are process-wide, shared with another open window's
+        // connection to the same machine (app/workspace_windows/).
+        if self.is_last_workspace_window() {
+            gpui_stop_all_easy_connect_forwards();
+        }
     }
 }

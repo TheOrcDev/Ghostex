@@ -1,0 +1,1 @@
+../../../../desktop/src/app/native_sidebar/scroll_fade.rs

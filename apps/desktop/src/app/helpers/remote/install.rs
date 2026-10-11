@@ -22,14 +22,14 @@ pub(crate) struct GpuiRemoteGxserverInstallProbe {
     pub(crate) version: Option<String>,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn gpui_probe_remote_gxserver_install(
     _config: GpuiRemoteMachineConfig,
 ) -> GpuiRemoteGxserverInstallProbe {
     GpuiRemoteGxserverInstallProbe::default()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_probe_remote_gxserver_install(
     config: GpuiRemoteMachineConfig,
 ) -> GpuiRemoteGxserverInstallProbe {
@@ -91,7 +91,7 @@ pub(crate) fn gpui_probe_remote_gxserver_install(
     gpui_remote_gxserver_install_probe_from_result(&result).unwrap_or_default()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_remote_gxserver_install_probe_from_result(
     result: &GpuiRemoteProcessResult,
 ) -> Option<GpuiRemoteGxserverInstallProbe> {
@@ -108,7 +108,7 @@ pub(crate) fn gpui_remote_gxserver_install_probe_from_result(
         .then(GpuiRemoteGxserverInstallProbe::default)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_log_remote_gxserver_install_probe(
     config: &GpuiRemoteMachineConfig,
     phase: &str,
@@ -132,7 +132,7 @@ pub(crate) fn gpui_log_remote_gxserver_install_probe(
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_remote_managed_gxserver_package_needs_update(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -149,11 +149,7 @@ pub(crate) fn gpui_remote_managed_gxserver_package_needs_update(
     else {
         return false;
     };
-    let Some(package_dir) = gpui_bundled_remote_gxserver_package_dir(&target) else {
-        return false;
-    };
-    let Some(expected_identity) =
-        gpui_bundled_remote_gxserver_build_identity(package_dir.as_path())
+    let Some(expected_identity) = gpui_bundled_remote_gxserver_package_build_identity(&target)
     else {
         return false;
     };
@@ -170,7 +166,22 @@ pub(crate) fn gpui_remote_managed_gxserver_package_needs_update(
         .is_some_and(|identity| identity != expected_identity)
 }
 
-#[cfg(target_os = "macos")]
+/// The build identity of the package this app itself carries for `target`, in the order the install picks it.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn gpui_bundled_remote_gxserver_package_build_identity(
+    target: &GpuiRemoteInstallTarget,
+) -> Option<String> {
+    if let Some(package_dir) = gpui_bundled_remote_gxserver_package_dir(target) {
+        return gpui_bundled_remote_gxserver_build_identity(package_dir.as_path());
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(archive_path) = gpui_bundled_remote_gxserver_archive(target) {
+        return gpui_bundled_remote_gxserver_archive_build_identity(archive_path.as_path());
+    }
+    None
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_install_bundled_remote_gxserver_and_read_token(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -199,6 +210,14 @@ pub(crate) fn gpui_install_bundled_remote_gxserver_and_read_token(
             config,
             execution_target,
             package_dir.as_path(),
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(archive_path) = gpui_bundled_remote_gxserver_archive(&target) {
+        return Ok(gpui_install_gxserver_archive_and_read_token(
+            config,
+            execution_target,
+            archive_path.as_path(),
         ));
     }
     match gpui_on_demand_gxserver_archive(&target, progress_tx) {
@@ -291,6 +310,18 @@ pub(crate) fn gpui_bundled_remote_gxserver_package_dir(
     None
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn gpui_bundled_remote_gxserver_package_dir(
+    target: &GpuiRemoteInstallTarget,
+) -> Option<PathBuf> {
+    if target.normalized_os() != "linux" {
+        return None;
+    }
+    let executable = env::current_exe().ok()?;
+    let package_dir = executable.parent()?.join("gxserver");
+    gpui_bundled_remote_gxserver_package_is_compatible(&package_dir, target).then_some(package_dir)
+}
+
 pub(crate) fn gpui_bundled_remote_gxserver_package_resource_names(
     target: &GpuiRemoteInstallTarget,
 ) -> Vec<&'static str> {
@@ -367,7 +398,7 @@ pub(crate) fn gpui_app_bundle_resources_dir() -> Option<PathBuf> {
     Some(bundle_root.join("Contents/Resources"))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_unsupported_remote_package_message(target: &GpuiRemoteInstallTarget) -> String {
     format!(
         "This Ghostex app bundle does not include a gxserver package for {}. Install a Ghostex build that includes a matching remote gxserver package, then retry.",
@@ -375,7 +406,7 @@ pub(crate) fn gpui_unsupported_remote_package_message(target: &GpuiRemoteInstall
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_upload_install_bundled_remote_gxserver_and_read_token(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
@@ -404,14 +435,14 @@ pub(crate) fn gpui_upload_install_bundled_remote_gxserver_and_read_token(
     result
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_upload_install_bundled_remote_gxserver_and_read_token_inner(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,
     package_dir: &Path,
     archive_path: &Path,
 ) -> GpuiRemoteProcessResult {
-    let mut tar_environment = HashMap::new();
+    let mut tar_environment: HashMap<String, String> = env::vars().collect();
     tar_environment.insert("COPYFILE_DISABLE".to_string(), "1".to_string());
     let tar_arguments = vec![
         "-czf".to_string(),
@@ -421,7 +452,7 @@ pub(crate) fn gpui_upload_install_bundled_remote_gxserver_and_read_token_inner(
         ".".to_string(),
     ];
     let tar_result = gpui_run_remote_process(
-        "/usr/bin/tar",
+        &gpui_remote_tar_executable(),
         &tar_arguments,
         Some(tar_environment),
         GPUI_REMOTE_GXSERVER_ARCHIVE_TIMEOUT,

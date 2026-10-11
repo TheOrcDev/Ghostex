@@ -67,60 +67,6 @@ pub(crate) enum CommandPaneWorkspaceLayoutPlan {
     },
 }
 
-pub(crate) fn agents_workspace_tab_context_close_scope_label(
-    scope: AgentsWorkspaceTabCloseScope,
-) -> &'static str {
-    match scope {
-        AgentsWorkspaceTabCloseScope::Close => "Close Tab",
-        AgentsWorkspaceTabCloseScope::CloseLeft => "Close Left",
-        AgentsWorkspaceTabCloseScope::CloseOthers => "Close Other Tabs",
-        AgentsWorkspaceTabCloseScope::CloseRight => "Close Right",
-    }
-}
-
-pub(crate) fn agents_workspace_tab_context_sleep_scope_label(
-    scope: AgentsWorkspaceTabSleepScope,
-) -> &'static str {
-    match scope {
-        AgentsWorkspaceTabSleepScope::Sleep => "Sleep",
-        AgentsWorkspaceTabSleepScope::SleepLeft => "Sleep Left",
-        AgentsWorkspaceTabSleepScope::SleepOthers => "Sleep Other Tabs",
-        AgentsWorkspaceTabSleepScope::SleepRight => "Sleep Right",
-    }
-}
-
-pub(crate) fn agents_workspace_tab_context_focus_label() -> &'static str {
-    "Focus"
-}
-
-pub(crate) fn agents_workspace_tab_context_scoped_close_order() -> [AgentsWorkspaceTabCloseScope; 3]
-{
-    /*
-    CDXC:ContextMenus 2026-06-26-06:57:
-    Native workspace tab right-click menus omit direct Close Tab and order scoped close rows as Close Right, Close Left, then Close Other Tabs. GPUI Agents menus use the same row set while direct close remains owned by inline tab chrome and middle-click gestures.
-    */
-    [
-        AgentsWorkspaceTabCloseScope::CloseRight,
-        AgentsWorkspaceTabCloseScope::CloseLeft,
-        AgentsWorkspaceTabCloseScope::CloseOthers,
-    ]
-}
-
-pub(crate) fn agents_workspace_tab_context_scoped_sleep_order() -> [AgentsWorkspaceTabSleepScope; 3]
-{
-    /*
-    CDXC:ContextMenus 2026-08-31:
-    Direct Sleep lives beside Rename at the top of the native tab menu. The
-    scoped sibling actions remain together below the session runtime actions.
-    Empty sibling scopes remain action rows and no-op in the pane-local resolver.
-    */
-    [
-        AgentsWorkspaceTabSleepScope::SleepRight,
-        AgentsWorkspaceTabSleepScope::SleepLeft,
-        AgentsWorkspaceTabSleepScope::SleepOthers,
-    ]
-}
-
 pub(crate) fn command_pane_tab_context_close_scope_label(
     scope: CommandPaneTabCloseScope,
 ) -> &'static str {
@@ -443,47 +389,6 @@ pub(crate) fn command_pane_tab_pending_click_after_mouse_up_out(
 
     CDXC:CommandPane 2026-06-26-05:23:
     Mouse-up-out cancellation is exact to the command tab whose current gesture is ending. Leave any nonmatching pending token intact so only that tab's later same-tab mouse-up is prevented from selecting or focusing without a fresh mouse-down.
-    */
-    if pending_click == Some(target) {
-        None
-    } else {
-        pending_click
-    }
-}
-
-pub(crate) fn workspace_tab_left_mouse_up_selects(
-    pending_click: Option<WorkspacePendingTabClick>,
-    target: WorkspacePendingTabClick,
-    workspace_tab_drag_active: bool,
-) -> bool {
-    /*
-    CDXC:Workarea 2026-06-26-06:34:
-    Native Agents pane tabs arm selection on mouse-down and commit it on mouse-up only if the same tab still owns the gesture and no tab drag began. GPUI must keep that as runtime-only click state so dragging a tab does not first select/focus it or wake/materialize any placeholder.
-    */
-    pending_click == Some(target) && !workspace_tab_drag_active
-}
-
-pub(crate) fn workspace_tab_left_mouse_up_focuses(
-    click_count: usize,
-    pending_click: Option<WorkspacePendingTabClick>,
-    target: WorkspacePendingTabClick,
-    workspace_tab_drag_active: bool,
-) -> bool {
-    /*
-    CDXC:Workarea 2026-06-26-06:34:
-    Native pane-tab double-click sends a Focus request from mouse-up after the same click/drag gates as normal selection. The model helper decides whether Focus mode can actually toggle, but stale or drag-active gestures must not route into Focus.
-    */
-    click_count >= 2
-        && workspace_tab_left_mouse_up_selects(pending_click, target, workspace_tab_drag_active)
-}
-
-pub(crate) fn workspace_tab_pending_click_after_mouse_up_out(
-    pending_click: Option<WorkspacePendingTabClick>,
-    target: WorkspacePendingTabClick,
-) -> Option<WorkspacePendingTabClick> {
-    /*
-    CDXC:Workarea 2026-06-26-06:34:
-    Mouse-up outside a native Agents pane tab cancels only that armed tab gesture. Preserve unrelated pending tab tokens for their own mouse-up path, and do not use broad root hit-test routing or synthetic input cleanup.
     */
     if pending_click == Some(target) {
         None
@@ -846,29 +751,6 @@ pub(crate) fn command_pane_panel_pin_label(mode: CommandPaneMode) -> &'static st
         CommandPaneMode::Pinned => "Unpin Commands Panel",
         CommandPaneMode::Floating | CommandPaneMode::Collapsed => "Pin Commands Panel",
     }
-}
-
-// CPRAILDBG: temporary diagnostic logging for the command-pane resize-rail
-// drag investigation. Remove before handoff.
-pub(crate) fn cpraildbg(message: &str) {
-    if !shared_settings::shared_sidebar_settings_snapshot().debugging_mode()
-        || !support_logs::scenario_id_enabled("native.pane.tabs")
-    {
-        return;
-    }
-    use std::io::Write as _;
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/cpraildbg.log")
-    else {
-        return;
-    };
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    let _ = writeln!(file, "[{millis}] {message}");
 }
 
 /*

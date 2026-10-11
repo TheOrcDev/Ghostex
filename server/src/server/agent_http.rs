@@ -106,7 +106,42 @@ pub(crate) fn dispatch_agent_http_blocking(
                         .get("sessionChatActivityChanged")
                         .and_then(Value::as_bool)
                         == Some(true));
+            /*
+            CDXC:AgentScreenDetection 2026-10-04 WHY:
+            A new chat's follower can only watch Claude's statusline once it knows the Claude session id, and that id arrives with the agent's first hook. The follower otherwise adopts it on its next resolve poll, up to a second later, which held the model pill back when the first statusline beat the hook. A new id wakes the follower now; the fresh generation it starts adopts the id at once.
+            */
+            let agent_session_id_changed = endpoint_path == "/api/ingestAgentHookEvent"
+                && result.get("agentSessionIdChanged").and_then(Value::as_bool) == Some(true);
             strip_agent_hook_internal_result_fields(&endpoint_path, &mut result);
+            if agent_session_id_changed {
+                if let Some(session) = result.get("session") {
+                    if let (Some(project_id), Some(session_id)) = (
+                        read_session_text(session, "projectId"),
+                        read_session_text(session, "sessionId"),
+                    ) {
+                        crate::session_chat_follower::request_session_chat_resnapshot(
+                            state,
+                            &project_id,
+                            &session_id,
+                        );
+                    }
+                }
+            }
+            // An Empryo launch model waits for Empryo to be up, which its first hook reports.
+            if endpoint_path == "/api/ingestAgentHookEvent" {
+                crate::session_chat_empryo_launch_selection::queue_empryo_launch_selection_from_hook(
+                    state, &db, &result,
+                );
+            }
+            // CDXC:SessionChat 2026-10-07 WHY: a fork's Empryo window joins the engine of the session it was forked from, the case where Empryo 3.9.1 opens the engine's tab without the window's own (seen live 2026-10-07: the fork's first send was held until a manual sleep and wake). The fork's terminal starts inside the fork call, which cannot restart it, so the fork gets the same one rejoin restart a create does.
+            if endpoint_path == "/api/forkSession" {
+                if let Some(session) = result.pointer("/fork/session") {
+                    crate::session_chat_empryo_tabs::select_empryo_own_tab_after_start(
+                        session,
+                        Some(state.clone()),
+                    );
+                }
+            }
             let should_queue_agent_title_metadata_check =
                 should_schedule_agent_title_metadata_check(&endpoint_path, &result);
             let should_schedule_first_prompt_auto_title =
@@ -172,6 +207,7 @@ pub(crate) fn dispatch_agent_http_blocking(
                 }
             }
             if endpoint_path == "/api/switchDraftAgent"
+                || endpoint_path == "/api/draftRunLocation"
                 || endpoint_path == "/api/switchSessionAgent"
             {
                 if let Some((project_id, session_id)) = presentation_session.as_ref() {
@@ -192,7 +228,7 @@ pub(crate) fn dispatch_agent_http_blocking(
                 }
             }
             // The terminal-typed half of "Unpark after sending a message"; the
-            // chat half is in session_chat_queue_runtime.rs. Runs before the
+            // chat half is in session_chat_queue_runtime/post_send.rs. Runs before the
             // delta below so the same publish carries the cleared flag.
             if endpoint_path == "/api/ingestAgentHookEvent"
                 && crate::session_parking::is_user_prompt_submit_hook_event(&params)
@@ -278,18 +314,47 @@ pub(crate) fn dispatch_agent_http_blocking(
                     let _ =
                         crate::agents::arm_draft_launch_activity_suppression(&repository, &session);
                 }
-                if let Err(error) = dispatch_zmx_session_interaction_endpoint(
-                    &repository,
-                    "/api/sendSessionMessage",
-                    &send_params,
-                ) {
-                    return zmx_error_response(endpoint_path, request_id, error);
+                let lifecycle = crate::zmx::LifecycleParams {
+                    project_id: project_id.clone(),
+                    session_id: session_id.clone(),
+                };
+                let daemon_missing =
+                    crate::zmx::probe_and_cache_session_provider(&repository, &lifecycle)
+                        .is_ok_and(|(probe, ..)| probe.lifecycle_state == "missing");
+                if daemon_missing {
+                    if let Err(error) =
+                        crate::session_chat_send_wake::queue_startup_command_and_wake(
+                            state,
+                            &project_id,
+                            &session_id,
+                            &command,
+                        )
+                    {
+                        return domain_error_response(endpoint_path, request_id, error);
+                    }
+                    if let Some(result) = result.as_object_mut() {
+                        result.insert(
+                            "agentRenameCommand".to_string(),
+                            json!("queuedUntilAgentStarts"),
+                        );
+                    }
+                } else {
+                    if let Err(error) = dispatch_zmx_session_interaction_endpoint(
+                        &repository,
+                        "/api/sendSessionMessage",
+                        &send_params,
+                    ) {
+                        return zmx_error_response(endpoint_path, request_id, error);
+                    }
+                    crate::session_chat_app_command::record_session_chat_user_rename_command(
+                        &project_id,
+                        &session_id,
+                        &command,
+                    );
+                    if let Some(result) = result.as_object_mut() {
+                        result.insert("agentRenameCommand".to_string(), json!("sent"));
+                    }
                 }
-                crate::session_chat_app_command::record_session_chat_app_command(
-                    &project_id,
-                    &session_id,
-                    &command,
-                );
             }
             if session_chat_state_changed {
                 if let Some(session) = result.get("session") {
@@ -445,13 +510,7 @@ pub(crate) fn log_agent_hook_passive_identity_conflict(
             })),
         },
     );
-    let hook_activity = normalize_agent_hook_activity(
-        params.get("status"),
-        params
-            .get("eventName")
-            .or_else(|| params.get("rawEventName")),
-        params.get("agentName"),
-    );
+    let hook_activity = normalize_agent_hook_event_activity(params);
     let _ = state.logger.log(GxserverLogInput {
         level: LogLevel::Warn,
         event: "sessionIdentity.passiveEventRejected".to_string(),
@@ -562,6 +621,7 @@ pub(crate) fn strip_agent_hook_internal_result_fields(endpoint_path: &str, resul
         object.remove("identityConflict");
         object.remove("sessionChatPromptChanged");
         object.remove("sessionChatActivityChanged");
+        object.remove("agentSessionIdChanged");
     }
 }
 

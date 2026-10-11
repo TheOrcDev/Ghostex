@@ -1,0 +1,16 @@
+# CDXC:Build 2026-10-01 DECISION:
+# User chose a Rust `cargo xtask` crate to replace the bun/JS dev, start and build scripts, switched in one go with no `bun run` aliases (docs/2026-10-01/zero-ts/NEXT-STEPS.md, answers 24A and 32B).
+# The root `.cargo/config.toml` aliases `cargo xtask` to this manifest so every command runs from the repository root on macOS, Linux and Windows. Keep the dependency list tiny: the first `cargo xtask` compiles this crate once, and every later run only pays cargo's freshness check.
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# `help-generate` renders the Ghostex Help files from the Settings catalog crate.
+ghostex-settings-catalog = { path = "../../packages/settings-catalog" }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

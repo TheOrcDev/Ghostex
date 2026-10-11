@@ -2,7 +2,7 @@
 """Write a macOS .icns from an AppIcon.appiconset of PNG files.
 
 `iconutil` on current macOS reports "Invalid Iconset" for a complete, correctly
-sized PNG set during `bun run start` packaging even though the same conversion
+sized PNG set during `cargo xtask start` packaging even though the same conversion
 succeeds in isolation. Encode the ICNS container directly from the canonical
 PNGs instead of asking iconutil to build a .iconset.
 """

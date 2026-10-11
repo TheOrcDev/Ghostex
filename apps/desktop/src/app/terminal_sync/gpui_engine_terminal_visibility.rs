@@ -1,6 +1,6 @@
 // Cluster: zmx client visibility announcements for Agents GPUI-engine
-// terminals (displayed vs parked), including the resting-width grid a parked
-// client keeps locally.
+// terminals (displayed, chat or parked), including the resting-width grid a
+// chat client keeps locally.
 
 use std::collections::HashSet;
 
@@ -49,9 +49,10 @@ impl GhostexGpuiApp {
       `PoppedOutPlaceholder`, never Running, so they own no engine record here.
     - Chat: a rendered chat slot holds a wide-grid claim with `ZMX_CHAT`.
     - Parked: a session outside the rendered slots holds no chat claim.
-    - Both non-visible states: the local emulator is resized to `ZMX_RESTING_GRID_COLS` x its
-      current rows so it never receives output rendered for a width it does
-      not have, then the matching `ZMX_CHAT` or `ZMX_HIDDEN` is written into the PTY input
+    - Both non-visible states: a chat client's local emulator is resized to
+      `ZMX_RESTING_GRID_COLS` x its current rows, the width its claim widens
+      the daemon to; a parked client keeps its grid (CDXC:Zmx 2026-09-25 below).
+      Then the matching `ZMX_CHAT` or `ZMX_HIDDEN` is written into the PTY input
       (the same `write_input` path pastes use; the attach client consumes the
       sequence and never forwards it to the shell).
     - Visible: the claim is written from the element's prepaint, after the
@@ -87,6 +88,28 @@ impl GhostexGpuiApp {
                 });
         }
         if self.agents_gpui_engine_terminal_visibility_drag_in_progress() {
+            return;
+        }
+        // CDXC:Zmx 2026-09-19 WHY: every claim makes that session's daemon resize, and a held "next tab" key that passes mounted terminals sent one Visible and one Hidden claim per step. While the selection is still moving nothing is claimed (gx_store/burst.rs): this pass is skipped, and a displayed viewer that has not announced Visible is told to keep its parked grid, because its own prepaint would otherwise resize and claim (terminal_element.rs, `zmx_grid_claim_held`). The pass compares what is displayed with what each viewer last announced, so the repaint at the settle claims the tab the user landed on and releases the tab the hold started from, each exactly once; tabs only passed were never claimed.
+        if self.gx_store_selection_is_settling() {
+            let displayed = self.displayed_agents_gpui_engine_terminal_sessions();
+            for session_id in displayed {
+                let announced_visible = self
+                    .agents_gpui_engine_terminal_zmx_visibility
+                    .get(&session_id)
+                    .is_some_and(|announced| {
+                        announced.visibility == GpuiEngineTerminalZmxVisibility::Visible
+                    });
+                if announced_visible || !self.agents_gpui_engine_terminal_is_zmx_client(session_id)
+                {
+                    continue;
+                }
+                if let Some(record) = self.agents_gpui_engine_terminals.get(&session_id) {
+                    record
+                        .view
+                        .update(cx, |view, _cx| view.set_zmx_grid_claim_held(true));
+                }
+            }
             return;
         }
 
@@ -148,9 +171,25 @@ impl GhostexGpuiApp {
             };
             let is_displayed = visibility == GpuiEngineTerminalZmxVisibility::Visible;
             if is_displayed {
+                self.note_agents_terminal_viewer_shown(session_id);
+            }
+            view.update(cx, |view, cx| {
+                let shown = view.set_displayed(is_displayed);
+                // The selection has settled (or never moved): the prepaint may resize and claim.
+                let released = view.set_zmx_grid_claim_held(false);
+                // CDXC:Terminal 2026-10-08 WHY: the terminal acts on these in its own prepaint, and
+                // with Faster rendering on a view is only prepainted again when it is notified.
+                if shown || released {
+                    cx.notify();
+                }
+            });
+            if is_displayed {
                 let (cols, rows) = view.read(cx).model().size();
                 if previous != Some(GpuiEngineTerminalZmxVisibility::Visible) {
-                    view.update(cx, |view, _cx| view.request_zmx_visible_announce());
+                    view.update(cx, |view, cx| {
+                        view.request_zmx_visible_announce();
+                        cx.notify();
+                    });
                 }
                 self.agents_gpui_engine_terminal_zmx_visibility.insert(
                     session_id,
@@ -162,8 +201,16 @@ impl GhostexGpuiApp {
                     },
                 );
             } else if previous != Some(visibility) {
-                let (_, rows) = view.read(cx).model().size();
-                let cols = ZMX_RESTING_GRID_COLS;
+                // CDXC:Zmx 2026-09-25 WHY:
+                // A parked viewer keeps its grid instead of reflowing to the resting width (supersedes parking both non-visible states at 200 columns). With no visible or chat claim the daemon retains the grid the viewer last claimed (loop.zig electLeader), so the mirror at that grid takes the streamed output exactly and a redisplay at the same size needs no reflow, no claim round trip and no reflow hold. The 200-column park re-wrapped that output against a grid the daemon was not using, and every switch back resized, reflowed and held.
+                // If another client changes the daemon grid meanwhile, the redisplay's claim changes it back, and the daemon repaints every client from its own screen.
+                // Chat keeps the resting width, because the chat claim itself widens the daemon to at least 200 columns.
+                let (current_cols, rows) = view.read(cx).model().size();
+                let cols = if visibility == GpuiEngineTerminalZmxVisibility::Chat {
+                    ZMX_RESTING_GRID_COLS
+                } else {
+                    current_cols
+                };
                 view.update(cx, |view, cx| {
                     view.resize_grid(cols, rows, cx);
                     let sequence = if visibility == GpuiEngineTerminalZmxVisibility::Chat {
@@ -190,16 +237,10 @@ impl GhostexGpuiApp {
     /// current titlebar mode, including slots rendering chat instead.
     fn displayed_agents_gpui_engine_terminal_sessions(&self) -> HashSet<TerminalSessionId> {
         let mut displayed = HashSet::new();
-        if self.active_mode == TitlebarMode::Agents {
+        if self.agents_workspace_visible() {
             displayed.extend(
                 self.agents_workspace
                     .rendered_terminal_body_mount_slots()
-                    .into_iter()
-                    .map(|slot_id| slot_id.session_id),
-            );
-        } else {
-            displayed.extend(
-                self.current_project_editor_companion_terminal_body_mount_slots()
                     .into_iter()
                     .map(|slot_id| slot_id.session_id),
             );
@@ -264,7 +305,6 @@ impl GhostexGpuiApp {
         self.workspace_tab_drag_active
             || self.command_tab_drag_active
             || self.workspace_split_drag.is_some()
-            || self.project_editor_companion_drag.is_some()
-            || self.project_editor_companion_split_drag.is_some()
+            || self.workarea_split_drag.is_some()
     }
 }

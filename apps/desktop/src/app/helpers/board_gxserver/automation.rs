@@ -16,7 +16,7 @@ pub(crate) enum GpuiAutomationBoardNavigation {
 }
 
 pub(crate) const GPUI_QUICK_AUTOMATIONS_PROJECT_ID: &str = "quick-automations";
-pub(crate) const GPUI_QUICK_AUTOMATIONS_DISPLAY_TITLE: &str = "Automations Overview";
+pub(crate) const GPUI_QUICK_AUTOMATIONS_DISPLAY_TITLE: &str = "All Automations";
 
 pub(crate) fn gpui_automation_gxserver_endpoint_for_board_action(
     action: &str,
@@ -57,8 +57,9 @@ pub(crate) fn gpui_project_board_error_response(
 }
 
 pub(crate) fn gpui_project_board_conversation_action_forwarded(action: &str) -> bool {
-    // The board conversation surface owned by the sidebar runtime — the same
-    // action set macOS `handleProjectBoardRequest` serves in native-sidebar.tsx
+    // The board conversation surface owned by the Rust store (gx_store/create/board.rs; the
+    // sidebar runtime until 2026-09-25): the same action set macOS `handleProjectBoardRequest`
+    // served in native-sidebar.tsx
     // (minus the automation family, which Rust forwards to gxserver directly,
     // and `projectEditorFocusOwnerChanged`, which stays Rust-answered).
     matches!(

@@ -287,7 +287,10 @@ pub(crate) fn gpui_marked_ghostex_wrapper_content(content: &str) -> bool {
     content.contains(GPUI_GHOSTEX_CLI_WRAPPER_MARKER)
         && (content.contains("ghostex-cli.mjs")
             || content.contains("/Resources/CLI/ghostex")
-            || content.contains("/gxserver/bin/ghostex"))
+            || content.contains("/gxserver/bin/ghostex")
+            || content
+                .replace('\\', "/")
+                .contains("/resources/native/ghostex.exe"))
 }
 
 pub(crate) fn gpui_is_file(path: &Path) -> bool {

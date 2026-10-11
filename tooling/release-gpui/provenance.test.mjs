@@ -171,7 +171,7 @@ describe('release provenance asset', () => {
   test('names and validates the published record', () => {
     expect(releaseProvenanceAssetName('7.8.0')).toBe('release-provenance-7.8.0.json');
     const record = buildReleaseProvenance({
-      components: { cef: { action: 'reused', componentVersion: '148.4.0-148.0.10' } },
+      components: { cef: { action: 'reused', componentVersion: '154.0.26-ge72305f-chromium-154.0.8037.58' } },
       plan: { schemaVersion: 1 },
       products: { 'macos-arm64': macosRecord() },
       publishedAt: '2026-08-13T10:11:12.000Z',
@@ -372,7 +372,7 @@ describe('reuse verification', () => {
 
   test('rejects an incompatible algorithm revision', () => {
     const stale = { ...androidRecord(), algorithmRevision: 'fp0' };
-    expect(accept({ candidate: releaseCandidate(stale) }).failures.join(' ')).toMatch(/algorithm revision fp0 != fp5/u);
+    expect(accept({ candidate: releaseCandidate(stale) }).failures.join(' ')).toMatch(/algorithm revision fp0 != fp6/u);
   });
 
   test('rejects an incompatible scope: a version-stamped product from another release', () => {

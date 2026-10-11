@@ -32,6 +32,9 @@ pub fn recent_session_user_prompts(
     else {
         return Vec::new();
     };
+    if agent == "empryo" {
+        return crate::session_chat_empryo_mirror::empryo_user_prompts(&transcript_path);
+    }
     let Some(lines) = read_lines_lossy(&transcript_path) else {
         return Vec::new();
     };
@@ -45,7 +48,10 @@ pub fn recent_session_user_prompts(
 }
 
 pub fn agent_supports_session_history_title_source(agent: Option<&str>) -> bool {
-    matches!(agent, Some("antigravity" | "claude" | "codex" | "cursor"))
+    matches!(
+        agent,
+        Some("antigravity" | "claude" | "codex" | "cursor" | "empryo")
+    )
 }
 
 /*
@@ -85,6 +91,17 @@ pub(crate) fn resolve_session_transcript_path(
         "claude" => find_claude_transcript(session_id),
         "codex" => find_codex_transcript(session_id),
         "cursor" => find_cursor_transcript(session_id),
+        // The hook-reported `agentSessionPath` names a project's log; only a session started
+        // from `$HOME` lives under `~/.empryo/sessions/`.
+        "empryo" => crate::session_chat_empryo_mirror::is_safe_empryo_session_id(session_id)
+            .then(|| {
+                home_dir()
+                    .join(".empryo")
+                    .join("sessions")
+                    .join(session_id)
+                    .join("session.jsonl")
+            })
+            .filter(|path| path.is_file()),
         _ => None,
     }
 }
@@ -247,6 +264,8 @@ fn push_visible_user_prompt(prompts: &mut Vec<String>, message: Option<&Value>) 
     let text = text_from_message(Some(message));
     // Cursor records the real typed prompt wrapped in <user_query> tags.
     let text = tagged_text(&text, "user_query").unwrap_or(text);
+    // Claude Code wraps each pasted span of a submitted prompt the same way.
+    let text = crate::session_chat_decode_claude::strip_claude_pasted_content_envelopes(&text);
     let trimmed = text.trim();
     if trimmed.is_empty() || !is_visible_user_prompt(trimmed) {
         return;

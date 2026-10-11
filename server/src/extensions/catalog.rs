@@ -119,7 +119,7 @@ fn fetch_remote_catalog(url: &str) -> ExtensionResult<ExtensionCatalog> {
 }
 
 fn parse_catalog(bytes: &[u8]) -> ExtensionResult<ExtensionCatalog> {
-    let catalog: ExtensionCatalog = serde_json::from_slice(bytes).map_err(|error| {
+    let mut catalog: ExtensionCatalog = serde_json::from_slice(bytes).map_err(|error| {
         ExtensionError::bad_request(format!("Extension catalog is not valid JSON: {error}"))
     })?;
     if catalog.schema_version != 1 {
@@ -148,6 +148,9 @@ fn parse_catalog(bytes: &[u8]) -> ExtensionResult<ExtensionCatalog> {
             )));
         }
     }
+    catalog
+        .extensions
+        .retain(|entry| entry.manifest.name != "storybook");
     Ok(catalog)
 }
 

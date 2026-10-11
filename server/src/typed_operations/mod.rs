@@ -1,5 +1,3 @@
-use std::env;
-
 use serde_json::{json, Map, Value};
 
 pub mod beads;
@@ -208,7 +206,7 @@ pub(crate) fn resolve_project_operation_context(
     Ok(TypedOperationContext {
         beads_cwd,
         cwd,
-        env_path: env::var("PATH").ok(),
+        env_path: typed_operation_path(),
         projects,
     })
 }

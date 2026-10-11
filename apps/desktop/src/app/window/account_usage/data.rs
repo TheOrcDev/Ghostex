@@ -112,8 +112,17 @@ pub(super) fn local_date(value: &str, with_date: bool) -> String {
     }
 }
 
-pub(super) fn reset_credits(account: &Value) -> Vec<&Value> {
+/// Available resets, soonest deadline first, each keyed by its id and how many earlier entries share that id: a Claude grant with several resets left lists one entry per reset under the same grant id.
+pub(super) fn credit_keys(account: &Value) -> Vec<(String, &Value)> {
     let mut credits: Vec<_> = array(account, "resetCreditDetails").iter().collect();
     credits.sort_by_key(|credit| timestamp(text(credit, "expiresAt")).unwrap_or(i64::MAX));
+    let mut seen = std::collections::HashMap::<&str, usize>::new();
     credits
+        .into_iter()
+        .map(|credit| {
+            let count = seen.entry(text(credit, "id")).or_default();
+            *count += 1;
+            (format!("{}#{count}", text(credit, "id")), credit)
+        })
+        .collect()
 }

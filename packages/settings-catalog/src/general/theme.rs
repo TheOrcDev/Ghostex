@@ -1,0 +1,60 @@
+use crate::data::*;
+use crate::json::opt;
+use crate::json::Opt;
+use crate::rows::{row, section, Section};
+
+/// CDXC:Icons 2026-06-25-21:50: Make the App Icon section findable by Settings search.
+pub(crate) fn app_icon() -> Section {
+    section("appIcon", "App Icon", vec![])
+}
+
+pub(crate) fn theming() -> Section {
+    section(
+        "theming",
+        "Theme",
+        vec![
+            row("sidebarTheme", "Appearance", "Follow the system appearance by default, or choose Light or Dark.").options(SIDEBAR_THEME_SETTING_OPTIONS),
+            row("darkThemePreset", "Dark mode colour", "The colour of the sidebar and window in dark mode: one of sixteen colour squares, or a custom colour under More colour options.").options(DARK_THEME_PRESET_OPTIONS),
+            row("customSidebarTitlebarBackgroundDarknessPercent", "Custom dark mode depth", "How deep the custom dark mode colour is, while Custom colour in dark mode is on."),
+            row("customSidebarTitlebarBackgroundTintColor", "Custom dark mode tint", "The hue of the custom dark mode colour, while Custom colour in dark mode is on."),
+            row("lightThemePreset", "Light mode colour", "The colour of the sidebar and window in light mode: one of sixteen colour squares, or a custom colour under More colour options.").options(LIGHT_THEME_PRESET_OPTIONS),
+            row("themeSidebarContrast", "Sidebar colourfulness", "How much of the theme colour shows in the sidebar, from Subtle (deeper, nearly neutral) to Vivid (lighter, more colourful). Colourfulness sets the sidebar and work area together."),
+            row("themeWorkAreaContrast", "Work area colourfulness", "How much of the theme colour shows in the work area (chat, terminals and views), from Subtle to Vivid. Colourfulness sets the sidebar and work area together."),
+            row("customSidebarTitlebarLightBackgroundLightnessPercent", "Custom light mode depth", "How deep the custom light mode colour is, while Custom colour in light mode is on."),
+            row("customSidebarTitlebarLightBackgroundTintColor", "Custom light mode tint", "The hue of the custom light mode colour, while Custom colour in light mode is on."),
+            row("sessionChatTheme", "Chat theme", "Follow the app theme by default, or override chat with Light, Dark, or System.").options(SESSION_CHAT_THEME_OPTIONS),
+            row("terminalColorScheme", "Terminal theme", "Follow the app theme by default, or override terminals with Light, Dark, or System.").options(SESSION_CHAT_THEME_OPTIONS),
+            row("terminalGhosttyLightTheme", "Terminal palette in light mode", "Uses your configured Ghostty light theme, or GitHub Light when no theme is configured.").options(&ghostty_themes_without_unmanaged()),
+            row("terminalGhosttyTheme", "Terminal palette in dark mode", "Uses your configured Ghostty dark theme, or GitHub Dark when no theme is configured.").options(GHOSTTY_THEME_SETTING_OPTIONS),
+            row("windowGlass", "Enable transparency", "Let your desktop show through the window. Use transparency picks Dark only, Always or Never.").options(WINDOW_GLASS_OPTIONS),
+            row("windowGlassSource", "What shows behind the glass", "Desktop and windows, your wallpaper, a picture you choose, or Live: a calm animation in your theme colours or your own video.").options(WINDOW_GLASS_SOURCE_OPTIONS),
+            row("windowGlassImagePlacement", "Picture position", "Where the wallpaper, custom picture or your own Live video sits behind the glass. Stays with the desktop can trail the window while you drag it.").options(WINDOW_GLASS_IMAGE_PLACEMENT_OPTIONS),
+            row("windowGlassImageDark", "Picture for dark mode", "The picture the glass blurs in dark mode when Picture shows behind the glass."),
+            row("windowGlassImageLight", "Picture for light mode", "The picture the glass blurs in light mode when Picture shows behind the glass."),
+            row("windowGlassVideoDark", "Your video for dark mode", "The video file the glass plays in dark mode when Live is set to Your video."),
+            row("windowGlassVideoLight", "Your video for light mode", "The video file the glass plays in light mode when Live is set to Your video."),
+            row("windowGlassVideoOnlyOnPower", "Play only when plugged in", "Pause the Live animation or video while your computer runs on battery. It always pauses when Ghostex is in the background."),
+            row("windowGlassLiveStyleDark", "Live background for dark mode", "The animation, or your own video, the glass shows in dark mode when Live shows behind the glass.").options(WINDOW_GLASS_LIVE_STYLE_OPTIONS).options(&[opt("Your video", "video")]),
+            row("windowGlassLiveStyleLight", "Live background for light mode", "The animation, or your own video, the glass shows in light mode when Live shows behind the glass.").options(WINDOW_GLASS_LIVE_STYLE_OPTIONS).options(&[opt("Your video", "video")]),
+            row("windowGlassLiveSpeed", "Live background speed", "How fast the Live animation moves, from a quarter of its pace to twice as fast."),
+            row("windowGlassLiveBrightness", "Live background brightness", "How bright the Live animation glows behind the glass. Lower keeps it a subtle glow."),
+            row("windowGlassBlurRadius", "Blur", "How soft what shows behind the window looks, in points. 0 shows it sharp. On Windows and Linux, Desktop and windows uses the system blur, so this sets the wallpaper, picture and video blur."),
+            row("windowGlassMenuBlurRadius", "Menu blur", "How soft what shows behind menus and tooltips looks, in points. 0 shows it sharp."),
+            row("windowGlassSidebarOpacityDark", "Sidebar tint in dark mode", "How much of the desktop the sidebar hides in dark mode. Lower shows more of your desktop through it."),
+            row("windowGlassWorkAreaTintDark", "Work area tint in dark mode", "How much of the desktop the work area hides in dark mode, set on its own so either area can be the darker one. Lower shows more of your desktop through it."),
+            row("windowGlassSidebarOpacityLight", "Sidebar tint in light mode", "How much of the desktop the sidebar hides in light mode. Lower shows more of your desktop through it."),
+            row("windowGlassWorkAreaTintLight", "Work area tint in light mode", "How much of the desktop the work area hides in light mode, set on its own so either area can be the darker one. Lower shows more of your desktop through it."),
+            row("showActivePaneOutline", "Show active pane outline", "Show an outline around the currently focused pane."),
+            row("workspaceActivePaneBorderColor", "Active pane outline colour", "Color of the outline around the currently focused pane."),
+        ],
+    )
+}
+
+/// `GHOSTTY_THEME_SETTING_OPTIONS` without "Use existing Ghostty config": the light palette always names a theme.
+fn ghostty_themes_without_unmanaged() -> Vec<Opt> {
+    GHOSTTY_THEME_SETTING_OPTIONS
+        .iter()
+        .filter(|option| option.value != "__ghostex_ghostty_theme_unmanaged__")
+        .copied()
+        .collect()
+}

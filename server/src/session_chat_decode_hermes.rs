@@ -1,13 +1,16 @@
 /*
-Hermes Agent persists conversations in `~/.hermes/state.db` (SQLite `messages`
-rows), not a jsonl transcript. `session_chat_hermes.rs` mirrors each session's
-active rows into a per-session jsonl file — one JSON object per row, in the
-shape decoded here — so the rest of the chat pipeline can treat Hermes like
-every other agent. The record shape is Ghostex-owned:
+Hermes Agent persists conversations in its session store (`~/.hermes/state.db`
+or a profile's own; SQLite `messages` rows), not a jsonl transcript. `session_chat_hermes.rs` mirrors each session's
+display history into a per-session jsonl file — one JSON object per logical
+message, in the shape decoded here — so the rest of the chat pipeline can treat
+Hermes like every other agent. The record shape is Ghostex-owned:
 
     {"rowId": 15, "role": "tool", "content": "…", "toolCalls": [...],
      "toolName": "terminal", "toolCallId": "call_…", "timestamp": 1787…,
-     "finishReason": "stop", "reasoning": "…", "reasoningContent": "…"}
+     "finishReason": "stop", "reasoning": "…", "reasoningContent": "…",
+     "displayKind": "steer", "displayText": "…"}
+
+plus `{"rowId": 42, "role": "compaction", "timestamp": …}` where Hermes compacted.
 
 `toolCalls` is the OpenAI-style array Hermes stores on assistant rows
 (`function.name` + `function.arguments` as a JSON string). Tool rows store the
@@ -18,6 +21,76 @@ tool's return value serialized as JSON, usually `{"output": …, "exit_code": �
 use serde_json::{Map, Value};
 
 use crate::session_chat::*;
+
+use crate::external_sessions::HERMES_INJECTED_PREFIXES;
+
+/// Hermes' wrapper around a message typed mid-turn (`/steer`).
+const HERMES_STEER_OPEN: &str = "[OUT-OF-BAND USER MESSAGE";
+const HERMES_STEER_CLOSE: &str = "[/OUT-OF-BAND USER MESSAGE]";
+/// Compaction restates an unfinished request after its summary under this header.
+const HERMES_INFLIGHT_REPLAY_PREFIX: &str = "[STILL IN PROGRESS";
+/// Gateway notices (model switch, personality) that Hermes stores as user rows and never shows.
+const HERMES_HIDDEN_USER_PREFIX: &str = "[System:";
+
+/*
+CDXC:SessionChat 2026-09-28 WHY:
+Hermes stores things it did not receive from the user as user rows, and its terminal shows each one its own way. Current Hermes types them with `display_kind`: a finished background subagent batch or process prints one line ("◈ Subagent Tasks Completed: …", its `display_text`) while the row holds the whole report meant for the model, and a `/steer` message is wrapped in an out-of-band marker. Older rows carry only Hermes' synthetic prefixes. Chat drew all of them as the user's own bubble. The restated unfinished request after a compaction is a model handoff the terminal never prints, and the request itself is already in the history.
+*/
+enum HermesUserRow<'a> {
+    Prompt(&'a str),
+    Notice(&'a str),
+    Hidden,
+}
+
+fn trimmed_str<'a>(record: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    record
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn hermes_failed_turn(record: &Map<String, Value>) -> bool {
+    record.get("displayKind").and_then(Value::as_str) == Some("failed_turn")
+}
+
+fn hermes_user_row(record: &Map<String, Value>) -> HermesUserRow<'_> {
+    let Some(content) = trimmed_str(record, "content") else {
+        return HermesUserRow::Hidden;
+    };
+    let steer = || HermesUserRow::Prompt(hermes_steer_text(content).unwrap_or(content));
+    let notice = || {
+        HermesUserRow::Notice(
+            trimmed_str(record, "displayText")
+                .unwrap_or_else(|| content.lines().next().unwrap_or(content)),
+        )
+    };
+    match record.get("displayKind").and_then(Value::as_str) {
+        Some("hidden") => HermesUserRow::Hidden,
+        Some("steer") => steer(),
+        Some(_) => notice(),
+        None if content.starts_with(HERMES_STEER_OPEN) => steer(),
+        None if content.starts_with(HERMES_HIDDEN_USER_PREFIX)
+            || content.starts_with(HERMES_INFLIGHT_REPLAY_PREFIX) =>
+        {
+            HermesUserRow::Hidden
+        }
+        None if HERMES_INJECTED_PREFIXES
+            .iter()
+            .any(|prefix| content.starts_with(prefix)) =>
+        {
+            notice()
+        }
+        None => HermesUserRow::Prompt(content),
+    }
+}
+
+fn hermes_steer_text(content: &str) -> Option<&str> {
+    let open = content.find(HERMES_STEER_OPEN)?;
+    let start = open + content[open..].find('\n')? + 1;
+    let end = start + content[start..].find(HERMES_STEER_CLOSE)?;
+    Some(content[start..end].trim()).filter(|text| !text.is_empty())
+}
 
 fn hermes_row_id(record: &Map<String, Value>, fallback_id: &str) -> String {
     record
@@ -51,7 +124,11 @@ fn hermes_tool_call_blocks(record: &Map<String, Value>) -> Vec<SessionChatBlock>
                     other => other.clone(),
                 })
                 .unwrap_or(Value::Null);
-            Some(SessionChatBlock::ToolCall { name, input })
+            Some(SessionChatBlock::ToolCall {
+                name,
+                input,
+                call_id: None,
+            })
         })
         .collect()
 }
@@ -104,9 +181,25 @@ pub fn decode_hermes_transcript_line(line: &str, fallback_id: &str) -> Option<Se
     };
 
     match role {
-        "user" => {
-            let text = content?;
-            Some(message(SessionChatRole::User, vec![text_block(text)]))
+        "user" => match hermes_user_row(&record) {
+            HermesUserRow::Prompt(text) => {
+                Some(message(SessionChatRole::User, vec![text_block(text)]))
+            }
+            HermesUserRow::Notice(text) => {
+                Some(message(SessionChatRole::System, vec![text_block(text)]))
+            }
+            HermesUserRow::Hidden => None,
+        },
+        // The mirror's marker where Hermes compacted; the terminal printed "Compressed: …" there.
+        "compaction" => Some(SessionChatMessage {
+            id: format!("hermes-compaction-{}", record.get("rowId")?),
+            ..message(
+                SessionChatRole::System,
+                vec![text_block(CONTEXT_COMPACTED_STATUS_TEXT)],
+            )
+        }),
+        "assistant" if hermes_failed_turn(&record) => {
+            Some(message(SessionChatRole::System, vec![text_block(content?)]))
         }
         "assistant" => {
             let mut blocks = Vec::new();
@@ -128,7 +221,11 @@ pub fn decode_hermes_transcript_line(line: &str, fallback_id: &str) -> Option<Se
             let (output, is_error) = hermes_tool_result(&content?);
             Some(message(
                 SessionChatRole::Tool,
-                vec![SessionChatBlock::ToolResult { output, is_error }],
+                vec![SessionChatBlock::ToolResult {
+                    output,
+                    is_error,
+                    call_id: None,
+                }],
             ))
         }
         _ => None,
@@ -140,9 +237,10 @@ Hermes writes no explicit turn markers: a user row opens a turn, and the
 closing signal is the final assistant row's `finish_reason`. `tool_calls`
 means the turn is still running (the model asked for tools and will be called
 again); every other recorded finish reason (`stop`, `length`,
-`content_filter`, `incomplete`) ends the turn. Interrupts write no closing row
-at all, so ready-state recovery for them rides the agent-hook activity signal
-like Pi's.
+`content_filter`, `incomplete`) ends the turn, and so does a `failed_turn`
+notice, which has none. Interrupts, and a failure after a tool ran, write no
+closing row at all, so ready-state recovery for them rides the agent-hook
+activity signal like Pi's.
 */
 pub fn decode_hermes_turn_lifecycle(
     line: &str,
@@ -151,23 +249,26 @@ pub fn decode_hermes_turn_lifecycle(
     let record = parse_json_object(line)?;
     let turn_id = hermes_row_id(&record, fallback_id);
     let timestamp = parse_timestamp(record.get("timestamp"));
-    match record.get("role").and_then(Value::as_str)? {
-        "user" => Some(SessionChatTurnLifecycle {
-            state: SessionChatTurnLifecycleState::Working,
-            turn_id,
-            timestamp,
-        }),
+    let state = match record.get("role").and_then(Value::as_str)? {
+        // A restated request or hidden notice is written mid-turn or after a manual /compress; it starts nothing.
+        "user" if matches!(hermes_user_row(&record), HermesUserRow::Hidden) => return None,
+        "user" => SessionChatTurnLifecycleState::Working,
         "assistant" => {
-            let finish_reason = record.get("finishReason").and_then(Value::as_str)?;
-            if finish_reason.eq_ignore_ascii_case("tool_calls") {
+            // Hermes' failed-turn notice carries no finish reason, yet it is the turn's last row.
+            let ends_turn = match record.get("finishReason").and_then(Value::as_str) {
+                Some(finish_reason) => !finish_reason.eq_ignore_ascii_case("tool_calls"),
+                None => hermes_failed_turn(&record),
+            };
+            if !ends_turn {
                 return None;
             }
-            Some(SessionChatTurnLifecycle {
-                state: SessionChatTurnLifecycleState::Completed,
-                turn_id,
-                timestamp,
-            })
+            SessionChatTurnLifecycleState::Completed
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(SessionChatTurnLifecycle {
+        state,
+        turn_id,
+        timestamp,
+    })
 }

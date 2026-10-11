@@ -58,57 +58,218 @@ pub(crate) fn create_agent_session_params_for_project(
         .or_else(|| read_text_from_map(&launch_settings, "icon"));
     let configured_command = read_text_from_map(&agent_config, "command")
         .or_else(|| read_text_from_map(&launch_settings, "agentCommand"));
-    if let Some(command) = configured_command.as_ref() {
-        runtime_settings
-            .entry("accountBaseCommand")
-            .or_insert(json!(command));
-    }
-    let account_command = crate::accounts::launch::apply_new_session(
-        db,
+    let (configured_command, empryo_session_id) = apply_requested_agent_model(
+        project,
         &agent_id,
-        agent_icon.as_deref(),
+        &agent_config,
+        &launch_settings,
+        params,
+        configured_command,
         &mut runtime_settings,
     )?;
-    let launch_plan = build_agent_launch_plan(AgentLaunchInput {
-        accept_all_mode: read_text_from_map(&agent_config, "acceptAllMode")
-            .or_else(|| read_text_from_map(&launch_settings, "acceptAllMode")),
-        agent_id: agent_id.clone(),
-        agent_session_id: read_text_from_map(&runtime_settings, "agentSessionId"),
-        command: account_command.or(configured_command),
-        delayed_send_deadline_at: read_text_from_map(&launch_settings, "delayedSendDeadlineAt"),
-        first_user_message: read_text_from_map(&runtime_settings, "firstUserMessage"),
-        global_accept_all_enabled: settings
-            .get("agentAcceptAllEnabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        icon: agent_icon.clone(),
-    });
+    let agentbox_provider = crate::agentbox::requested_agentbox_provider(params)?;
+    // Only a box create writes a box record; a client cannot make a session a box session.
+    if agentbox_provider.is_none() {
+        runtime_settings.remove("agentbox");
+    }
+    let agentbox_family = match agentbox_provider {
+        Some(_) => {
+            if crate::coordinators::coordinator_create_request(params)?.is_some() {
+                return Err(DomainStateError::bad_request(
+                    "An orchestrator runs on this computer. Start it without a box.",
+                ));
+            }
+            Some(crate::agentbox::box_agent_family(
+                resume_agent_family_id(Some(agent_id.clone()), &agent_config, &launch_settings)
+                    .as_deref(),
+            )?)
+        }
+        None => None,
+    };
+    let configured_command = if agentbox_provider.is_none() {
+        pin_remembered_agent_model(
+            &agent_id,
+            &agent_config,
+            &launch_settings,
+            params,
+            configured_command,
+            &mut runtime_settings,
+        )?
+    } else {
+        configured_command
+    };
+    let configured_command = apply_coordinator_role(
+        &agent_id,
+        &agent_config,
+        &launch_settings,
+        params,
+        configured_command,
+    )?;
+    let configured_command = if agentbox_provider.is_none() {
+        apply_thread_marked_handovers(
+            &agent_id,
+            &agent_config,
+            &launch_settings,
+            params,
+            configured_command,
+        )
+    } else {
+        configured_command
+    };
+    let account_command = if agentbox_provider.is_some() {
+        None
+    } else {
+        if let Some(command) = configured_command.as_ref() {
+            runtime_settings
+                .entry("accountBaseCommand")
+                .or_insert(json!(command));
+        }
+        let workspace_account_id = crate::workspaces::project_claude_account_id(db, project)?;
+        crate::accounts::launch::apply_new_session(
+            db,
+            &agent_id,
+            agent_icon.as_deref(),
+            workspace_account_id.as_deref(),
+            &mut runtime_settings,
+        )?
+    };
+    /*
+    CDXC:SessionIdentity 2026-09-30 WHY: A create that names no agent Ghostex knows and only carries a command (Find's resume sends `os-integration-terminal` with `claude --resume <id>`, as `ghostex://terminal` does) locked the row to that placeholder id, so `launch_agent_mismatch` refused every hook the agent sent and only the ~20s live-process scan could name it. Chat View cannot open before that, so a session resumed from Find sat in the terminal (observed 2026-09-30, session S90:P3lv0:G41ci: its SessionStart hook arrived 1.5s after launch and was dropped). The agent the command starts is the session's agent from creation; the launch command and account are still resolved under the requested id, so the command runs exactly as given.
+    */
+    // A new local Pi session runs on an id Ghostex chose (CDXC:SessionIdentity in pi_session_id.rs).
+    let pi_session_id = (agentbox_provider.is_none()
+        && read_text_from_map(&runtime_settings, "agentSessionId").is_none()
+        && resume_agent_family_id(Some(agent_id.clone()), &agent_config, &launch_settings)
+            .as_deref()
+            == Some("pi"))
+    .then(|| {
+        let base = configured_command
+            .clone()
+            .or_else(|| default_agent_command("pi").map(str::to_string))
+            .unwrap_or_else(|| "pi".to_string());
+        super::pi_session_id::mint_pi_session_id(&base)
+    })
+    .flatten();
+    if let Some(id) = pi_session_id.as_deref() {
+        runtime_settings.insert("agentSessionId".to_string(), json!(id));
+    }
+    /*
+    CDXC:SessionIdentity 2026-10-07 WHY:
+    A plain Empryo launch ran bare `empryo`, which reopens the folder's latest session: the row never learned an agent session id (its chat had no transcript), and a second launch in the same repo shared the first one's session (seen live on 3.9.1-beta). Every new local Empryo session gets a seeded folder of its own, as a launch model's does, on the folder's current default model. Resume and fork arrive with their id and keep it.
+    */
+    let empryo_session_id = match empryo_session_id {
+        None if agentbox_provider.is_none()
+            && read_text_from_map(&runtime_settings, "agentSessionId").is_none()
+            && resume_agent_family_id(Some(agent_id.clone()), &agent_config, &launch_settings)
+                .as_deref()
+                == Some("empryo") =>
+        {
+            let id = crate::session_chat_empryo_launch_selection::seed_empryo_launch_session(
+                &empryo_cwd(params, project)?,
+                None,
+                &mut runtime_settings,
+            )?;
+            Some(id)
+        }
+        seeded => seeded,
+    };
+    let session_agent_id = (agent_icon.is_none()
+        && !agent_id.starts_with("custom-")
+        && default_agent_command(&agent_id).is_none()
+        && resolve_project_agent_config(project, &agent_id, None).is_empty())
+    .then(|| {
+        configured_command
+            .as_deref()
+            .and_then(infer_agent_id_from_command_executable)
+    })
+    .flatten()
+    .unwrap_or_else(|| agent_id.clone());
+    let launch_plan = match (agentbox_provider.as_deref(), agentbox_family.as_deref()) {
+        (Some(provider), Some(family)) => {
+            let project_path = read_text(params, "cwd")
+                .or_else(|| read_text_value(project, "path"))
+                .unwrap_or_default();
+            let claude_sign_in_first = crate::accounts::launch::home()
+                .is_ok_and(|home| !crate::agentbox::claude_signed_in_for_boxes(&home));
+            crate::agentbox::prepare_box_launch(
+                provider,
+                family,
+                &project_path,
+                configured_command.as_deref(),
+                claude_sign_in_first,
+                &mut runtime_settings,
+            )
+            .launch_plan
+        }
+        _ => {
+            let mut plan = build_agent_launch_plan(AgentLaunchInput {
+                accept_all_mode: read_text_from_map(&agent_config, "acceptAllMode")
+                    .or_else(|| read_text_from_map(&launch_settings, "acceptAllMode")),
+                agent_id: agent_id.clone(),
+                agent_session_id: read_text_from_map(&runtime_settings, "agentSessionId"),
+                command: account_command.or(configured_command),
+                delayed_send_deadline_at: read_text_from_map(
+                    &launch_settings,
+                    "delayedSendDeadlineAt",
+                ),
+                first_user_message: read_text_from_map(&runtime_settings, "firstUserMessage"),
+                global_accept_all_enabled: settings
+                    .get("agentAcceptAllEnabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                icon: agent_icon.clone(),
+            });
+            // Only the command this launch runs names the id; `agentCommand` stays the base that
+            // resume, fork and account wrapping rebuild from. Pi's id is minted here; Empryo's names
+            // the session folder seeded for a launch model (session_chat_empryo_launch_selection.rs).
+            let session_command = |command: &str| match (&pi_session_id, &empryo_session_id) {
+                (Some(id), _) => Some(super::pi_session_id::with_pi_session_id(command, id)),
+                (None, Some(id)) => Some(format!("{} --session {id}", command.trim_end())),
+                (None, None) => None,
+            };
+            if let Some(plan) = plan.as_object_mut() {
+                if let Some(command) = plan
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .filter(|command| !command.trim().is_empty())
+                    .and_then(session_command)
+                {
+                    plan.insert(
+                        "startupText".to_string(),
+                        Value::String(as_atuin_ignored_shell_input(&command)),
+                    );
+                    plan.insert("command".to_string(), Value::String(command));
+                }
+            }
+            plan
+        }
+    };
     let launch_plan_object = launch_plan.as_object().cloned().unwrap_or_default();
     let has_launch_command = launch_plan_object
         .get("command")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty());
-    if params.get("requireLaunchCommand").and_then(Value::as_bool) == Some(true)
-        && !has_launch_command
-    {
-        /*
-        CDXC:RemoteMachines 2026-06-24-17:19:
-        Remote GPUI starts send only the selected agent id and require gxserver to resolve the command from remote project metadata or built-in defaults. Reject commandless launches so unknown custom agent ids do not create inert sessions that look successful.
-        */
-        return Err(DomainStateError::bad_request(
-            "Agent command is required to create this session.",
-        ));
+    /*
+    CDXC:AgentLauncher 2026-09-25 WHY: Every agent session gxserver creates must have a command to launch, whether or not the client sends `requireLaunchCommand`. A commandless row can never start: `startSessionProvider` declines it, so every attach surfaced as "gxserver did not confirm the zmx provider exists" (`ghostex create-agent hermes` resolved no command because the built-in id is `hermes-agent`). This supersedes the 2026-06-24 opt-in guard, which only remote GPUI starts, drafts, automations and board work set.
+    */
+    if !has_launch_command {
+        return Err(DomainStateError::bad_request(format!(
+            "Ghostex has no launch command for agent \"{agent_id}\", so it did not create the session. Use a built-in agent id (for example claude, codex or hermes-agent) or one configured for this project."
+        )));
     }
-    let has_launch_startup_text = launch_plan_object
-        .get("startupText")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
+    /*
+    CDXC:SessionStatus 2026-09-27 WHY: A new session starts "working" only when its launch submits a first prompt (`firstUserMessage`). The launch plan's startup text is the agent command alone and every agent launch has one, so keying on it started every session "working". Claude and Codex hide that by projection and settle it with their own titles and hooks, but an agent that fires nothing before its first turn (Hermes runs `on_session_start` from its first conversation turn) read "working" at an empty prompt until the user typed.
+    */
+    // A box session starts idle: its box takes a minute to come up, and the box activity poller
+    // reports working once the agent's screen shows it (see agentbox/activity.rs).
+    let launch_submits_prompt = agentbox_provider.is_none()
+        && read_text_from_map(&launch_plan_object, "firstUserMessage").is_some();
     let agent_activity = if runtime_settings.get("agentActivity").is_some() {
         normalize_agent_activity_value(runtime_settings.get("agentActivity"), "idle")
     } else {
         default_activity(
-            Some(&agent_id),
-            has_launch_startup_text.then_some("working"),
+            Some(&session_agent_id),
+            launch_submits_prompt.then_some("working"),
         )
     };
     runtime_settings.insert("agentActivity".to_string(), agent_activity);
@@ -122,7 +283,10 @@ pub(crate) fn create_agent_session_params_for_project(
                 .to_string(),
         ),
     );
-    runtime_settings.insert("launchAgentId".to_string(), Value::String(agent_id.clone()));
+    runtime_settings.insert(
+        "launchAgentId".to_string(),
+        Value::String(session_agent_id.clone()),
+    );
     if let Some(first_user_message) = launch_plan_object
         .get("firstUserMessage")
         .and_then(Value::as_str)
@@ -164,6 +328,7 @@ pub(crate) fn create_agent_session_params_for_project(
     See `agents/drafts.rs` for what the marker means and where it is removed.
     */
     apply_draft_session_create_param(params, &mut runtime_settings);
+    crate::empty_session_cleanup::apply_new_session_marker(params, &mut runtime_settings);
 
     let mut runtime_relevant = Map::new();
     if let Some(deadline_at) = launch_plan_object
@@ -196,7 +361,7 @@ pub(crate) fn create_agent_session_params_for_project(
     );
 
     let mut normalized = params.clone();
-    normalized.insert("agentId".to_string(), Value::String(agent_id));
+    normalized.insert("agentId".to_string(), Value::String(session_agent_id));
     normalized.insert("kind".to_string(), Value::String("agent".to_string()));
     normalized.insert("launchSettings".to_string(), Value::Object(launch_settings));
     normalized.insert(
@@ -236,7 +401,7 @@ pub(crate) fn create_agent_session_params_for_project(
 /// CDXC:SessionTitles 2026-09-09 DECISION:
 /// User: empty Claude/Codex sessions show "∗ Claude Session" / "∗ Codex Session", never the custom agent name or ID created for an account.
 /// Identity updates used the custom configuration ID as a display name and overwrote the launcher's placeholder title.
-/// SEE-ALSO: agents/identity.rs, agents/session_state_ingest.rs, agents/drafts.rs, presentation/session_attributes.rs.
+/// SEE-ALSO: agents/identity/, agents/session_state_ingest.rs, agents/drafts.rs, presentation/session_attributes.rs.
 pub(crate) fn project_agent_session_default_title(project: &Value, session: &Value) -> String {
     let agent_id = read_text_value(session, "agentId");
     let family = session_agent_family_id(project, session);
@@ -252,6 +417,221 @@ pub(crate) fn project_agent_session_default_title(project: &Value, session: &Val
         read_text_from_map(&agent_config, "name").as_deref(),
         agent_id.as_deref(),
     )
+}
+
+/// The folder an Empryo create starts in: the requested `cwd`, else the project's.
+fn empryo_cwd(
+    params: &Map<String, Value>,
+    project: &Value,
+) -> Result<std::path::PathBuf, DomainStateError> {
+    read_text(params, "cwd")
+        .or_else(|| read_text_value(project, "path"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            DomainStateError::bad_request("The project has no folder to start Empryo in.")
+        })
+}
+
+/// CDXC:AgentProviders 2026-10-06 DECISION:
+/// User: "yes, Ghostex chooses Pi's model and thinking level at launch, like Claude and Codex." This extends the 2026-09-17 decision (an agent spawning another agent sets that worker's model and effort for the session only, and a resumed worker keeps them) from Claude and Codex to Pi, whose model is `provider/id` (`--model`) and whose effort is its thinking level (`--thinking`).
+/// Typing `/model` or `/effort` into Claude Code saves the choice as the default for every new session, so the choice travels as launch flags instead.
+/// The flags live in the session's saved base command, which resume, fork and account wrapping all rebuild from.
+/// Sven extended it to Empryo on 2026-10-06 (Empryo harness spec). Empryo's terminal app ignores launch flags, so the model goes into a session folder Ghostex seeds and launches with `--session`, and the effort is typed with `/effort` once Empryo is up; neither changes Empryo's default. A resume keeps the model (it reopens that tab), but Empryo 3.9.0-beta drops a tab's effort when it resumes it (seen 2026-10-06), so the effort lasts until the session restarts (session_chat_empryo_launch_selection.rs).
+/// SEE-ALSO: server/src/ghostex_cli/actions/create.rs (create-agent), server/src/ghostex_cli/board.rs and server/src/board_start_work.rs (board start-work).
+fn apply_requested_agent_model(
+    project: &Value,
+    agent_id: &str,
+    agent_config: &Map<String, Value>,
+    launch_settings: &Map<String, Value>,
+    params: &Map<String, Value>,
+    command: Option<String>,
+    runtime_settings: &mut Map<String, Value>,
+) -> Result<(Option<String>, Option<String>), DomainStateError> {
+    let model = requested_agent_model_option(params, "agentModel")?;
+    let effort = requested_agent_model_option(params, "agentEffort")?;
+    if model.is_none() && effort.is_none() {
+        return Ok((command, None));
+    }
+    let family = resume_agent_family_id(Some(agent_id.to_string()), agent_config, launch_settings)
+        .filter(|family| {
+            matches!(
+                family.as_str(),
+                "claude" | "codex" | "pi" | "zcode" | "empryo"
+            )
+        })
+        .ok_or_else(|| {
+            DomainStateError::bad_request(
+                "A launch model or effort can only be set for Claude, Codex, Pi, ZCode and Empryo agents.",
+            )
+        })?;
+    if family == "empryo" {
+        use crate::session_chat_empryo_launch_selection as launch;
+        let model = launch::empryo_launch_model(model.as_deref())?;
+        let session_id = launch::seed_empryo_launch_session(
+            &empryo_cwd(params, project)?,
+            Some(model),
+            runtime_settings,
+        )?;
+        if let Some(effort) = effort.as_deref() {
+            launch::record_empryo_launch_effort(runtime_settings, model, effort);
+        }
+        // Only the launch plan's command names the seeded session (as Pi's `--session-id`), so
+        // the saved base command that resume and fork rebuild from stays plain.
+        return Ok((command, Some(session_id)));
+    }
+    if family == "zcode" {
+        // CDXC:Coordinators 2026-10-04 WHY:
+        // ZCode has no launch model flag, so a coordinator create's chosen model reaches the
+        // session as a `/model` line the create flow queues before the first request. There is
+        // no such delivery for a spawned thread yet, so a thread's model request stays refused
+        // rather than silently dropped, and ZCode takes no effort choice at all.
+        if effort.is_some() {
+            return Err(DomainStateError::bad_request(
+                "ZCode agents take no effort choice.",
+            ));
+        }
+        if crate::coordinators::coordinator_create_request(params)?.is_none() {
+            return Err(DomainStateError::bad_request(
+                "A ZCode thread keeps its configured model; only an orchestrator's own model can be set.",
+            ));
+        }
+        return Ok((command, None));
+    }
+    if family == "pi"
+        && effort
+            .as_deref()
+            .is_some_and(|effort| !crate::session_chat_pi_models::is_pi_thinking_level(effort))
+    {
+        return Err(DomainStateError::bad_request(
+            "A Pi effort is its thinking level: off, minimal, low, medium, high, xhigh or max.",
+        ));
+    }
+    let base = command
+        .or_else(|| default_agent_command(&family).map(str::to_string))
+        .unwrap_or_else(|| family.clone());
+    with_agent_model_options(&base, &family, model.as_deref(), effort.as_deref())
+        .map(|command| (Some(command), None))
+}
+
+/// A new Claude, Codex or Cursor session starts on the model the user last chose as the agent's
+/// default (CDXC:AgentProviders 2026-10-07 in agent_model_pins.rs). A model the create names, or
+/// one the configured command already pins, is this session's own choice and is never taught to
+/// the default; with no default known, or after the agent's settings changed outside Ghostex, the
+/// session runs the agent's own default and its first report becomes the remembered one.
+fn pin_remembered_agent_model(
+    agent_id: &str,
+    agent_config: &Map<String, Value>,
+    launch_settings: &Map<String, Value>,
+    params: &Map<String, Value>,
+    command: Option<String>,
+    runtime_settings: &mut Map<String, Value>,
+) -> Result<Option<String>, DomainStateError> {
+    use crate::agent_model_pins::{
+        launch_default, pin_family, session_marker, ModelPin, ORIGIN_DEFAULT, ORIGIN_LEARN,
+        ORIGIN_SESSION, SESSION_PIN_KEY,
+    };
+    let Some(family) =
+        resume_agent_family_id(Some(agent_id.to_string()), agent_config, launch_settings)
+            .as_deref()
+            .and_then(pin_family)
+    else {
+        return Ok(command);
+    };
+    let requested_model = requested_agent_model_option(params, "agentModel")?;
+    let requested_effort = requested_agent_model_option(params, "agentEffort")?;
+    let base = command
+        .clone()
+        .or_else(|| default_agent_command(family).map(str::to_string))
+        .unwrap_or_else(|| family.to_string());
+    if requested_model.is_some() || requested_effort.is_some() || command_names_model(&base, family)
+    {
+        let requested = requested_model.map(|model| ModelPin {
+            model,
+            effort: requested_effort,
+            ..ModelPin::default()
+        });
+        runtime_settings.insert(
+            SESSION_PIN_KEY.to_string(),
+            session_marker(ORIGIN_SESSION, requested.as_ref()),
+        );
+        return Ok(command);
+    }
+    let pinned = launch_default(family).and_then(|pin| {
+        let effort = pin.effort.as_deref().filter(|_| family != "cursor");
+        with_agent_model_options(&base, family, Some(&pin.model), effort)
+            .ok()
+            .map(|command| (command, pin))
+    });
+    Ok(match pinned {
+        Some((pinned_command, pin)) => {
+            runtime_settings.insert(
+                SESSION_PIN_KEY.to_string(),
+                session_marker(ORIGIN_DEFAULT, Some(&pin)),
+            );
+            Some(pinned_command)
+        }
+        None => {
+            runtime_settings.insert(
+                SESSION_PIN_KEY.to_string(),
+                session_marker(ORIGIN_LEARN, None),
+            );
+            command
+        }
+    })
+}
+
+/// CDXC:Coordinators 2026-09-30 WHY:
+/// A coordinator's role is a system prompt flag in the saved base command (see coordinators/role.rs), added here beside the per-session model flags so resume, fork and account wrapping keep it. Claude carries the whole role file this way; Codex and ZCode carry only the guide pointer (ZCode has no such flag, so its role arrives through the SessionStart hook instead); Empryo has no such flag either and gets its role from a queued `/agent` line (`coordinator_role_queued_command`). An agent outside the supported families is refused rather than started without its role.
+fn apply_coordinator_role(
+    agent_id: &str,
+    agent_config: &Map<String, Value>,
+    launch_settings: &Map<String, Value>,
+    params: &Map<String, Value>,
+    command: Option<String>,
+) -> Result<Option<String>, DomainStateError> {
+    let Some(request) = crate::coordinators::coordinator_create_request(params)? else {
+        return Ok(command);
+    };
+    let role_file = request.role_file.ok_or_else(|| {
+        DomainStateError::corrupt_state("The orchestrator role file was not prepared.")
+    })?;
+    let family = resume_agent_family_id(Some(agent_id.to_string()), agent_config, launch_settings)
+        .filter(|family| crate::coordinators::coordinator_agent_family_supported(family))
+        .ok_or_else(|| {
+            DomainStateError::bad_request(format!(
+                "An orchestrator runs on {}. Pick one of those agents.",
+                crate::coordinators::COORDINATOR_AGENT_FAMILIES_TEXT
+            ))
+        })?;
+    let base = command
+        .or_else(|| default_agent_command(&family).map(str::to_string))
+        .unwrap_or_else(|| family.clone());
+    crate::coordinators::with_coordinator_role(&base, &family, std::path::Path::new(&role_file))
+        .map(Some)
+}
+
+/// CDXC:MarkedHandovers 2026-10-11 WHY:
+/// A thread always marks its handovers, so `ghostex orchestrator start-thread` creates it with `markedHandovers`, and the note is saved in its base command beside the model flags, like an orchestrator's role, so resume, fork and account wrapping keep it whatever the setting says. ZCode threads get it from the SessionStart hook instead (activity.rs).
+fn apply_thread_marked_handovers(
+    agent_id: &str,
+    agent_config: &Map<String, Value>,
+    launch_settings: &Map<String, Value>,
+    params: &Map<String, Value>,
+    command: Option<String>,
+) -> Option<String> {
+    if params.get("markedHandovers").and_then(Value::as_bool) != Some(true) {
+        return command;
+    }
+    let Some(family) =
+        resume_agent_family_id(Some(agent_id.to_string()), agent_config, launch_settings)
+            .filter(|family| matches!(family.as_str(), "claude" | "codex"))
+    else {
+        return command;
+    };
+    let base = command
+        .or_else(|| default_agent_command(&family).map(str::to_string))
+        .unwrap_or_else(|| family.clone());
+    Some(with_thread_marked_handovers(&family, &base))
 }
 
 pub(crate) fn create_agent_session_default_title(
@@ -290,6 +670,8 @@ pub(crate) fn default_agent_session_title_name(agent_id: &str) -> Option<&'stati
         "mastra" => Some("Mastra Code"),
         "devin" => Some("Devin"),
         "droid" => Some("Factory Droid"),
+        "empryo" => Some("Empryo"),
+        "freebuff" => Some("Freebuff"),
         "gemini" => Some("Gemini"),
         "grok" => Some("Grok Build"),
         "hermes-agent" => Some("Hermes Agent"),
@@ -380,6 +762,9 @@ pub(crate) fn resolve_project_agent_config(
     launch_settings: Option<&Map<String, Value>>,
 ) -> Map<String, Value> {
     let normalized_agent_id = agent_id.trim().to_ascii_lowercase();
+    if let Some(bot) = crate::bot_projects::bot_agent_config(project, agent_id) {
+        return bot;
+    }
     if let Some(agent) = project
         .get("customAgents")
         .and_then(Value::as_array)
@@ -404,7 +789,7 @@ pub(crate) fn resolve_project_agent_config(
 
 /// CDXC:AgentProviders 2026-09-04 DECISION:
 /// User: Agent approvals defaults to Ask first, so interactive Claude and Codex launches must not force permission-bypass flags unless the global or per-agent policy explicitly selects Run without asking.
-/// SEE-ALSO: packages/shared/ghostex-settings/defaults.ts, packages/find/src/agent.rs, apps/history-cli/src/ui.rs.
+/// SEE-ALSO: packages/shared/ghostex-settings/defaults.ts, packages/find/src/agent.rs, apps/history-cli/src/ui/resume.rs.
 pub(crate) fn resolve_agent_launch_command(
     agent_id: &str,
     command: &str,
@@ -417,11 +802,73 @@ pub(crate) fn resolve_agent_launch_command(
         Some("disabled") => false,
         _ => global_accept_all_enabled,
     };
-    apply_accept_all_spec(
+    let command = apply_accept_all_spec(
         command,
         agent_id,
         enabled,
         icon,
         accept_all_mode == Some("disabled"),
-    )
+    );
+    let command = with_codex_no_daemon(agent_id, icon, &command);
+    let command = with_marked_handovers(agent_id, icon, &command);
+    #[cfg(windows)]
+    let command = native_cli_command(&command);
+    command
+}
+
+/// CDXC:AgentProviders 2026-09-28 WHY:
+/// PowerShell picks an agent's .ps1 shim before its vendor-supplied .cmd launcher, which fails under the default Restricted policy. Resolve known bare agent commands before adding launch or resume wrappers so both paths use the native launcher selected by CLI discovery, preserving custom shell commands and arguments.
+#[cfg(windows)]
+fn native_cli_command(command: &str) -> String {
+    // Unit tests assert exact commands, which must not depend on the CLIs installed on the machine.
+    if cfg!(test) {
+        return command.to_string();
+    }
+    let trimmed = command.trim_start();
+    let binary = trimmed.split_whitespace().next().unwrap_or_default();
+    if crate::agent_cli::catalog::CATALOG
+        .iter()
+        .any(|agent| agent.binary == binary)
+    {
+        if let Some(path) = crate::platform::live_path::find(binary, &[]) {
+            if let Some(extension @ ("cmd" | "bat")) =
+                path.extension().and_then(|extension| extension.to_str())
+            {
+                return format!(
+                    "{}{binary}.{extension}{}",
+                    &command[..command.len() - trimmed.len()],
+                    &trimmed[binary.len()..]
+                );
+            }
+        }
+    }
+    command.to_string()
+}
+
+/// Validate supplied launch options before an empty or non-string value can be mistaken for an omitted option.
+pub(crate) fn requested_agent_model_option(
+    params: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, DomainStateError> {
+    let value = match params.get(key) {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => value.trim(),
+        _ => {
+            return Err(DomainStateError::bad_request(format!(
+                "{key} needs a non-empty string value."
+            )))
+        }
+    };
+    // `@` names a pinned model version in some Pi providers (`vertex/<model>@<date>`); a value
+    // with it is shell-quoted when the launch command is built.
+    if value.len() > 160
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._[]():/@".contains(&byte))
+    {
+        return Err(DomainStateError::bad_request(format!(
+            "\"{value}\" is not a valid model or effort."
+        )));
+    }
+    Ok(Some(value.to_string()))
 }

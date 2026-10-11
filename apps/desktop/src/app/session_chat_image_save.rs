@@ -41,12 +41,6 @@ impl GhostexGpuiApp {
                 || suggested_name.is_empty()
                 || suggested_name.chars().count() > SESSION_CHAT_IMAGE_SAVE_NAME_MAX_CHARS
             {
-                self.deliver_session_chat_image_save(
-                    session_id,
-                    request_id,
-                    Some("The image save request was invalid."),
-                    cx,
-                );
                 return true;
             }
             self.pending_session_chat_image_saves.insert(
@@ -98,23 +92,11 @@ impl GhostexGpuiApp {
             };
             if !accepted {
                 self.pending_session_chat_image_saves.remove(&key);
-                self.deliver_session_chat_image_save(
-                    session_id,
-                    request_id,
-                    Some("The image transfer was incomplete."),
-                    cx,
-                );
             }
             return true;
         }
         if action == "saveImageFinish" {
             let Some(pending) = self.pending_session_chat_image_saves.remove(&key) else {
-                self.deliver_session_chat_image_save(
-                    session_id,
-                    request_id,
-                    Some("The image transfer was incomplete."),
-                    cx,
-                );
                 return true;
             };
             self.request_session_chat_image_save(

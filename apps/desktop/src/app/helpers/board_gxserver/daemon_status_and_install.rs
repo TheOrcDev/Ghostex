@@ -1,7 +1,7 @@
 // C1 wave-1 deferred split: apps/desktop/src/app/helpers/board_gxserver.rs
 // (~4.3k lines) further divided into responsibility-scoped submodules (pure
-// move, no logic changes). This file holds gxserver daemon-status titlebar reporting plus the macOS
-// on-demand remote gxserver archive download/install helpers.
+// move, no logic changes). This file holds the macOS on-demand remote gxserver archive
+// download/install helpers.
 // See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
 use std::path::{Path, PathBuf};
@@ -11,37 +11,7 @@ use futures::channel::mpsc;
 use crate::app::helpers::*;
 use crate::*;
 
-pub(crate) fn gpui_titlebar_gxserver_daemon_status() -> serde_json::Value {
-    match gpui_probe_local_gxserver_health() {
-        GpuiLocalGxserverHealthState::Healthy { tools_available } => {
-            let mut status = serde_json::json!({
-                "ok": tools_available,
-                "state": "running",
-            });
-            if !tools_available {
-                status["message"] =
-                    serde_json::json!("gxserver is running, but zmx/bd are unavailable.");
-            }
-            status
-        }
-        GpuiLocalGxserverHealthState::ProtocolMismatch { reported } => serde_json::json!({
-            "message": gpui_gxserver_protocol_mismatch_message(reported),
-            "ok": false,
-            "state": "protocolMismatch",
-        }),
-        GpuiLocalGxserverHealthState::BuildMismatch => serde_json::json!({
-            "message": "gxserver belongs to a different Ghostex build and must be restarted.",
-            "ok": false,
-            "state": "buildMismatch",
-        }),
-        GpuiLocalGxserverHealthState::Unreachable => serde_json::json!({
-            "ok": false,
-            "state": "stopped",
-        }),
-    }
-}
-
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_on_demand_gxserver_asset_key(
     target: &GpuiRemoteInstallTarget,
 ) -> Option<&'static str> {
@@ -55,7 +25,7 @@ pub(crate) fn gpui_on_demand_gxserver_asset_key(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_on_demand_gxserver_archive(
     target: &GpuiRemoteInstallTarget,
     progress_tx: Option<&mpsc::UnboundedSender<GpuiRemoteGxserverConnectProgress>>,
@@ -66,13 +36,12 @@ pub(crate) fn gpui_on_demand_gxserver_archive(
             state: GpuiRemoteGxserverConnectState::UnsupportedRemotePlatform,
         });
     };
-    let Some(resources_dir) = gpui_app_bundle_resources_dir() else {
+    let Some(manifest_path) = on_demand_component_manifest_path() else {
         return Err(GpuiOnDemandArchiveFailure {
             message: "Could not locate the app's sealed on-demand resource manifest.".to_string(),
             state: GpuiRemoteGxserverConnectState::InstallFailed,
         });
     };
-    let manifest_path = resources_dir.join("Web/on-demand-resources.json");
     let manifest = component_store::OnDemandManifest::load(&manifest_path).map_err(|message| {
         GpuiOnDemandArchiveFailure {
             message,
@@ -120,7 +89,7 @@ pub(crate) fn gpui_on_demand_gxserver_archive(
         })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) fn gpui_install_gxserver_archive_and_read_token(
     config: &GpuiRemoteMachineConfig,
     execution_target: &GpuiRemoteExecutionTarget,

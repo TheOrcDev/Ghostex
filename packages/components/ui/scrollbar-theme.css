@@ -1,0 +1,26 @@
+/* CDXC:DesignSystem 2026-09-16 DECISION:
+ * User: all app scrollbars use solid #bcbcbd in light mode and #424346 in dark mode, at 5px, floating and revealed on hover. Preserve sidebar scrollbars and the chat input's scroll-only reveal.
+ * SEE-ALSO: apps/desktop/src/app/helpers/titlebar/chrome_colors.rs, apps/desktop/src/terminal_element.rs.
+ */
+:root {
+  --gx-scrollbar-thumb-light: #bcbcbd;
+  --gx-scrollbar-thumb-dark: #424346;
+  --gx-scrollbar-thumb: light-dark(var(--gx-scrollbar-thumb-light), var(--gx-scrollbar-thumb-dark));
+}
+
+/* CDXC:DesignSystem 2026-09-16 WHY:
+ * Production CSS lowers light-dark() to variables resolved where the token is declared. A root token therefore kept the shell's dark color inside light chat. Bind solid colors at each owning theme boundary, including floating tracks outside that boundary.
+ */
+:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-']),
+[data-chat-theme='light'],
+.monaco-editor.vs,
+[data-app-scrollbar-theme='light'] {
+  --gx-scrollbar-thumb: var(--gx-scrollbar-thumb-light);
+}
+
+:is([data-sidebar-theme='plain-dark'], [data-sidebar-theme^='dark-']),
+[data-chat-theme='dark'],
+.monaco-editor:is(.vs-dark, .hc-black),
+[data-app-scrollbar-theme='dark'] {
+  --gx-scrollbar-thumb: var(--gx-scrollbar-thumb-dark);
+}

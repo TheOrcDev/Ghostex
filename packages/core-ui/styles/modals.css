@@ -77,7 +77,7 @@ html:has(body.app-modal-host-native-window-body) {
  * In a native child window the window-root dialog IS the window, so its backdrop and edge are painted in the window colour.
  * A dialog nested inside that dialog (Settings → Remote's machine editor) is a floating dialog again: it keeps the shared dimmed backdrop, hairline border, and shadow, so every rule here excludes `[data-nested]`.
  * Before this exclusion the nested dialog inherited a window-coloured border and a window-coloured overlay and read as borderless with no dimming.
- * SEE-ALSO: `nested` on DialogContent in packages/components/ui/dialog.tsx.
+ * SEE-ALSO: `nested` on DialogContent in packages/components/ui/dialog.tsx (deleted 2026-10-01).
  */
 .app-modal-host-native-window-body [data-slot='dialog-overlay']:where(:not([data-nested])),
 .app-modal-host-native-window-body [data-slot='dialog-content']:where(:not([data-nested])),
@@ -550,7 +550,57 @@ html:has(body.app-modal-host-native-window-body) {
   overflow: hidden;
   padding: var(--previous-sessions-modal-padding-top) var(--previous-sessions-modal-padding-x)
     var(--previous-sessions-modal-padding-bottom);
+  position: relative;
   width: min(654px, 100%);
+}
+
+/*
+ * CDXC:Sessions 2026-09-16 DECISION:
+ * User: the floating Search by Prompt button has no drop shadow; it uses the chat composer's chrome instead (session-chat-composer-focus.css): 1px outline, a 1px inset top highlight, and the composer fill, in both dark and light themes.
+ */
+.previous-sessions-find-prompts-button {
+  --previous-sessions-find-surface: #141414;
+  --previous-sessions-find-outline: rgb(255 255 255 / 5%);
+  --previous-sessions-find-highlight: rgb(255 255 255 / 3%);
+  align-items: center;
+  background: var(--previous-sessions-find-surface);
+  border: 1px solid var(--previous-sessions-find-outline);
+  border-radius: 999px;
+  bottom: 14px;
+  box-shadow: inset 0 1px var(--previous-sessions-find-highlight);
+  color: var(--foreground, var(--app-foreground));
+  cursor: default;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  gap: 7px;
+  height: 32px;
+  line-height: 20px;
+  padding: 0 14px 0 12px;
+  position: absolute;
+  right: 18px;
+  z-index: 2;
+}
+
+:is(body, .ghostex-root):is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .previous-sessions-find-prompts-button {
+  --previous-sessions-find-surface: #ffffff;
+  --previous-sessions-find-outline: rgb(0 0 0 / 8%);
+  --previous-sessions-find-highlight: transparent;
+}
+
+.previous-sessions-find-prompts-button:hover,
+.previous-sessions-find-prompts-button:focus-visible {
+  background: color-mix(in srgb, var(--foreground, var(--app-foreground)) 5%, var(--previous-sessions-find-surface));
+  border-color: color-mix(in srgb, var(--foreground, var(--app-foreground)) 14%, transparent);
+  outline: none;
+}
+
+.previous-sessions-find-prompts-hotkey {
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  opacity: 0.58;
 }
 
 .app-modal-host-body .confirm-modal-root:has(.previous-sessions-modal) {
@@ -962,17 +1012,6 @@ html:has(body.app-modal-host-native-window-body) {
  * `.gx-app-modal`. Only the sizing that is unique to that writing surface
  * stays here.
  */
-
-/*
- * CDXC:Sessions 2026-06-30-16:08:
- * First Message is measured once for a native fit-height child window, so the
- * textarea's own minimum height defines the dialog instead of a percentage of
- * the WebView viewport.
- */
-.first-user-message-textarea {
-  min-height: 220px;
-  resize: none;
-}
 
 .hotkeys-modal {
   display: grid;
@@ -2579,6 +2618,22 @@ html:has(body.app-modal-host-native-window-body) {
   position: relative;
 }
 
+/*
+ * CDXC:AppModal 2026-09-23 DECISION:
+ * User: "let's only show the x button when we hover them". Every toast's close button stays hidden
+ * (still in place, so nothing shifts) until the toast is hovered or the button has keyboard focus.
+ * SEE-ALSO: the desktop toast window in apps/desktop/src/app/window/toast.rs.
+ */
+[data-sonner-toast] [data-close-button] {
+  opacity: 0;
+}
+
+[data-sonner-toast]:hover [data-close-button],
+[data-sonner-toast]:focus-within [data-close-button],
+[data-sonner-toast] [data-close-button]:focus-visible {
+  opacity: 1;
+}
+
 .ghostex-app-toast[data-sonner-toast][data-styled='true'] [data-icon] {
   align-items: flex-start;
   align-self: flex-start;
@@ -3042,34 +3097,6 @@ html:has(body.app-modal-host-native-window-body) {
   flex: 0 0 auto;
 }
 
-.add-repository-modal-shadcn {
-  /**
-   * CDXC:AddProject 2026-05-29-11:45:
-   * Clone Repository copies Rename Session's compact modal chrome, with a
-   * slightly wider body for the folder picker row and inline clone errors.
-   *
-   * CDXC:AddProject 2026-06-24-10:35:
-   * Clone Repository must keep repository, folder, new-folder, branch, option,
-   * and inline error rows in normal vertical flow. It reuses Rename Session
-   * chrome, but its multi-field form must not inherit Rename Session's
-   * first-field flex growth because that can collapse the repository field and
-   * overlap the following folder label when validation text is visible.
-   */
-  max-width: min(560px, calc(100vw - 2rem));
-}
-
-.app-modal-host-native-window-body .add-repository-modal-shadcn .session-rename-field-group {
-  overflow-y: visible;
-}
-
-.app-modal-host-native-window-body
-  .add-repository-modal-shadcn
-  .session-rename-field-group
-  > [data-slot='field']:first-child {
-  flex: 0 0 auto;
-  min-height: auto;
-}
-
 .worktree-create-modal-shadcn {
   /*
    * CDXC:Worktrees 2026-06-12-11:10:
@@ -3133,19 +3160,26 @@ html:has(body.app-modal-host-native-window-body) {
  * rgba(255,255,255,0.08) edges, 12px sections / 8px controls / 6px menu items,
  * one 32px control height, no bold weights, and full-width paired outline
  * footer buttons. Every app modal opts in through the AppModalShell component
- * (packages/core-ui/app-modal-shell.tsx), which applies `.gx-app-modal`.
+ * (packages/core-ui/app-modal-shell.tsx (deleted 2026-10-01)), which applies `.gx-app-modal`.
  * Restyle every modal at once by editing these tokens and slot rules; add
  * per-modal rules only for layout that is unique to that modal.
  * `--app-modal-background` is redeclared here (instead of fighting the
  * native-host `!important` background rules above) so the child-window shell
  * resolves to the window color on every theme.
  */
+/* CDXC:Theming 2026-09-23 DECISION:
+ * User: app modals (the commit review first) match the rest of the app instead of a fixed neutral
+ * grey. The window takes the theme's chrome colour that the modal host publishes as
+ * --gx-theme-chrome (modal-host.tsx (deleted 2026-10-01)), and panels and raised controls are the same steps toward
+ * white the neutral design used (#161616 / #1d1d1d / #232323 over #0e0e0e), so a tinted theme
+ * carries into every modal. Without the variable the neutral values stay.
+ */
 .gx-app-modal {
-  --app-modal-background: #0e0e0e;
-  --gx-modal-surface: #0e0e0e;
-  --gx-modal-panel: #161616;
-  --gx-modal-raised: #1d1d1d;
-  --gx-modal-raised-hover: #232323;
+  --app-modal-background: var(--gx-theme-chrome, #0e0e0e);
+  --gx-modal-surface: var(--gx-theme-chrome, #0e0e0e);
+  --gx-modal-panel: color-mix(in srgb, #ffffff 3%, var(--gx-modal-surface));
+  --gx-modal-raised: color-mix(in srgb, #ffffff 6%, var(--gx-modal-surface));
+  --gx-modal-raised-hover: color-mix(in srgb, #ffffff 8.5%, var(--gx-modal-surface));
   --gx-modal-hairline: rgba(255, 255, 255, 0.08);
   --gx-modal-radius-pill: 999px;
   --gx-modal-radius-menu: 6px;
@@ -3610,15 +3644,11 @@ html:has(body.app-modal-host-native-window-body) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* CDXC:DelayedSend 2026-09-15 WHY:
+   Native modals fit their window once when opened. Reserve room for the date/time input and awake picker before switching triggers so the footer stays reachable. */
 .delayed-send-trigger-detail-slot {
   align-items: center;
   display: grid;
-  min-height: 70px;
-}
-
-/* CDXC:DelayedSend 2026-09-14 WHY:
-   Native modals fit their window once when opened. Reserve the awake picker's height before switching triggers so the footer stays reachable. */
-.delayed-send-has-agent-picker .delayed-send-trigger-detail-slot {
   min-height: 112px;
 }
 
@@ -3642,117 +3672,6 @@ html:has(body.app-modal-host-native-window-body) {
 
 .session-rename-field-group {
   gap: 16px;
-}
-
-.add-repository-folder-row {
-  align-items: center;
-  display: flex;
-  gap: 10px;
-}
-
-.add-repository-folder-row [data-slot='input'] {
-  min-width: 0;
-}
-
-.add-repository-options-row {
-  /*
-   * CDXC:AddProject 2026-06-01-10:28:
-   * Clone scope controls should be visible together in one row under the folder
-   * chooser, unchecked by default, without competing with the primary Clone &
-   * Add action. Keep the layout compact and allow labels to shrink before they
-   * can push the modal wider than its shell.
-   */
-  align-items: center;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.add-repository-option {
-  align-items: center;
-  color: color-mix(in srgb, var(--foreground) 88%, var(--muted-foreground) 12%);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 13px;
-  gap: 7px;
-  line-height: 1.35;
-  min-width: 0;
-}
-
-.add-repository-option-checkbox {
-  appearance: none;
-  background: color-mix(in srgb, var(--input) 30%, transparent);
-  border: 1px solid var(--input);
-  border-radius: 0;
-  flex: none;
-  height: 16px;
-  margin: 0;
-  position: relative;
-  width: 16px;
-}
-
-.add-repository-option-checkbox:checked {
-  background: var(--primary);
-  border-color: var(--primary);
-}
-
-.add-repository-option-checkbox:checked::after {
-  border: solid var(--primary-foreground);
-  border-width: 0 2px 2px 0;
-  content: '';
-  height: 8px;
-  left: 5px;
-  position: absolute;
-  top: 2px;
-  transform: rotate(45deg);
-  width: 4px;
-}
-
-.add-repository-option-checkbox:disabled {
-  opacity: 0.55;
-}
-
-.add-repository-option-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.add-repository-option-info {
-  align-items: center;
-  color: color-mix(in srgb, var(--muted-foreground) 82%, var(--foreground) 18%);
-  cursor: help;
-  display: inline-flex;
-  flex: none;
-  justify-content: center;
-}
-
-.add-repository-option-info:hover,
-.add-repository-option-info:focus-visible {
-  color: var(--foreground);
-}
-
-.add-repository-error {
-  background: color-mix(in srgb, var(--destructive) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--destructive) 38%, transparent);
-  border-radius: 0;
-  color: color-mix(in srgb, var(--destructive) 82%, var(--foreground) 18%);
-  font-size: 13px;
-  line-height: 1.45;
-  padding: 10px 12px;
-  white-space: pre-wrap;
-}
-
-.add-repository-warning {
-  background: color-mix(in srgb, #f59e0b 13%, transparent);
-  border: 1px solid color-mix(in srgb, #f59e0b 42%, transparent);
-  border-radius: 0;
-  color: color-mix(in srgb, #fbbf24 78%, var(--foreground) 22%);
-  font-size: 13px;
-  line-height: 1.45;
-  padding: 10px 12px;
-  white-space: pre-wrap;
 }
 
 .session-rename-modal-shadcn [data-slot='textarea'] {
@@ -4981,19 +4900,25 @@ html:has(body.app-modal-host-native-window-body) {
   border: 1px solid color-mix(in srgb, var(--app-border) 92%, transparent);
 }
 
+/*
+ * CDXC:RemoteMachines 2026-09-27 DECISION:
+ * User: "no scroll should be shown when nothing expanded". The dialog grows to the Settings window's height and only the fields row scrolls, so a collapsed form never shows a scrollbar; the old fixed `min(60vh, 520px)` cap scrolled even with room to spare. The body clips sideways because the Show-in-sidebar switch's enlarged hit area (`after:-inset-x-3`) reaches past the right edge and otherwise turned on a horizontal scrollbar.
+ */
 .settings-remote-machine-dialog {
   gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100% - 2rem);
   max-width: calc(100% - 2rem);
   padding: 16px;
   width: 32rem;
 }
 
-/* The fields scroll inside the dialog so the title and the action row stay reachable in the fixed modal window. */
 .settings-remote-machine-dialog-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: min(60vh, 520px);
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -5251,35 +5176,6 @@ and error text instead of the muted description tone.
 }
 
 /*
- * CDXC:RemoteMachines 2026-06-24-21:09:
- * Worktree Add Project should sit at the top of the native child window instead
- * of vertically centering in the available panel. Keep the command surface inset
- * equally from the top, left, and right, and give the path input visible inline
- * text padding while preserving its existing action-button reserve.
- */
-.remote-project-picker-dialog {
-  --remote-project-picker-window-inset: 12px;
-  --remote-project-picker-input-inline-padding: 12px;
-  max-width: calc(
-    100% - var(--remote-project-picker-window-inset) - var(--remote-project-picker-window-inset)
-  ) !important;
-  top: var(--remote-project-picker-window-inset) !important;
-  translate: -50% 0 !important;
-  width: min(
-    42rem,
-    calc(100% - var(--remote-project-picker-window-inset) - var(--remote-project-picker-window-inset))
-  ) !important;
-}
-
-.remote-project-picker-dialog .remote-project-picker-input[data-slot='command-input'] {
-  padding-left: var(--remote-project-picker-input-inline-padding);
-}
-
-.remote-project-picker-dialog .remote-project-picker-input[data-slot='command-input']:not(.pr-20):not(.pr-36) {
-  padding-right: var(--remote-project-picker-input-inline-padding);
-}
-
-/*
  * CDXC:AppModal 2026-07-01-01:19:
  * Compact native child-window modals are measured once before AppKit presents
  * them, so user edits after open must not grow the React shell beyond the
@@ -5303,18 +5199,8 @@ and error text instead of the muted description tone.
   resize: none;
 }
 
-.app-modal-host-native-window-body[data-app-modal-fit-height='true'] .first-user-message-textarea {
-  height: min(320px, 48vh);
-  max-height: min(320px, 48vh);
-  overflow-y: auto;
-  resize: none;
-}
-
 .app-modal-host-native-window-body[data-app-modal-fit-height='true']
   .worktree-create-modal-shadcn
-  .session-rename-field-group,
-.app-modal-host-native-window-body[data-app-modal-fit-height='true']
-  .add-repository-modal-shadcn
   .session-rename-field-group,
 .app-modal-host-native-window-body[data-app-modal-fit-height='true']
   .agent-config-modal-shadcn
@@ -5323,13 +5209,6 @@ and error text instead of the muted description tone.
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 2px;
-}
-
-.app-modal-host-native-window-body[data-app-modal-fit-height='true'] .add-repository-error,
-.app-modal-host-native-window-body[data-app-modal-fit-height='true'] .add-repository-warning {
-  max-height: min(160px, 24vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .app-modal-host-native-window-body[data-app-modal-fit-height='true'] .previous-sessions-modal-body,
@@ -5343,12 +5222,6 @@ and error text instead of the muted description tone.
 
 .app-modal-host-native-window-body[data-app-modal-fit-height='true'] .previous-sessions-modal-body {
   max-height: min(476px, calc(100vh - 92px));
-}
-
-.app-modal-host-native-window-body[data-app-modal-fit-height='true']
-  .remote-project-picker-dialog
-  [data-slot='command-list'] {
-  max-height: min(28rem, calc(100vh - 72px)) !important;
 }
 
 /*
@@ -5439,7 +5312,6 @@ and error text instead of the muted description tone.
 .app-modal-host-native-window-body[data-app-modal-fixed-window='true'] .confirm-modal,
 .app-modal-host-native-window-body[data-app-modal-fixed-window='true'] .session-rename-modal-shadcn,
 .app-modal-host-native-window-body[data-app-modal-fixed-window='true'] .worktree-create-modal-shadcn,
-.app-modal-host-native-window-body[data-app-modal-fixed-window='true'] .add-repository-modal-shadcn,
 .app-modal-host-native-window-body[data-app-modal-fixed-window='true'] .agent-config-modal-shadcn {
   max-height: 100vh;
   overflow-y: auto;
@@ -5453,9 +5325,7 @@ and error text instead of the muted description tone.
  * Message viewer, which is sized by the fit-height rule above.
  */
 .app-modal-host-native-window-body[data-app-modal-fixed-window='true']
-  [data-slot='textarea']:not(.git-commit-modal-textarea):not(.ghostex-stashed-prompt-editor-textarea):not(
-    .first-user-message-textarea
-  ) {
+  [data-slot='textarea']:not(.git-commit-modal-textarea):not(.ghostex-stashed-prompt-editor-textarea) {
   max-height: min(220px, 42vh);
   overflow-y: auto;
   resize: none;
@@ -5655,17 +5525,25 @@ and error text instead of the muted description tone.
 }
 
 /*
- * The path bar's submit action stays as quiet as its `New Folder` neighbour —
- * one raised step above the #161616 bar, hairline separator, normal label
- * colour — instead of a bright primary block that breaks the strip.
+ * The path bar's actions (`Add`, `New Folder`, and the step-specific submits)
+ * share one filled look so they read as clickable: a visibly raised fill over
+ * the #161616 bar, medium-weight label, and a clear hover step.
  */
-.add-project-modal [data-add-project-field='submit'] {
-  background: var(--gx-modal-raised, #1d1d1d);
+.add-project-modal [data-add-project-field='submit'],
+.add-project-modal [data-add-project-field='newFolder'],
+.add-project-modal [data-add-project-field='newFolderSubmit'],
+.add-project-modal [data-add-project-field='repositoryAction'] {
+  background: #2c2c2c;
   color: var(--foreground);
+  font-weight: 500;
+  cursor: pointer;
 }
 
-.add-project-modal [data-add-project-field='submit']:hover:not(:disabled) {
-  background: var(--gx-modal-raised-hover, #232323);
+.add-project-modal [data-add-project-field='submit']:hover:not(:disabled),
+.add-project-modal [data-add-project-field='newFolder']:hover:not(:disabled),
+.add-project-modal [data-add-project-field='newFolderSubmit']:hover:not(:disabled),
+.add-project-modal [data-add-project-field='repositoryAction']:hover:not(:disabled) {
+  background: #3a3a3a;
 }
 
 /*

@@ -281,10 +281,19 @@ impl RemoteSitesPanel {
                                 && browser_url_origin_key(&tab.url) == origin
                         });
                     if let Some(tab) = tab {
+                        /*
+                        CDXC:Browser 2026-09-18 WHY:
+                        A tab title that equals the tab's URL-host fallback is
+                        not a page title ("localhost" from an error page, or
+                        from a title cached by older builds) and must not
+                        override the title this panel just probed from the live
+                        server.
+                        */
                         if let Some(title) = tab
                             .runtime_page_title
                             .as_deref()
                             .and_then(sanitize_browser_tab_cached_title)
+                            .filter(|title| *title != browser_tab_title_for_url(&tab.url))
                         {
                             site.title = Some(title);
                         }
@@ -340,6 +349,7 @@ impl RemoteSitesPanel {
         cx.notify();
     }
 
+    /// "…and close the dropdown", for the rows that open a site.
     fn close(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let _ = self.main_app.update(cx, |app, cx| {
             app.clear_gpui_titlebar_popup_from_window(GpuiTitlebarPopupKind::RemoteSites, cx)
@@ -582,8 +592,7 @@ impl RemoteSitesPanel {
                 if copied { "Copied" } else { "Copy URL" },
             )
             .on_click(cx.listener(move |panel, _, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(copy_url.clone()));
-                gpui_play_copy_sound();
+                gpui_copy_to_clipboard(ClipboardItem::new_string(copy_url.clone()), cx);
                 panel.copied = Some((copy_key.clone(), std::time::Instant::now()));
                 cx.notify();
             })),
@@ -600,7 +609,7 @@ impl RemoteSitesPanel {
                 .child(h_flex().flex_shrink_0().w(px(200.0)).gap(px(8.0))
                     .child(resource_metric(86.0).id(format!("status-{key}"))
                         .child(status_dot(color)).child(status)
-                        .tooltip(move |window, cx| Tooltip::new(status_detail).build(window, cx)))
+                        .when(status != status_detail, |this| this.tooltip(move |window, cx| Tooltip::new(status_detail).build(window, cx))))
                     .child(resource_metric(106.0).id(format!("evidence-{key}"))
                         .child(evidence)
                         .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx)))))
@@ -666,6 +675,7 @@ fn site_button(id: String, label: &'static str) -> gpui::Stateful<gpui::Div> {
         .h(px(22.0))
         .items_center()
         .justify_center()
+        .rounded(px(RESOURCE_CONTROL_RADIUS))
         .border_1()
         .border_color(chrome_ink().opacity(0.13))
         .bg(chrome_ink().opacity(0.08))

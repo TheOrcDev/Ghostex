@@ -1,0 +1,38 @@
+# CDXC:SessionChat 2026-09-21 DECISION:
+# User: the mobile chat becomes native React Native views fed by the same Rust chat core as the desktop, through UniFFI bindings (answer 1b).
+# This crate is that binding and nothing else: it wraps `packages/gx-chat-core`'s `ChatCore` behind a handful of calls with JSON strings at the boundary, so the UniFFI surface stays tiny and the core's own types never have to become FFI types. No chat rules live here; a rule the phone needs goes into gx-chat-core. The Expo module `apps/mobile/app/modules/gx-chat-core/` calls it synchronously over JSI. Build with `build.sh` in this folder.
+[package]
+name = "ghostex-gx-chat-mobile"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "gx_chat_mobile"
+path = "src/lib.rs"
+# staticlib for the iOS XCFramework, cdylib for Android's JNA and for bindgen's library mode.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+ghostex-gx-chat-core = { path = "../gx-chat-core" }
+uniffi = "0.32"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+getrandom = "0.3"
+
+[profile.release]
+# Panics must unwind: every exported call catches them and answers a JSON error instead of
+# tearing the app down.
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"

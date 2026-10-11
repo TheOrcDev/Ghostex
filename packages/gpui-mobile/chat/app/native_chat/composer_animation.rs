@@ -1,0 +1,1 @@
+../../../../../apps/desktop/src/app/native_chat/composer_animation.rs

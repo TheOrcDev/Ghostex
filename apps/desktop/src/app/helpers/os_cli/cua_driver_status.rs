@@ -19,6 +19,17 @@ pub(crate) fn gpui_cua_driver_executable_path() -> Option<PathBuf> {
     None
 }
 
+/// Where an agent finds the cua-driver skill pack: `cua-driver skills install` keeps the pack in
+/// `~/.cua-driver/skills/cua-driver` and links it into each detected agent's skills folder, so
+/// the skill counts as installed once one of those links resolves to its SKILL.md.
+pub(crate) fn gpui_cua_driver_skill_path() -> Option<PathBuf> {
+    let home = gpui_home_dir();
+    [".agents", ".claude"]
+        .into_iter()
+        .map(|root| home.join(root).join("skills").join("cua-driver"))
+        .find(|path| gpui_is_file(&path.join("SKILL.md")))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GpuiCuaDriverUpdateStatus {
     pub(crate) current_version: Option<String>,
@@ -26,8 +37,10 @@ pub(crate) struct GpuiCuaDriverUpdateStatus {
     pub(crate) update_available: Option<bool>,
 }
 
+/// `fresh` skips cua-driver's 20h update-check cache; Settings' "check again" button asks for it.
 pub(crate) fn gpui_cua_driver_update_status(
     cua_driver_path: Option<&Path>,
+    fresh: bool,
 ) -> GpuiCuaDriverUpdateStatus {
     let Some(cua_driver_path) = cua_driver_path else {
         return GpuiCuaDriverUpdateStatus::default();
@@ -44,9 +57,14 @@ pub(crate) fn gpui_cua_driver_update_status(
 
     #[cfg(target_os = "macos")]
     {
+        let args: &[&str] = if fresh {
+            &["check-update", "--json", "--no-cache"]
+        } else {
+            &["check-update", "--json"]
+        };
         let Ok(output) = gpui_run_command_with_captured_output_timeout(
             cua_driver_path,
-            &["check-update", "--json"],
+            args,
             Duration::from_secs(15),
             64 * 1024,
         ) else {
@@ -61,27 +79,72 @@ pub(crate) fn gpui_cua_driver_update_status(
                 ..GpuiCuaDriverUpdateStatus::default()
             };
         };
-        return GpuiCuaDriverUpdateStatus {
-            current_version: current_version.or_else(|| {
-                payload
-                    .get("current_version")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            }),
-            latest_version: payload
-                .get("latest_version")
+        let current_version = current_version.or_else(|| {
+            payload
+                .get("current_version")
                 .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-            update_available: payload
-                .get("update_available")
-                .and_then(serde_json::Value::as_bool),
+                .map(str::to_string)
+        });
+        let latest_version = payload
+            .get("latest_version")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        // The cached answer written just before `update --apply` still says
+        // "update available"; the installed binary's own version is the truth.
+        let update_available = payload
+            .get("update_available")
+            .and_then(serde_json::Value::as_bool)
+            .map(|available| available && current_version != latest_version);
+        return GpuiCuaDriverUpdateStatus {
+            current_version,
+            latest_version,
+            update_available,
         };
     }
 
     #[cfg(not(target_os = "macos"))]
+    let _ = fresh;
+    #[cfg(not(target_os = "macos"))]
     GpuiCuaDriverUpdateStatus {
         current_version,
         ..GpuiCuaDriverUpdateStatus::default()
+    }
+}
+
+/// Toast for Settings' explicit "check for Trycua updates" click, read from the refreshed status.
+pub(crate) fn gpui_cua_driver_update_check_toast(
+    status: &serde_json::Value,
+) -> (&'static str, &'static str, String) {
+    let text = |key: &str| status.get(key).and_then(serde_json::Value::as_str);
+    let installed = text("cuaDriverVersion");
+    let latest = text("cuaDriverLatestVersion");
+    match status
+        .get("cuaDriverUpdateAvailable")
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => (
+            "info",
+            "Fast Computer & Browser Use update available",
+            match (installed, latest) {
+                (Some(installed), Some(latest)) => {
+                    format!("Version {latest} is available; {installed} is installed.")
+                }
+                _ => "A newer Fast Computer & Browser Use release is available.".to_string(),
+            },
+        ),
+        Some(false) => (
+            "success",
+            "Fast Computer & Browser Use is up to date",
+            match installed.or(latest) {
+                Some(version) => format!("Version {version} is the latest release."),
+                None => "You have the latest Fast Computer & Browser Use release.".to_string(),
+            },
+        ),
+        None => (
+            "warning",
+            "Couldn't check for Fast Computer & Browser Use updates",
+            "The update check did not answer. Check your connection and try again.".to_string(),
+        ),
     }
 }
 
@@ -132,10 +195,10 @@ pub(crate) fn gpui_cua_driver_permission_status(
         return GpuiCuaDriverPermissionStatus {
             accessibility_granted: None,
             detail: if cua_app_installed {
-                "Trycua is installed, but the cua-driver CLI was not found on PATH, so GPUI cannot run the read-only permission check."
+                "Fast Computer & Browser Use is installed, but the cua-driver CLI was not found on PATH, so GPUI cannot run the read-only permission check."
                     .to_string()
             } else {
-                "Trycua is not installed.".to_string()
+                "Fast Computer & Browser Use is not installed.".to_string()
             },
             screen_recording_granted: None,
         };
@@ -157,7 +220,8 @@ pub(crate) fn gpui_cua_driver_permission_status(
         }
         Err(_) => GpuiCuaDriverPermissionStatus {
             accessibility_granted: None,
-            detail: "Unable to check Trycua permissions without prompting.".to_string(),
+            detail: "Unable to check Fast Computer & Browser Use permissions without prompting."
+                .to_string(),
             screen_recording_granted: None,
         },
     }
@@ -214,15 +278,15 @@ pub(crate) fn gpui_cua_driver_permission_detail(
 ) -> String {
     match (accessibility_granted, screen_recording_granted) {
         (Some(true), Some(true)) => {
-            "Trycua reports Accessibility and Screen Recording permissions are granted.".to_string()
+            "Fast Computer & Browser Use reports Accessibility and Screen Recording permissions are granted.".to_string()
         }
-        (Some(false), Some(false)) => "Trycua permissions need attention.".to_string(),
-        (Some(false), _) => "Trycua Accessibility permission needs attention.".to_string(),
-        (_, Some(false)) => "Trycua Screen Recording permission needs attention.".to_string(),
+        (Some(false), Some(false)) => "Fast Computer & Browser Use permissions need attention.".to_string(),
+        (Some(false), _) => "Fast Computer & Browser Use Accessibility permission needs attention.".to_string(),
+        (_, Some(false)) => "Fast Computer & Browser Use Screen Recording permission needs attention.".to_string(),
         _ if command_success => {
-            "Trycua permission check completed, but GPUI could not recognize the permission state."
+            "Fast Computer & Browser Use permission check completed, but GPUI could not recognize the permission state."
                 .to_string()
         }
-        _ => "Unable to check Trycua permissions without prompting.".to_string(),
+        _ => "Unable to check Fast Computer & Browser Use permissions without prompting.".to_string(),
     }
 }

@@ -66,6 +66,17 @@ fn start_work_command(args: &[String]) -> CliResult<()> {
     {
         payload.insert("agent".to_string(), Value::String(agent));
     }
+    for (flag, key) in [("model", "agentModel"), ("effort", "agentEffort")] {
+        if parsed.flags.0.contains_key(flag) {
+            let value = parsed.flags.string_value(flag).unwrap_or_default().trim();
+            if value.is_empty() {
+                return Err(CliError::Other(format!(
+                    "board start-work --{flag} needs a value."
+                )));
+            }
+            payload.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
     if let Some(project_id) = parsed
         .flags
         .text("projectId")

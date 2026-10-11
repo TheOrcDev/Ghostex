@@ -1,9 +1,6 @@
-pub use super::sidebar_bridge_manifest::AppModalHostBridgeSurface;
 use anyhow::Result;
 use gpui::{Bounds, Pixels};
-use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
 pub fn prepare_application() {}
 
@@ -31,6 +28,7 @@ pub type BrowserPopupOpenHandler = Rc<dyn Fn(String, BrowserPopupPlacement)>;
 
 pub enum BrowserPageMetadataEvent {
     HistoryRequested,
+    FindRequested,
     AddressChanged(String),
     CloseRequested,
     FaviconUrlChanged(Option<String>),
@@ -45,13 +43,14 @@ pub enum BrowserPageMetadataEvent {
         can_go_forward: bool,
     },
     TitleChanged(String),
+    /// A page context-menu copy (link/image address, or the image itself).
+    CopyToClipboard(gpui::ClipboardItem),
 }
 
 pub type BrowserPageMetadataHandler = Rc<dyn Fn(BrowserPageMetadataEvent)>;
 
-/// CDXC:Onboarding 2026-08-18: API mirror of the CEF
-/// main-frame load-end callback used by bridge-less third-party surfaces.
-pub type PageLoadEndHandler = Rc<dyn Fn()>;
+/// Plain Rust shared with the native app; see `app/helpers/web_bridge_types.rs`.
+pub use crate::app::helpers::web_bridge_types::PageLoadEndHandler;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrowserMediaAccessKinds {
@@ -93,39 +92,64 @@ impl BrowserMediaAccessRequest {
 
 pub type BrowserMediaAccessHandler = Rc<dyn Fn(BrowserMediaAccessRequest)>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SidebarBridgeEvent {
-    ActiveProjectContext(String),
-    SourceWorkareaReadiness(String),
-    BrowserWorkareaReadiness(String),
-    ProjectWorkareaReadiness(String),
-    ManageFileWorkareaOperationRequest(String),
-    NativeProjectPathAction(String),
-    NativeAppShotPrompt(String),
-    SidebarCommandAction(String),
-    SidebarCommandRunEnd(String),
-    GhostexHotkeyAction(String),
-    GxserverPresentationFocusState(String),
-    CreateProjectAgent(String),
-    CreateProjectTerminal(String),
-    WorkspaceTerminalFocus(String),
-    WorkspaceTerminalRenameCommand(String),
-    WorkspaceTerminalEnter(String),
-    WorkspaceTerminalLifecycleResult(String),
-    SessionCompletionSound(String),
-    SessionStatusIndicators(String),
-    PetOverlayState(String),
-    GlobalActions(String),
-    TitlebarGitMenuState(String),
-    OpenBrowserUrl(String),
-    BrowserTabFocus(String),
-    ProjectBoardConversationResponse(String),
-    ResourcesSnapshotRequest(String),
-    /// A first-party page tried to navigate its own main frame somewhere else; the payload is the refused URL.
-    RefusedPageNavigation(String),
+pub enum BrowserSiteRequest {
+    OpenExternalApp(BrowserExternalAppRequest),
+    LocalNetworkAccess(BrowserLocalNetworkAccessRequest),
 }
 
-pub type SidebarBridgeEventHandler = Rc<dyn Fn(SidebarBridgeEvent)>;
+pub struct BrowserExternalAppRequest {
+    pub url: String,
+    pub scheme: String,
+    pub origin: String,
+}
+
+impl BrowserExternalAppRequest {
+    pub fn browser_id(&self) -> i32 {
+        0
+    }
+
+    pub fn page_gone(&mut self) -> impl std::future::Future<Output = ()> + 'static {
+        std::future::pending()
+    }
+}
+
+pub struct BrowserLocalNetworkAccessRequest {
+    origin: String,
+    local_network: bool,
+    profile: String,
+}
+
+impl BrowserLocalNetworkAccessRequest {
+    pub fn browser_id(&self) -> i32 {
+        0
+    }
+
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    pub fn includes_local_network(&self) -> bool {
+        self.local_network
+    }
+
+    pub fn page_gone(&mut self) -> impl std::future::Future<Output = ()> + 'static {
+        std::future::pending()
+    }
+
+    pub fn answer(self, _allow: bool) {}
+}
+
+pub fn forget_local_network_access_answer(_profile: &str, _origin: &str) -> bool {
+    false
+}
+
+pub type BrowserSiteRequestHandler = Rc<dyn Fn(BrowserSiteRequest)>;
+
+pub fn set_browser_site_request_handler(_handler: BrowserSiteRequestHandler) {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectWorkareaBridgeEvent {
@@ -133,64 +157,22 @@ pub enum ProjectWorkareaBridgeEvent {
     ProjectBoardRequest(String),
     ProjectBoardImageRequest(String),
     ManageFilesRequest(String),
+    /// The page tried to navigate its own main frame somewhere else; the payload is the refused URL.
+    RefusedPageNavigation(String),
 }
 
 pub type ProjectWorkareaBridgeEventHandler = Rc<dyn Fn(ProjectWorkareaBridgeEvent)>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AppModalHostBridgeEvent {
-    Message(String),
-    NativeHostMessage(String),
-}
+/// The Docs resource scope is plain Rust shared with the native Files view; see
+/// `app/helpers/manage_docs_resources.rs`.
+pub use crate::app::helpers::manage_docs_resources::ManageDocsResourceScope;
 
-pub type AppModalHostBridgeEventHandler = Rc<dyn Fn(AppModalHostBridgeEvent)>;
-
-#[derive(Clone, Debug)]
-pub struct ManageDocsResourceScope;
-
-/// CDXC:Docs 2026-08-09: parity with the CEF scope, whose mounted
-/// Docs roots and their allowed relative roots are resolved together, lazily,
-/// off the main thread.
-type ManageDocsLocalRootResolver =
-    Arc<dyn Fn() -> Option<Vec<ManageDocsResourceRoot>> + Send + Sync>;
-
-/// CDXC:Docs 2026-08-09: parity with the CEF scope's mount record.
-#[derive(Clone)]
-pub struct ManageDocsResourceRoot {
-    pub allowed_relative_roots: Vec<String>,
-    pub mount_segment: String,
-    pub path: PathBuf,
-}
-
-/// Parity with the CEF scope's in-memory/remote resource loader.
-type ManageDocsRemoteResourceLoader = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
-
-impl ManageDocsResourceScope {
-    pub fn new(_resolve_root: ManageDocsLocalRootResolver) -> Self {
-        Self
-    }
-
-    pub fn new_remote(_loader: ManageDocsRemoteResourceLoader) -> Self {
-        Self
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SidebarRuntimeSettingsSnapshot {
-    pub debugging_mode: bool,
-    pub show_beta_features: bool,
-    pub saved_settings_json: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SidebarGxserverBootstrap {
-    pub base_url: String,
-    pub auth_token: String,
-    pub protocol_version: i32,
-    pub client_id: String,
-    pub initial_active_project_id: Option<String>,
-    pub focused_session_id: Option<String>,
-    pub visible_session_ids: Vec<String>,
+/// API mirror of `shell::PageKeepAwake`; without a runtime there is no page to keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageKeepAwake {
+    Unknown,
+    Keep,
+    Release,
 }
 
 pub struct CefBrowser;
@@ -206,13 +188,8 @@ impl CefBrowser {
         _popup_open_handler: Option<BrowserPopupOpenHandler>,
         _page_metadata_handler: Option<BrowserPageMetadataHandler>,
         _media_access_handler: Option<BrowserMediaAccessHandler>,
-        _sidebar_runtime_settings: Option<SidebarRuntimeSettingsSnapshot>,
-        _sidebar_gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-        _sidebar_bridge_event_handler: Option<SidebarBridgeEventHandler>,
         _project_workarea_bridge_event_handler: Option<ProjectWorkareaBridgeEventHandler>,
         _manage_docs_resource_scope: Option<ManageDocsResourceScope>,
-        _app_modal_host_bridge_surface: Option<AppModalHostBridgeSurface>,
-        _app_modal_host_bridge_event_handler: Option<AppModalHostBridgeEventHandler>,
         _page_load_end_handler: Option<PageLoadEndHandler>,
     ) -> Self {
         Self
@@ -221,6 +198,12 @@ impl CefBrowser {
     pub fn set_bounds(&self, _bounds: Bounds<Pixels>, _scale_factor: f32) {}
 
     pub fn set_visible(&self, _visible: bool) {}
+
+    pub fn bounds_differ(&self, _bounds: Bounds<Pixels>, _scale_factor: f32) -> bool {
+        false
+    }
+
+    pub fn set_motion_hidden(&self, _hidden: bool, _fade_in: std::time::Duration) {}
 
     pub fn order_front(&self) {}
 
@@ -237,58 +220,18 @@ impl CefBrowser {
 
     pub fn blur(&self) {}
 
+    pub fn page_keep_awake(&self) -> PageKeepAwake {
+        PageKeepAwake::Release
+    }
+
+    pub fn ask_page_keep_awake(&self) {}
+
     pub fn load_url(&self, _url: &str) {}
 
     pub fn select_all(&self) {}
 
-    pub fn send_fullscreen_toggle_key(&self) {
-        /*
-        CDXC:Onboarding 2026-08-18:
-        API mirror of the macOS/Windows/Linux host-side "f" key press that puts
-        the tutorial video player in fullscreen. This no-op must not synthesize
-        input, inject JavaScript, or pretend a CEF renderer exists.
-        */
-    }
-
     pub fn execute_java_script_in_main_frame(&self, _script: &str) -> bool {
         false
-    }
-
-    pub fn refresh_sidebar_runtime_settings(
-        &self,
-        _runtime_settings: SidebarRuntimeSettingsSnapshot,
-    ) {
-    }
-
-    pub fn refresh_sidebar_gxserver_bootstrap(
-        &self,
-        _gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-    ) {
-        /*
-        CDXC:ServerDaemon 2026-06-24-11:17:
-        Non-macOS CEF remains explicitly unsupported, but its Rust API mirrors the macOS sidebar gxserver bootstrap refresh surface so shared GPUI code can compile when platform backends are added. This no-op must not create fallback gxserver data, expose tokens, log, persist, or pretend a CEF renderer exists.
-        */
-    }
-
-    pub fn activate_session_chat(
-        &self,
-        _url: &str,
-        _generation: &str,
-        _bootstrap: SidebarGxserverBootstrap,
-        _initial_snapshot: Option<serde_json::Value>,
-        _initial_presentation: Option<serde_json::Value>,
-    ) {
-    }
-
-    pub fn refresh_session_chat_gxserver_bootstrap(
-        &self,
-        _gxserver_bootstrap: Option<SidebarGxserverBootstrap>,
-    ) {
-        /*
-        CDXC:SessionChat 2026-07-31:
-        API mirror of the macOS Session Chat bootstrap refresh; same no-op
-        rules as the sidebar bootstrap stub above.
-        */
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -310,8 +253,6 @@ impl CefBrowser {
     pub fn find_text(&self, _search_text: &str, _forward: bool, _find_next: bool) {}
 
     pub fn stop_finding(&self, _clear_selection: bool) {}
-
-    pub fn refresh_session_chat_zoom(&self) {}
 
     pub fn zoom_level(&self) -> f64 {
         0.0

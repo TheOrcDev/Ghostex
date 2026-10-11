@@ -48,8 +48,9 @@ impl GhostexGpuiApp {
     }
 
     /// Starts the packaged platform updater. Unpackaged builds simply run
-    /// without an updater; packaged macOS keeps Sparkle and packaged Windows
-    /// uses the Velopack manifest staged beside the executable.
+    /// without an updater; packaged macOS keeps Sparkle, packaged Windows
+    /// uses the Velopack manifest staged beside the executable, and packaged
+    /// Linux only announces the release (`linux_updater`).
     #[cfg(target_os = "macos")]
     pub(crate) fn start_gpui_updater(&mut self, cx: &mut gpui::Context<Self>) {
         let start_result = unsafe { GhostexGpuiSparkleUpdaterStart() };
@@ -141,7 +142,36 @@ impl GhostexGpuiApp {
         .detach();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    pub(crate) fn start_gpui_updater(&mut self, cx: &mut gpui::Context<Self>) {
+        if !linux_updater::is_packaged_install() {
+            return;
+        }
+        self.updater_started = true;
+        self.begin_linux_update_check(false, cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(GPUI_UPDATE_AVAILABILITY_PROBE_INTERVAL)
+                    .await;
+                let keep_running = this
+                    .update(cx, |this, cx| {
+                        if !this.updater_started {
+                            return false;
+                        }
+                        this.begin_linux_update_check(false, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_running {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     pub(crate) fn start_gpui_updater(&mut self, _cx: &mut gpui::Context<Self>) {}
 
     /// Titlebar update-button click and app-menu Check for Updates (macOS
@@ -218,7 +248,39 @@ impl GhostexGpuiApp {
         self.begin_windows_update_check(true, cx);
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    pub(crate) fn check_for_gpui_updates(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.linux_update.is_some() {
+            self.open_linux_update_modal(Some(window), cx);
+            return;
+        }
+        if !self.updater_started {
+            self.upsert_gpui_app_toast(
+                GpuiAppToast {
+                    copy_text: None,
+                    id: "gpui-linux-updater-unavailable".to_string(),
+                    level: GpuiAppToastLevel::from_raw(Some("warning")),
+                    title: "Updates unavailable".to_string(),
+                    description: Some(
+                        "This build was not installed from a Ghostex package.".to_string(),
+                    ),
+                    loading: false,
+                    persistent: false,
+                    duration_ms: GPUI_APP_TOAST_DEFAULT_DURATION_MS,
+                    epoch: 0,
+                },
+                cx,
+            );
+            return;
+        }
+        self.begin_linux_update_check(true, cx);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     pub(crate) fn check_for_gpui_updates(
         &mut self,
         _window: &mut Window,
@@ -226,6 +288,8 @@ impl GhostexGpuiApp {
     ) {
     }
 
+    /// The update state lives in the lead window, which runs the updater; every other window's
+    /// update button and download ring mirror it (app/workspace_windows/).
     pub(crate) fn set_gpui_update_available(
         &mut self,
         available: bool,
@@ -235,6 +299,11 @@ impl GhostexGpuiApp {
             return;
         }
         self.update_available = available;
+        if self.is_lead_window() {
+            self.update_other_workspace_windows(cx, move |app, cx| {
+                app.set_gpui_update_available(available, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -251,6 +320,11 @@ impl GhostexGpuiApp {
             return;
         }
         self.update_downloading = downloading;
+        if self.is_lead_window() {
+            self.update_other_workspace_windows(cx, move |app, cx| {
+                app.set_gpui_update_downloading(downloading, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -265,9 +339,28 @@ impl GhostexGpuiApp {
             return;
         }
         self.update_download_progress = normalized;
+        if self.is_lead_window() {
+            self.update_other_workspace_windows(cx, move |app, cx| {
+                app.set_gpui_update_download_progress(normalized, cx);
+            });
+        }
         if self.update_downloading {
             cx.notify();
         }
+    }
+
+    /// The update button in any window: the lead window runs the updater, so a click in another
+    /// window is performed there (app/workspace_windows/).
+    pub(crate) fn check_for_gpui_updates_from_any_window(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.forward_to_lead_window(cx, |app, window, cx| app.check_for_gpui_updates(window, cx))
+        {
+            return;
+        }
+        self.check_for_gpui_updates(window, cx);
     }
 
     #[cfg(target_os = "windows")]
@@ -491,5 +584,109 @@ impl GhostexGpuiApp {
         }
         GPUI_APP_QUIT_IN_PROGRESS.store(true, Ordering::Release);
         cx.quit();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn begin_linux_update_check(
+        &mut self,
+        interactive: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.update_checking {
+            return;
+        }
+        self.update_checking = true;
+        let background = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let result = background
+                .spawn(async move { linux_updater::check_for_updates() })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.update_checking = false;
+                match result {
+                    Ok(Some(update)) => {
+                        this.linux_update = Some(update);
+                        this.set_gpui_update_available(true, cx);
+                        if interactive {
+                            this.open_linux_update_modal(Some(window), cx);
+                        }
+                    }
+                    Ok(None) => {
+                        this.linux_update = None;
+                        this.set_gpui_update_available(false, cx);
+                        if interactive {
+                            this.upsert_gpui_app_toast(
+                                GpuiAppToast {
+                                    copy_text: None,
+                                    id: "gpui-linux-updater-current".to_string(),
+                                    level: GpuiAppToastLevel::from_raw(Some("success")),
+                                    title: "Ghostex is up to date".to_string(),
+                                    description: None,
+                                    loading: false,
+                                    persistent: false,
+                                    duration_ms: GPUI_APP_TOAST_DEFAULT_DURATION_MS,
+                                    epoch: 0,
+                                },
+                                cx,
+                            );
+                        }
+                    }
+                    Err(_) if !interactive => {}
+                    Err(_) => {
+                        this.upsert_gpui_app_toast(
+                            GpuiAppToast {
+                                copy_text: None,
+                                id: "gpui-linux-updater-check-failed".to_string(),
+                                level: GpuiAppToastLevel::from_raw(Some("warning")),
+                                title: "Could not check for updates".to_string(),
+                                description: Some(
+                                    "Check your connection and try again.".to_string(),
+                                ),
+                                loading: false,
+                                persistent: false,
+                                duration_ms: GPUI_APP_TOAST_DEFAULT_DURATION_MS,
+                                epoch: 0,
+                            },
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn open_linux_update_modal(
+        &mut self,
+        source_window: Option<&mut Window>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(update) = self.linux_update.as_ref() else {
+            return;
+        };
+        let open_message = serde_json::json!({
+            "modal": GpuiAppModalKind::UpdateAvailable.modal_id(),
+            "notesMarkdown": update.notes_markdown(),
+            "portable": false,
+            "state": "notify",
+            "type": "open",
+            "version": update.version(),
+        });
+        self.open_gpui_app_modal_window(
+            GpuiAppModalKind::UpdateAvailable,
+            open_message,
+            serde_json::Value::Null,
+            source_window,
+            cx,
+        );
+    }
+
+    /// The Linux dialog's only action: the release page lists the deb, rpm, tarball and AUR downloads.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn open_linux_update_download_page(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(update) = self.linux_update.as_ref() {
+            cx.open_url(&update.release_page_url());
+        }
     }
 }

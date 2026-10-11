@@ -145,20 +145,33 @@ pub(crate) fn remove_zmx_session_socket(_session_name: &str) {}
 /// alternate-screen capture. Old daemons use History with a client-side tail cap.
 #[cfg(unix)]
 pub(crate) fn read_zmx_session_screen_capture(zmx_name: &str) -> Result<ZmxHistoryCapture, String> {
-    read_zmx_session_screen_capture_format(zmx_name, ZMX_IPC_HISTORY_FORMAT_PLAIN)
+    read_zmx_session_screen_capture_format(
+        zmx_name,
+        ZMX_IPC_HISTORY_FORMAT_PLAIN,
+        ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS,
+    )
 }
 
 #[cfg(unix)]
 pub(crate) fn read_zmx_session_screen_capture_vt(
     zmx_name: &str,
 ) -> Result<ZmxHistoryCapture, String> {
-    read_zmx_session_screen_capture_format(zmx_name, 1)
+    read_zmx_session_screen_capture_format(zmx_name, 1, ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS)
+}
+
+/// The live grid alone, as plain text: no scrollback rows, so the daemon
+/// serializes one screenful. Cheap enough to take every second to learn
+/// whether the screen changed, never enough to classify it.
+#[cfg(unix)]
+pub(crate) fn read_zmx_session_grid_capture(zmx_name: &str) -> Result<ZmxHistoryCapture, String> {
+    read_zmx_session_screen_capture_format(zmx_name, ZMX_IPC_HISTORY_FORMAT_PLAIN, 0)
 }
 
 #[cfg(unix)]
 fn read_zmx_session_screen_capture_format(
     zmx_name: &str,
     format: u8,
+    scrollback_rows: u32,
 ) -> Result<ZmxHistoryCapture, String> {
     let socket_path = zmx_session_socket_path(zmx_name);
     let mut stream = std::os::unix::net::UnixStream::connect(&socket_path).map_err(|error| {
@@ -180,7 +193,7 @@ fn read_zmx_session_screen_capture_format(
     request[1..5].copy_from_slice(&(ZMX_IPC_CAPTURE_BYTES as u32).to_le_bytes());
     request[ZMX_IPC_HEADER_BYTES] = format;
     request[ZMX_IPC_HEADER_BYTES + 1..ZMX_IPC_HEADER_BYTES + 5]
-        .copy_from_slice(&ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS.to_le_bytes());
+        .copy_from_slice(&scrollback_rows.to_le_bytes());
     request[ZMX_IPC_HEADER_BYTES + ZMX_IPC_CAPTURE_BYTES] = ZMX_IPC_TAG_INFO;
     stream
         .write_all(&request)
@@ -274,29 +287,34 @@ That path keeps the head at the stdout byte cap, so an oversized capture still r
 */
 #[cfg(not(unix))]
 pub(crate) fn read_zmx_session_screen_capture(zmx_name: &str) -> Result<ZmxHistoryCapture, String> {
-    read_zmx_session_screen_capture_format(zmx_name, false)
+    read_zmx_session_screen_capture_format(zmx_name, false, ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS)
 }
 
 #[cfg(not(unix))]
 pub(crate) fn read_zmx_session_screen_capture_vt(
     zmx_name: &str,
 ) -> Result<ZmxHistoryCapture, String> {
-    read_zmx_session_screen_capture_format(zmx_name, true)
+    read_zmx_session_screen_capture_format(zmx_name, true, ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS)
 }
 
+/// The live grid alone, as plain text, for learning whether the screen changed.
+#[cfg(not(unix))]
+pub(crate) fn read_zmx_session_grid_capture(zmx_name: &str) -> Result<ZmxHistoryCapture, String> {
+    read_zmx_session_screen_capture_format(zmx_name, false, 0)
+}
+
+/// CDXC:AgentScreenDetection 2026-09-22 SEE-ALSO:
+/// Every reader of this text strips all CSI sequences, so the provider must answer with physical rows: one line per grid row, real spaces, and SGR the only escapes. A serializer that replays the grid with cursor motion instead (`ESC[6;1H`, `ESC[3C`) merges rows and deletes spaces, which erases the `rule / marker / rule` composer sandwich and makes every chat send fail its verified clear with the input box on screen.
+/// SEE-ALSO: .dependencies/wmx/src/history.rs (`styled_row`, `plain_rows`), .dependencies/zmx/src/util.zig (`serializeTerminalRange`), server/src/session_chat_options/screen_text.rs (`strip_ansi_sgr`).
 #[cfg(not(unix))]
 fn read_zmx_session_screen_capture_format(
     zmx_name: &str,
     vt: bool,
+    scrollback_rows: u32,
 ) -> Result<ZmxHistoryCapture, String> {
     let zmx = require_bundled_zmx()?;
     let result = run_zmx_interaction_command(
-        build_zmx_screen_capture_command(
-            zmx_name,
-            &zmx.executable_path,
-            ZMX_SCREEN_CAPTURE_SCROLLBACK_ROWS,
-            vt,
-        ),
+        build_zmx_screen_capture_command(zmx_name, &zmx.executable_path, scrollback_rows, vt),
         ZmxCommandOptions {
             allow_stdout_truncation: true,
             stdout_limit_bytes: Some(GXSERVER_ZMX_HISTORY_STDOUT_LIMIT_BYTES),

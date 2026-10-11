@@ -317,7 +317,20 @@ pub(crate) fn route_gpui_native_keyboard_event(
                         Some(&action_id),
                         owner,
                     );
-                    Some((target.app.clone(), target.async_app.clone(), None))
+                    /*
+                    CDXC:Hotkeys 2026-09-19 DECISION:
+                    User: holding the "next tab" hotkey must fly through tabs.
+                    A repeat of a captured hotkey is claimed here and used to be dropped for every action, so a held Previous/Next Tab in Pane or Previous/Next Session moved one step and stopped whenever the router owned the key (a terminal or a CEF page has the keyboard, the usual case). Those four actions now repeat, marked as held so the app treats every repeat as part of one burst (gx_store/burst.rs). Every other hotkey still fires once per press: repeating "new session" or "close tab" would be destructive.
+                    */
+                    let repeats = gpui_command_palette_tab_cycle_hotkey_action(&action_id)
+                        .is_some()
+                        || gpui_sidebar_session_walk_hotkey_reverse(&action_id).is_some();
+                    let dispatch = repeats.then(|| GpuiNativeKeyboardDispatch::GhostexHotkey {
+                        action_id,
+                        owner,
+                        held: true,
+                    });
+                    Some((target.app.clone(), target.async_app.clone(), dispatch))
                 }
                 None => {
                     if keycode == TAB_KEYCODE {
@@ -343,7 +356,7 @@ pub(crate) fn route_gpui_native_keyboard_event(
         let owner = target.owner;
         let native_hotkey_text = gpui_native_hotkey_text(keycode, modifiers, shortcut_characters);
         // CDXC:Sessions 2026-09-08 SEE-ALSO:
-        // previous-sessions-modal.tsx owns Option+C scope cycling; reserve the native chord before configured app shortcuts can consume it.
+        // previous-sessions-modal.tsx (deleted 2026-10-01) owns Option+C scope cycling; reserve the native chord before configured app shortcuts can consume it.
         let sessions_scope_shortcut = native_hotkey_text.as_deref() == Some("alt+c")
             && matches!(
                 owner,
@@ -365,20 +378,11 @@ pub(crate) fn route_gpui_native_keyboard_event(
         if sessions_scope_shortcut {
             return None;
         }
-        let renderer_passthrough_route = if matches!(
-            owner,
-            GpuiKeyboardOwner::FirstResponder(FirstResponderTarget::CefSurface(
-                FirstResponderCefSurface::SessionChat(_)
-            ))
-        ) && native_hotkey_text.as_deref() == Some("cmd+f")
-        {
-            Some("sessionChatRendererPassthrough")
-        } else if gpui_keyboard_owner_uses_docs_editor_hotkeys(owner)
+        let renderer_passthrough_route = if gpui_keyboard_owner_uses_docs_editor_hotkeys(owner)
             && matches!(
                 native_hotkey_text.as_deref(),
                 Some("cmd+f" | "cmd+alt+f" | "cmd+y")
-            )
-        {
+            ) {
             Some("docsEditorRendererPassthrough")
         } else {
             None
@@ -454,7 +458,11 @@ pub(crate) fn route_gpui_native_keyboard_event(
             return Some((
                 target.app.clone(),
                 target.async_app.clone(),
-                Some(GpuiNativeKeyboardDispatch::GhostexHotkey { action_id, owner }),
+                Some(GpuiNativeKeyboardDispatch::GhostexHotkey {
+                    action_id,
+                    owner,
+                    held: false,
+                }),
             ));
         }
 
@@ -570,24 +578,21 @@ pub(crate) fn route_gpui_native_keyboard_event(
                     let _ = this.send_tab_key_to_gpui_engine_terminal(owner, action, shift, cx);
                 }
                 GpuiNativeKeyboardDispatch::CompositedTerminalBulkText { owner, text } => {
-                    let view = this.gpui_engine_terminal_view_for_target(owner);
-                    support_logs::append_temporary(
-                        support_logs::GpuiSupportLog::TerminalFocus,
-                        "TEMP.gpui.fluidVoice.bulkTextDispatch",
-                        serde_json::json!({
-                            "targetFound": view.is_some(),
-                            "text": support_logs::temporary_fluid_voice_text_shape(&text),
-                        }),
-                    );
-                    if let Some(view) = view {
+                    if let Some(view) = this.gpui_engine_terminal_view_for_target(owner) {
                         view.update(cx, |view, cx| view.send_text_input(&text, cx));
                     }
                 }
                 GpuiNativeKeyboardDispatch::ApplicationCommand(command) => {
                     this.dispatch_window_scoped_application_keyboard_command(command, window, cx);
                 }
-                GpuiNativeKeyboardDispatch::GhostexHotkey { action_id, owner } => {
+                GpuiNativeKeyboardDispatch::GhostexHotkey {
+                    action_id,
+                    owner,
+                    held,
+                } => {
+                    this.gx_store_set_key_held(held);
                     this.dispatch_window_scoped_ghostex_hotkey(&action_id, owner, window, cx);
+                    this.gx_store_set_key_held(false);
                 }
             });
         })

@@ -31,6 +31,7 @@ unsafe extern "C" {
         enabled: bool,
         width: c_double,
         titlebar_height: c_double,
+        background_color: u32,
         companion_hidden: bool,
         requested: bool,
         keep_under_pointer: bool,
@@ -59,13 +60,15 @@ unsafe extern "C" {
         total_us: u64,
     );
     fn GhostexGpuiCEFSetNativeViewVisible(native_view: *mut c_void, visible: bool);
+    fn GhostexGpuiCEFSetNativeViewMotionHidden(
+        native_view: *mut c_void,
+        hidden: bool,
+        fade_in_seconds: f64,
+    );
     fn GhostexGpuiCEFOrderNativeViewFront(native_view: *mut c_void);
     fn GhostexGpuiCEFRemoveNativeViewFromSuperview(native_view: *mut c_void);
     fn GhostexGpuiCEFPrepareNativeViewForFocus(native_view: *mut c_void);
     fn GhostexGpuiCEFSetNativeViewPinchZoomDisabled(native_view: *mut c_void, disabled: bool);
-    fn GhostexGpuiCEFSetNativeViewMouseFocusPassive(native_view: *mut c_void, passive: bool);
-    fn GhostexGpuiCEFSetNativeViewPassiveFocusGrant(native_view: *mut c_void, granted: bool);
-    fn GhostexGpuiCEFReturnFocusToGpuiRootFromNativeView(native_view: *mut c_void);
     fn GhostexGpuiCEFFocusNativeView(native_view: *mut c_void);
     fn GhostexGpuiCEFActivateNativeViewWindow(native_view: *mut c_void);
     fn GhostexGpuiCEFFocusGpuiRootView(native_view: *mut c_void);
@@ -94,6 +97,7 @@ pub(super) fn update_sidebar_hover_reveal(
     enabled: bool,
     width: f64,
     titlebar_height: f64,
+    background_color: u32,
     companion_hidden: bool,
     requested: bool,
     keep_under_pointer: bool,
@@ -106,6 +110,7 @@ pub(super) fn update_sidebar_hover_reveal(
             enabled,
             width,
             titlebar_height,
+            background_color,
             companion_hidden,
             requested,
             keep_under_pointer,
@@ -187,6 +192,9 @@ pub(super) fn prepare_application() {
 pub(super) fn system_uses_dark_page_appearance() -> bool {
     unsafe { GhostexGpuiCEFSystemUsesDarkPageAppearance() }
 }
+
+/// LaunchServices already activates the running app on a second launch.
+pub(super) fn activate_running_app() {}
 
 pub(super) fn install_application_hooks() {
     unsafe { GhostexGpuiCEFInstallApplicationHooks() };
@@ -281,27 +289,9 @@ pub(super) fn prepare_native_view_for_focus(native_view: *mut c_void) {
     }
 }
 
-pub(super) fn set_native_view_mouse_focus_passive(native_view: *mut c_void, passive: bool) {
-    unsafe {
-        GhostexGpuiCEFSetNativeViewMouseFocusPassive(native_view, passive);
-    }
-}
-
 pub(super) fn set_native_view_pinch_zoom_disabled(native_view: *mut c_void, disabled: bool) {
     unsafe {
         GhostexGpuiCEFSetNativeViewPinchZoomDisabled(native_view, disabled);
-    }
-}
-
-pub(super) fn set_native_view_passive_focus_grant(native_view: *mut c_void, granted: bool) {
-    unsafe {
-        GhostexGpuiCEFSetNativeViewPassiveFocusGrant(native_view, granted);
-    }
-}
-
-pub(super) fn return_focus_to_gpui_root(native_view: *mut c_void) {
-    unsafe {
-        GhostexGpuiCEFReturnFocusToGpuiRootFromNativeView(native_view);
     }
 }
 
@@ -350,6 +340,16 @@ pub(super) fn log_resize_diagnostic(
 pub(super) fn set_native_view_visible(native_view: *mut c_void, visible: bool) {
     unsafe {
         GhostexGpuiCEFSetNativeViewVisible(native_view, visible);
+    }
+}
+
+pub(super) fn set_native_view_motion_hidden(
+    native_view: *mut c_void,
+    hidden: bool,
+    fade_in_seconds: f64,
+) {
+    unsafe {
+        GhostexGpuiCEFSetNativeViewMotionHidden(native_view, hidden, fade_in_seconds);
     }
 }
 

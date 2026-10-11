@@ -13,16 +13,28 @@
 #            `compile` on the same checkout.
 # The command sequence inside each phase is byte-identical to `all`; the
 # phases only gate which contiguous part of it runs.
+# CDXC:Release 2026-10-07 WHY:
+# `compile` is two independent halves, and the release runs them on two runners
+# of the same label so the slowest job (Windows ARM64) stops compiling the
+# native runtime after the desktop app (5m on gxserver alone in 10.14.0):
+#   compile-app      GPUI references, sidebar bundle, desktop cargo build.
+#   compile-runtime  wmx reference, then gxserver/ghostex, wmx, and the prompt
+#                    editor (page + helper). The release workflow uploads its
+#                    outputs at their repo paths and the packaging job
+#                    downloads them in place before `package`.
+# `compile` (and `all`) still runs both halves in the original order, which is
+# what local builds and the sccache warm jobs use.
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [ValidateSet("x64", "arm64")][string]$Arch = "x64",
     [string]$Output = "",
-    [ValidateSet("all", "compile", "package")][string]$Phase = "all"
+    [ValidateSet("all", "compile", "compile-app", "compile-runtime", "package")][string]$Phase = "all"
 )
 
 $ErrorActionPreference = "Stop"
-$RunCompile = $Phase -ne "package"
-$RunPackage = $Phase -ne "compile"
+$RunCompileApp = $Phase -in @("all", "compile", "compile-app")
+$RunCompileRuntime = $Phase -in @("all", "compile", "compile-runtime")
+$RunPackage = $Phase -in @("all", "package")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "Version must be MAJOR.MINOR.PATCH, got $Version"
 }
@@ -47,12 +59,18 @@ if ($RunPackage) {
     New-Item -ItemType Directory -Force -Path $Output | Out-Null
 }
 
-if ($RunCompile) {
+if ($RunCompileApp) {
     & bash (Join-Path $ScriptDir "prepare-references.sh")
     if ($LASTEXITCODE -ne 0) { throw "GPUI reference preparation failed" }
+}
+if ($RunCompileRuntime) {
     & git -C $RepoRoot submodule update --init --depth=1 -- .dependencies/wmx
     if ($LASTEXITCODE -ne 0) { throw "wmx reference preparation failed" }
 }
+
+# CDXC:Release 2026-09-27 WHY: 10.4.0 run 36301375274 stopped in create-deterministic-tar.sh because the inherited environment reached 29,263 bytes (PATH, the runner's OIDC and runtime tokens, the VS dev shell's saved PATH), over its 28,000-byte guard against CreateProcess's 32K limit. Nothing this script starts requests an OIDC token (attestation is its own workflow step with a fresh environment), so the OIDC request token is dropped here; ACTIONS_RUNTIME_TOKEN stays because sccache's GitHub cache needs it. This file is a Windows-only release input, so the fix could land mid-release without rebuilding the macOS and Linux packages that were already live.
+Remove-Item Env:ACTIONS_ID_TOKEN_REQUEST_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:ACTIONS_ID_TOKEN_REQUEST_URL -ErrorAction SilentlyContinue
 
 $env:GHOSTEX_WINDOWS_ARCH = $Arch
 $env:GHOSTEX_GPUI_MARKETING_VERSION = $Version
@@ -60,6 +78,8 @@ $env:GHOSTEX_ON_DEMAND_ASSETS = "1"
 # build-windows-app.ps1 runs both halves when this is unset.
 $env:GHOSTEX_WINDOWS_BUILD_PHASE = switch ($Phase) {
     "compile" { "compile" }
+    "compile-app" { "compile-app" }
+    "compile-runtime" { "compile-runtime" }
     "package" { "stage" }
     default { $null }
 }
@@ -73,7 +93,7 @@ if (-not $RunPackage) {
 }
 
 $AppDir = Join-Path $RepoRoot "apps/desktop/build/windows/Ghostex"
-foreach ($required in @("Ghostex.exe", "ghostex-gpui-runtime.exe", "ghostex-gpui-cef-helper.exe")) {
+foreach ($required in @("Ghostex.exe", "ghostex-gpui-runtime.exe", "ghostex-gpui-cef-helper.exe", "resources/GhostexEditor/GhostexEditor.exe", "resources/GhostexEditor/web/index.html")) {
     if (-not (Test-Path (Join-Path $AppDir $required))) {
         throw "Windows staged app is missing $required"
     }
@@ -88,6 +108,8 @@ if (-not (Test-Path $OnDemandManifestPath)) {
     throw "Windows staged app is missing its sealed component manifest"
 }
 $OnDemandManifest = Get-Content -Raw $OnDemandManifestPath | ConvertFrom-Json
+# CEF (the web runtime) is optional: the app starts without it and downloads this sealed component
+# only when the user installs it from a web view or Plugins, so the entry must be valid and published.
 $CefComponent = $OnDemandManifest.components.cef
 $CefAsset = $CefComponent.platforms."windows-$Arch"
 if (-not $CefComponent.componentVersion -or $CefComponent.downloadTag -ne "cef-$($CefComponent.componentVersion)" -or $CefAsset.sha256 -cnotmatch '^[0-9a-f]{64}$') {
@@ -157,7 +179,7 @@ if ($RequireSigning) {
         Sort-Object FullName -Descending |
         Select-Object -First 1
     if (-not $SignTool) { throw "A native $ExpectedNativeArch signtool.exe was not found" }
-    foreach ($binary in @("Ghostex.exe", "ghostex-gpui-runtime.exe", "ghostex-gpui-cef-helper.exe")) {
+    foreach ($binary in @("Ghostex.exe", "ghostex-gpui-runtime.exe", "ghostex-gpui-cef-helper.exe", "resources/GhostexEditor/GhostexEditor.exe")) {
         $binaryPath = Join-Path $AppDir $binary
         & $SignTool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $SigningPfx /p $SigningPassword $binaryPath
         if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $binary" }

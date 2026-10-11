@@ -20,8 +20,17 @@ pub fn resolve_session_chat_transcript_path(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(expand_home);
+    if agent == SessionChatTranscriptAgent::OpenCode {
+        return crate::session_chat_opencode::resolve_transcript(agent_session_id?);
+    }
     if agent == SessionChatTranscriptAgent::Zcode {
         return crate::session_chat_zcode::resolve_zcode_chat_transcript_path(
+            agent_session_id?,
+            supplied_path.as_deref(),
+        );
+    }
+    if agent == SessionChatTranscriptAgent::Freebuff {
+        return crate::session_chat_freebuff::resolve_freebuff_chat_transcript_path(
             agent_session_id?,
             supplied_path.as_deref(),
         );
@@ -30,6 +39,14 @@ pub fn resolve_session_chat_transcript_path(
         // Cursor's chat is read through a mirror that splices the store's
         // thinking into the raw jsonl, whichever way the raw file was named.
         return crate::session_chat_cursor_mirror::resolve_cursor_chat_transcript_path(
+            agent_session_id,
+            supplied_path.as_deref(),
+        );
+    }
+    if agent == SessionChatTranscriptAgent::Empryo {
+        // Empryo's hooks name its raw session log; chat reads the mirror that splits each turn
+        // record into rows instead (`CDXC:SessionChat`).
+        return crate::session_chat_empryo_mirror::resolve_empryo_chat_transcript_path(
             agent_session_id,
             supplied_path.as_deref(),
         );
@@ -88,7 +105,10 @@ pub fn resolve_session_chat_transcript_path(
             crate::session_chat_hermes::resolve_hermes_chat_transcript_path(session_id)
         }
         SessionChatTranscriptAgent::Pi => find_pi_family_chat_transcript(session_id),
-        SessionChatTranscriptAgent::Zcode => None,
+        SessionChatTranscriptAgent::Empryo
+        | SessionChatTranscriptAgent::Zcode
+        | SessionChatTranscriptAgent::Freebuff => None,
+        SessionChatTranscriptAgent::OpenCode => None,
     }
 }
 

@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use crate::platform::process::NoConsoleWindow;
 use serde_json::{json, Map, Value};
 use tokio::{
     io::AsyncWriteExt,
@@ -43,6 +44,21 @@ impl TypedOperationError {
             message: message.into(),
             scope_rejection: false,
         }
+    }
+
+    /// The program (`git`, `gh`) is not installed on this computer. Still a dependency error for an action the user
+    /// asked for; a background read uses `is_command_not_found` to answer "not available" instead of failing.
+    pub(crate) fn command_not_found(executable: &str) -> Self {
+        Self::dependency_unavailable(format!("{executable} is not installed on this computer."))
+            .with_details(json!({ "reason": "commandNotFound", "executable": executable }))
+    }
+
+    pub(crate) fn is_command_not_found(&self) -> bool {
+        self.details
+            .as_ref()
+            .and_then(|details| details.get("reason"))
+            .and_then(Value::as_str)
+            == Some("commandNotFound")
     }
 
     pub(crate) fn forbidden(message: impl Into<String>) -> Self {
@@ -207,10 +223,13 @@ pub(crate) async fn run_process_command(
             std::process::Stdio::null()
         })
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    process.creation_flags(0x0800_0000);
+        .stderr(std::process::Stdio::piped())
+        .no_console_window();
     let mut child = process.spawn().map_err(|error| {
+        // A missing working directory also reports NotFound on Unix; only an existing one means the program is.
+        if error.kind() == std::io::ErrorKind::NotFound && Path::new(&command.cwd).is_dir() {
+            return TypedOperationError::command_not_found(&command.executable);
+        }
         TypedOperationError::dependency_unavailable(format!(
             "Could not start typed operation command: {error}"
         ))
@@ -319,6 +338,16 @@ pub(crate) async fn run_process_command(
         stderr,
         stdout,
     })
+}
+
+/// CDXC:PlatformSupport 2026-09-28 WHY:
+/// gxserver keeps the PATH it started with, so on Windows Git or the GitHub CLI installed while Ghostex ran stayed "not installed" until a restart. Windows reads the live PATH, as agent CLI lookups do.
+pub(crate) fn typed_operation_path() -> Option<String> {
+    if cfg!(windows) {
+        crate::platform::live_path::value().into_string().ok()
+    } else {
+        env::var("PATH").ok()
+    }
 }
 
 pub(crate) fn typed_operation_environment(

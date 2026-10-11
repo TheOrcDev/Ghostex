@@ -36,7 +36,7 @@ pub(crate) fn create_authenticated_health(state: &AppState) -> ServerHealthRespo
         product: minimal.product,
         protocol_version: minimal.protocol_version,
         version: minimal.version,
-        build_identity: state.build_identity.clone(),
+        build_identity: reported_build_identity(state),
         capabilities: GXSERVER_CAPABILITIES
             .iter()
             .map(|capability| (*capability).to_string())
@@ -49,7 +49,21 @@ pub(crate) fn create_authenticated_health(state: &AppState) -> ServerHealthRespo
         server_id: state.metadata.server_id.clone(),
         started_at: state.metadata.started_at.clone(),
         tools: get_gxserver_tool_statuses(),
+        #[cfg(windows)]
+        launch_context: Some(crate::platform::launch_context::current().report()),
+        #[cfg(not(windows))]
+        launch_context: None,
     }
+}
+
+/// The identity clients compare with the installed build. A daemon still running a replaced image
+/// must not claim the build that replaced it, or the app keeps it (see `running_image_superseded`).
+fn reported_build_identity(state: &AppState) -> String {
+    #[cfg(any(windows, target_os = "linux"))]
+    if crate::platform::process::running_image_superseded() {
+        return format!("{}:superseded", state.build_identity);
+    }
+    state.build_identity.clone()
 }
 
 /*
@@ -63,8 +77,12 @@ pub(crate) fn json_body_limit_bytes(endpoint_path: &str) -> usize {
         crate::constants::GXSERVER_IMAGE_BODY_LIMIT_BYTES
     } else if endpoint_path == "/api/saveSessionChatAttachment" {
         crate::constants::GXSERVER_ATTACHMENT_BODY_LIMIT_BYTES
+    } else if endpoint_path == "/api/sendFeedback" {
+        crate::constants::GXSERVER_FEEDBACK_BODY_LIMIT_BYTES
     } else if endpoint_path == "/api/runProjectDocsAction" {
         3 * 1024 * 1024
+    } else if endpoint_path == crate::visual_pages::PUBLISH_VISUAL_PAGE_ENDPOINT {
+        crate::visual_pages::PUBLISH_VISUAL_PAGE_BODY_LIMIT_BYTES
     } else {
         GXSERVER_JSON_BODY_LIMIT_BYTES
     }

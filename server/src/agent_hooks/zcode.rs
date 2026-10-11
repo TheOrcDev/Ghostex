@@ -4,9 +4,9 @@ use serde_json::Value;
 
 use crate::{domain::DomainStateError, platform::shell::command_shell};
 
-use super::{config::HookPaths, probing::run_command_stdout_with_timeout};
 #[cfg(not(windows))]
 use super::probing::normalize_gxserver_process_path;
+use super::{config::HookPaths, probing::run_command_stdout_with_timeout};
 
 /// CDXC:AgentHooks 2026-09-15 WHY:
 /// ZCode only creates its model defaults and setup marker when config.json does not exist.

@@ -158,6 +158,20 @@ fn build_libghostty_vt_with_zig(
     };
     let mut command = Command::new(&zig);
     command.current_dir(&ghostty_dir).arg("build");
+    if cfg!(windows) {
+        command.env("PATH", zig_build_path_without_untrusted_mount_points());
+    }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        let zig_target = match cargo_target.as_str() {
+            "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu",
+            "aarch64-unknown-linux-gnu" => "aarch64-linux-gnu",
+            target => panic!("unsupported Linux libghostty-vt target: {target}"),
+        };
+        // CDXC:Build 2026-10-04 WHY: #190: Zig's native CPU default can put
+        // unconditional AVX-512 in compiler_rt memcpy on release builders.
+        command.arg(format!("-Dtarget={zig_target}"));
+        command.arg("-Dcpu=baseline");
+    }
     if is_windows {
         // Release runners use Zig's stable x64 Windows host binary, including
         // under Windows 11 ARM emulation. Keep the archive architecture tied
@@ -222,6 +236,27 @@ fn build_libghostty_vt_with_zig(
         archive: built_archive,
         themes_dir: build_prefix.join("share/ghostty/themes"),
     }
+}
+
+/// CDXC:PlatformSupport 2026-10-03 WHY: A Windows process running with the RedirectionGuard mitigation (EnforceRedirectionTrust, inherited by every child, including agent sessions started under a gxserver that has it) may not traverse junctions a non-admin created, such as the Codex and cua-driver `bin` folders on PATH. Zig 0.16 opens every PATH folder while looking up `pkg-config`, maps the resulting STATUS_UNTRUSTED_MOUNT_POINT to `error.Unexpected` and aborts the whole libghostty-vt build (`translate-c wuffs_c.h … error: Unexpected`, `NTSTATUS=0xc00004bc`) instead of skipping the folder. Those folders are unusable to this process tree anyway, so zig gets PATH without exactly them and Cargo prints which ones were dropped.
+fn zig_build_path_without_untrusted_mount_points() -> std::ffi::OsString {
+    const ERROR_UNTRUSTED_MOUNT_POINT: i32 = 448;
+    let path = env::var_os("PATH").unwrap_or_default();
+    let entries: Vec<PathBuf> = env::split_paths(&path)
+        .filter(|entry| {
+            let untrusted = std::fs::read_dir(entry).is_err_and(|error| {
+                error.raw_os_error() == Some(ERROR_UNTRUSTED_MOUNT_POINT)
+            });
+            if untrusted {
+                println!(
+                    "cargo:warning=leaving {} out of zig's PATH: it goes through a junction this process may not traverse (Windows RedirectionGuard), which makes zig 0.16 abort",
+                    entry.display()
+                );
+            }
+            !untrusted
+        })
+        .collect();
+    env::join_paths(entries).expect("PATH entries came from PATH")
 }
 
 /// Generate a compact Rust lookup table from Ghostty's audited theme files.
@@ -289,8 +324,8 @@ fn ghostty_app_version(ghostty_dir: &Path) -> String {
 
 fn gpui_macos_objc_build() -> cc::Build {
     /*
-    CDXC:AppShots 2026-06-26-04:18:
-    GPUI Objective-C shims must compile against Ghostex's supported macOS 13.0 deployment target, matching the native Xcode project and GPUI package metadata. Do not inherit the current host OS as the minimum target because newer SDKs mark App Shots' real WindowServer capture API unavailable for future deployment targets.
+    CDXC:GhostexCapture 2026-09-30 WHY:
+    GPUI Objective-C shims must compile against Ghostex's supported macOS 13.0 deployment target, matching the native Xcode project and GPUI package metadata. Do not inherit the current host OS as the minimum target: newer SDKs mark the WindowServer capture API Ghostex Capture uses (`CGWindowListCreateImage` in GpuiGhostexCapture.m) unavailable for future deployment targets.
     */
     let mut build = cc::Build::new();
     build
@@ -403,10 +438,7 @@ fn build_windows_app_resource(manifest_dir: &Path) {
     fs::write(&icon_path, icon_bytes)
         .unwrap_or_else(|error| panic!("failed to write {}: {error}", icon_path.display()));
 
-    println!("cargo:rerun-if-env-changed=GHOSTEX_GPUI_MARKETING_VERSION");
-    let package_version = env::var("GHOSTEX_GPUI_MARKETING_VERSION")
-        .unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION"));
-    println!("cargo:rustc-env=GHOSTEX_BUILD_MARKETING_VERSION={package_version}");
+    let package_version = marketing_version().0;
     let mut numeric_version = [0_u16; 4];
     for (index, component) in package_version
         .split_once('-')
@@ -477,9 +509,50 @@ fn build_windows_app_resource(manifest_dir: &Path) {
     );
 }
 
+/// The version the app reports, and whether the release tooling stamped it.
+///
+/// CDXC:Build 2026-10-07 WHY:
+/// The crate versions stay at the placeholder `0.1.0` on purpose (the release skill bumps only the root `package.json`), so `CARGO_PKG_VERSION` is never the app version. Release scripts pass `GHOSTEX_GPUI_MARKETING_VERSION`; every other build (`cargo xtask start`, `cargo check`) reads the same root `package.json` here, so a dev build on any platform shows the real version in About and the feedback footer instead of 0.1.0. The stamped flag is separate because "is this a dev build" used to be answered by "version equals the crate placeholder", which a package.json version would break.
+/// SEE-ALSO: server/build.rs reads the same two sources.
+fn marketing_version() -> (String, bool) {
+    if let Some(version) = env::var("GHOSTEX_GPUI_MARKETING_VERSION")
+        .ok()
+        .map(|version| version.trim().to_string())
+        .filter(|version| !version.is_empty())
+    {
+        return (version, true);
+    }
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let package_json = manifest_dir.join("../../package.json");
+    println!("cargo:rerun-if-changed={}", package_json.display());
+    let text = fs::read_to_string(&package_json)
+        .unwrap_or_else(|error| panic!("read {}: {error}", package_json.display()));
+    let version = text
+        .lines()
+        .find_map(|line| {
+            let rest = line.trim().strip_prefix("\"version\"")?;
+            let rest = rest.trim_start().strip_prefix(':')?;
+            let rest = rest.trim_start().strip_prefix('"')?;
+            Some(rest.split('"').next()?.to_string())
+        })
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| panic!("no \"version\" in {}", package_json.display()));
+    (version, false)
+}
+
 fn main() {
-    println!("cargo:rerun-if-changed={GHOSTTYKIT_HEADER}");
-    println!("cargo:rerun-if-changed={GHOSTTYKIT_ARCHIVE}");
+    // CDXC:Build 2026-10-07 WHY:
+    // The About page, telemetry and the Linux update check read GHOSTEX_BUILD_MARKETING_VERSION on every platform. It used to be emitted only from the Windows resource step, so Linux and macOS release builds showed the crate version (0.1.0) instead of the release version.
+    println!("cargo:rerun-if-env-changed=GHOSTEX_GPUI_MARKETING_VERSION");
+    let (version, stamped) = marketing_version();
+    println!("cargo:rustc-env=GHOSTEX_BUILD_MARKETING_VERSION={version}");
+    println!("cargo:rustc-env=GHOSTEX_BUILD_VERSION_STAMPED={}", u8::from(stamped));
+    // CDXC:Build 2026-10-02 WHY:
+    // Cargo treats a rerun-if-changed path that does not exist as always changed, and GhosttyKit.xcframework only exists on macOS. Emitting these hints on Linux and Windows reran this build script on every build and recompiled the whole ghostex-gpui crate even when nothing had changed.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed={GHOSTTYKIT_HEADER}");
+        println!("cargo:rerun-if-changed={GHOSTTYKIT_ARCHIVE}");
+    }
     emit_cef_component_version();
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
@@ -500,6 +573,15 @@ fn main() {
             "cargo:rustc-link-arg-bin=ghostex-gpui-cef-helper=/MANIFESTINPUT:{}",
             windows_manifest.display()
         );
+        /*
+        CDXC:CefRuntime 2026-09-28 WHY:
+        The web runtime is an optional component, so the app must start with no CEF files present.
+        cef-dll-sys links libcef.dll at load time (and already links delayimp); delay-loading it
+        means Windows resolves the DLL on the first CEF call, which cef/windows.rs makes only after
+        loading the installed component's libcef.dll by full path. The helper stays load-time
+        linked: it only ever runs as a CEF subprocess, with the runtime folder on PATH.
+        */
+        println!("cargo:rustc-link-arg-bin=ghostex-gpui=/DELAYLOAD:libcef.dll");
         return;
     }
 
@@ -535,11 +617,12 @@ fn main() {
     println!("cargo:rerun-if-changed=native/macos/GpuiNavigationGestures.h");
     println!("cargo:rerun-if-changed=native/macos/GpuiNavigationGestures.m");
     println!("cargo:rerun-if-changed=native/macos/GpuiSidebarReveal.m");
+    println!("cargo:rerun-if-changed=native/macos/GpuiDocsDrawer.m");
     let gpui_terminal_appkit_adapter =
         manifest_dir.join("native/macos/GpuiTerminalAppKitAdapter.m");
     let gpui_terminal_mouse_cursor = manifest_dir.join("native/macos/GpuiTerminalMouseCursor.m");
     let gpui_settings_notifications = manifest_dir.join("native/macos/GpuiSettingsNotifications.m");
-    let gpui_app_shots = manifest_dir.join("native/macos/GpuiAppShots.m");
+    let gpui_ghostex_capture = manifest_dir.join("native/macos/GpuiGhostexCapture.m");
     let gpui_app_icon = manifest_dir.join("native/macos/GpuiAppIcon.m");
     let gpui_accessibility_display_options =
         manifest_dir.join("native/macos/GpuiAccessibilityDisplayOptions.m");
@@ -549,6 +632,11 @@ fn main() {
     let gpui_sparkle_updater = manifest_dir.join("native/macos/GpuiSparkleUpdater.m");
     let gpui_standard_about_panel = manifest_dir.join("native/macos/GpuiStandardAboutPanel.m");
     let gpui_app_toast_window_chrome = manifest_dir.join("native/macos/GpuiAppToastWindowChrome.m");
+    let gpui_chat_dialog_window = manifest_dir.join("native/macos/GpuiChatDialogWindow.m");
+    println!(
+        "cargo:rerun-if-changed={}",
+        gpui_chat_dialog_window.display()
+    );
 
     println!("cargo:rerun-if-changed={}", gpui_hooks.display());
     println!(
@@ -563,7 +651,6 @@ fn main() {
         "cargo:rerun-if-changed={}",
         gpui_settings_notifications.display()
     );
-    println!("cargo:rerun-if-changed={}", gpui_app_shots.display());
     println!("cargo:rerun-if-changed={}", gpui_app_icon.display());
     println!(
         "cargo:rerun-if-changed={}",
@@ -600,6 +687,7 @@ fn main() {
         .file(manifest_dir.join("native/macos/GpuiKeyboardShortcuts.m"))
         .file(manifest_dir.join("native/macos/GpuiNavigationGestures.m"))
         .file(manifest_dir.join("native/macos/GpuiSidebarReveal.m"))
+        .file(manifest_dir.join("native/macos/GpuiDocsDrawer.m"))
         .compile("ghostex_gpui_cef_appkit_hooks");
 
     /*
@@ -633,13 +721,12 @@ fn main() {
         .file(gpui_settings_notifications)
         .compile("ghostex_gpui_settings_notifications");
 
-    /*
-    CDXC:AppShots 2026-06-25-23:07:
-    Compile App Shots as a dedicated macOS shim because it owns only shared-settings hotkey monitoring, WindowServer capture, and the `~/.ghostex/i` PNG write path. Keep it separate from CEF, terminal AppKit, and notification shims so the feature does not add overlays, hit-test routing, persistent logging, or renderer-provided screenshot authority.
-    */
+    // Ghostex Capture's floating windows, system-wide hotkeys and screenshots (see the file's
+    // CDXC:GhostexCapture note).
+    println!("cargo:rerun-if-changed={}", gpui_ghostex_capture.display());
     gpui_macos_objc_build()
-        .file(gpui_app_shots)
-        .compile("ghostex_gpui_app_shots");
+        .file(gpui_ghostex_capture)
+        .compile("ghostex_gpui_ghostex_capture");
 
     /*
     CDXC:Icons 2026-07-12:
@@ -700,6 +787,30 @@ fn main() {
         .file(gpui_standard_about_panel)
         .compile("ghostex_gpui_standard_about_panel");
 
+    // The native Settings colour swatch's NSColorPanel (settings_modal_lifecycle.rs).
+    let gpui_color_panel = manifest_dir.join("native/macos/GpuiColorPanel.m");
+    println!("cargo:rerun-if-changed={}", gpui_color_panel.display());
+    gpui_macos_objc_build()
+        .file(gpui_color_panel)
+        .compile("ghostex_gpui_color_panel");
+
+    // The Files view's Open With menu (native_docs/open_externally.rs).
+    let gpui_open_with = manifest_dir.join("native/macos/GpuiOpenWith.m");
+    println!("cargo:rerun-if-changed={}", gpui_open_with.display());
+    gpui_macos_objc_build()
+        .file(gpui_open_with)
+        .compile("ghostex_gpui_open_with");
+
+    // The first-run intro video's WKWebView (window/onboarding/intro_web_view.rs).
+    let gpui_intro_video_web_view = manifest_dir.join("native/macos/GpuiIntroVideoWebView.m");
+    println!(
+        "cargo:rerun-if-changed={}",
+        gpui_intro_video_web_view.display()
+    );
+    gpui_macos_objc_build()
+        .file(gpui_intro_video_web_view)
+        .compile("ghostex_gpui_intro_video_web_view");
+
     /*
     CDXC:AppModal 2026-07-04:
     Compile the toast popup chrome shim separately because it only strips AppKit
@@ -709,6 +820,7 @@ fn main() {
     */
     gpui_macos_objc_build()
         .file(gpui_app_toast_window_chrome)
+        .file(gpui_chat_dialog_window)
         .compile("ghostex_gpui_app_toast_window_chrome");
 
     /*
@@ -746,4 +858,5 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=IOSurface");
     println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
     println!("cargo:rustc-link-lib=framework=UserNotifications");
+    println!("cargo:rustc-link-lib=framework=WebKit");
 }

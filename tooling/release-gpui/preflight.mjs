@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { validateOnDemandManifestV2 } from './on-demand-manifest.mjs';
 import { inspectRelease, verifyPublishedComponent } from './publish-component.mjs';
+import { APP_RELEASE_GITHUB_REPO, COMPONENTS_GITHUB_TOKEN_ENV, componentsGithubRepo } from './components-repo.mjs';
 import { validatePlan } from './plan.mjs';
 import { PRODUCT_IDS, isProductRequested, productDefinition } from './product-inputs.mjs';
 import { assertStagesCoverPlan } from './publish-stage.mjs';
@@ -188,6 +189,10 @@ const componentPlatformsEnabled =
   platforms.linuxTar ||
   platforms.windowsX64 ||
   platforms.windowsArm64;
+if (componentPlatformsEnabled) {
+  /* Component tags live in a separate repository that github.token cannot write; the PAT must exist before any builder starts. */
+  requireValues(`Component publishing to ${componentsGithubRepo()}`, [COMPONENTS_GITHUB_TOKEN_ENV]);
+}
 if (!componentPlatformsEnabled) {
   console.log('Component tag validation skipped: no desktop package is enabled.');
 } else if (existsSync(componentManifestPath)) {
@@ -196,12 +201,13 @@ if (!componentPlatformsEnabled) {
   validateOnDemandManifestV2({
     schemaVersion: 2,
     version,
-    githubRepo: 'maddada/Ghostex',
+    githubRepo: APP_RELEASE_GITHUB_REPO,
     assets: {},
     components,
   });
   for (const component of Object.values(components)) {
-    const release = inspectRelease({ repo: 'maddada/Ghostex', tag: component.downloadTag });
+    const repo = component.githubRepo ?? componentsGithubRepo();
+    const release = inspectRelease({ repo, tag: component.downloadTag });
     verifyPublishedComponent({ component, release });
   }
   console.log(`Validated ${Object.keys(components).length} live component tag(s) against ${componentManifestPath}.`);

@@ -1,0 +1,1 @@
+../../../../../apps/desktop/src/app/gx_chat/storage.rs

@@ -95,6 +95,53 @@ pub(crate) fn read_codex_hook_session_identities(
         .collect()
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ClaudeHookSurfaceRecord {
+    pub agent_session_id: String,
+    pub agent_session_path: Option<String>,
+    pub updated_at: f64,
+}
+
+/// Every Claude conversation id the hook store saw in one terminal surface, oldest first.
+pub(crate) fn read_claude_hook_surface_records(
+    paths: &GxserverPaths,
+    surface_id: &str,
+) -> Vec<ClaudeHookSurfaceRecord> {
+    let store_path = paths
+        .app_state_dir
+        .join("agent-hooks")
+        .join("claude-hook-sessions.json");
+    let data = read_json_object(&read_file_text(&store_path));
+    let Some(sessions) = data.get("sessions").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let text = |entry: &serde_json::Map<String, Value>, key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let mut records: Vec<ClaudeHookSurfaceRecord> = sessions
+        .values()
+        .filter_map(Value::as_object)
+        .filter(|entry| text(entry, "surfaceId").as_deref() == Some(surface_id))
+        .filter_map(|entry| {
+            Some(ClaudeHookSurfaceRecord {
+                agent_session_id: text(entry, "sessionId")?,
+                agent_session_path: text(entry, "transcriptPath"),
+                updated_at: entry
+                    .get("updatedAt")
+                    .and_then(Value::as_f64)
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    records.sort_by(|left, right| left.updated_at.total_cmp(&right.updated_at));
+    records
+}
+
 pub(crate) fn provider_hook_paths(agent_id: &str, hook_paths: &HookPaths) -> Vec<PathBuf> {
     match agent_id {
         "codex" => {
@@ -133,6 +180,9 @@ pub(crate) fn provider_hook_paths(agent_id: &str, hook_paths: &HookPaths) -> Vec
                 ".config/opencode",
                 None,
             );
+            if super::opencode_v2::installed(hook_paths) {
+                return vec![config_dir.join("plugins/ghostex-v2/tui.js"), config_dir.join("cli.json")];
+            }
             vec![
                 config_dir.join("plugins").join("ghostex-session.js"),
                 config_dir.join("opencode.json"),
@@ -186,15 +236,26 @@ pub(crate) fn provider_hook_paths(agent_id: &str, hook_paths: &HookPaths) -> Vec
         }
         "droid" => vec![hook_paths.home_dir.join(".factory").join("settings.json")],
         "rovodev" => vec![hook_paths.home_dir.join(".rovodev").join("config.yml")],
+        /*
+        CDXC:AgentHooks 2026-09-27 WHY:
+        A `hermes -p <name>` session reads only `profiles/<name>/config.yaml`, so hooks in the root config never fire for a bot and its chat stays blank.
+        Only profiles that already have a config are listed, so no config is ever created for a folder Hermes does not treat as a profile.
+        */
         "hermes-agent" => {
-            vec![resolve_config_directory(
+            let hermes_home = resolve_config_directory(
                 &hook_paths.home_dir,
                 hook_paths.respect_config_environment,
                 "HERMES_HOME",
                 ".hermes",
                 None,
-            )
-            .join("config.yaml")]
+            );
+            let mut paths = vec![hermes_home.join("config.yaml")];
+            paths.extend(
+                list_profile_hook_paths(&hermes_home, "profiles", "config.yaml")
+                    .into_iter()
+                    .filter(|path| path.is_file()),
+            );
+            paths
         }
         "codebuddy" => vec![resolve_config_directory(
             &hook_paths.home_dir,
@@ -214,6 +275,7 @@ pub(crate) fn provider_hook_paths(agent_id: &str, hook_paths: &HookPaths) -> Vec
             )
             .join("settings.json")]
         }
+        "empryo" => vec![super::config::empryo_home(hook_paths).join("hooks.json")],
         /*
         Only the primary `config.toml` layout is managed. Kimi Code's legacy
         `~/.kimi` tree is deliberately left alone: writing both would install

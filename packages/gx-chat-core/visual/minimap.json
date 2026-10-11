@@ -1,0 +1,19 @@
+{
+  "minimumTurns": 2,
+  "scale": 1.3,
+  "spacing": 8,
+  "dashHeight": 2,
+  "railWidth": 28,
+  "lineOffset": 12,
+  "columnWidth": 40,
+  "paddingBlock": 24,
+  "topClearance": 40,
+  "maxHeight": 360,
+  "minStep": 4,
+  "dashWidths": [24, 16, 10, 8],
+  "previewLimit": 480,
+  "previewLines": 7,
+  "previewMaxWidth": 400,
+  "previewFontSize": 13,
+  "previewLineHeight": 20
+}

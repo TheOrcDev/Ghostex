@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use crate::logging::{DiagnosticLogScenario, GxserverLogInput, GxserverLogger, LogLevel};
 
 /// CDXC:Drafts 2026-09-05 SEE-ALSO:
-/// packages/core-ui/chat/session-chat-draft-diagnostics.ts uses the same UTF-8 fingerprint for correlating restored fragments with durable saves.
+/// packages/core-ui/chat/session-chat-draft-diagnostics.ts (deleted 2026-10-01) uses the same UTF-8 fingerprint for correlating restored fragments with durable saves.
 pub(crate) fn fingerprint(value: &str) -> Value {
     let hash = value.bytes().fold(0x811c9dc5_u32, |hash, byte| {
         (hash ^ u32::from(byte)).wrapping_mul(0x01000193)

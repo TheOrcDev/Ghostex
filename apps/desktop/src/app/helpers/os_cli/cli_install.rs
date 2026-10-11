@@ -17,13 +17,27 @@ use anyhow::Result;
 
 use crate::app::helpers::*;
 
+const GPUI_GHOSTEX_CLI_BINARY_NAME: &str = if cfg!(windows) {
+    "ghostex.exe"
+} else {
+    "ghostex"
+};
+
+fn gpui_cli_wrapper_name(command: &str) -> String {
+    if cfg!(windows) {
+        format!("{command}.cmd")
+    } else {
+        command.to_string()
+    }
+}
+
 pub(crate) fn gpui_finish_desktop_control_setup(
     driver_installed: bool,
     was_update: bool,
 ) -> Result<String, String> {
     /*
     CDXC:Extensions 2026-08-09:
-    The Cua Driver installer/updater runs in a visible command-pane terminal.
+    The Cua Driver installer/updater runs as a background job whose output Settings shows.
     This completion step installs the bundled Ghostex Computer Use skill through
     the fixed ownership-verified Ghostex CLI helper and reports command failure
     without claiming Desktop Control is ready.
@@ -31,26 +45,34 @@ pub(crate) fn gpui_finish_desktop_control_setup(
     if !driver_installed {
         return Err(
             if was_update {
-                "The Trycua update did not finish successfully. Its terminal tab shows what happened; plugin status was refreshed."
+                "The Fast Computer & Browser Use update did not finish successfully. Settings shows its last output; plugin status was refreshed."
             } else {
-                "The Trycua installer did not finish successfully. Its terminal tab shows what happened; plugin status was refreshed."
+                "The Fast Computer & Browser Use installer did not finish successfully. Settings shows its last output; plugin status was refreshed."
             }
             .to_string(),
         );
     }
 
+    // The cua-driver skill follows the driver it describes; a failure here only adds a note.
+    let skill_note = match gpui_install_cua_driver_skill() {
+        Ok(_) => "",
+        Err(_) => " The Cua Driver skill could not be installed; install it from Settings.",
+    };
     match gpui_install_bundled_ghostex_skill(
         &["computer-use", "install-skill"],
         "Ghostex Computer Use",
     ) {
         Ok(_) => Ok(if was_update {
-            "Trycua is up to date. Ghostex Computer Use is ready.".to_string()
+            format!(
+                "Fast Computer & Browser Use is up to date. Ghostex Computer Use is ready.{skill_note}"
+            )
         } else {
-            "Trycua installed. Grant macOS Accessibility and Screen Recording permissions if needed."
-                .to_string()
+            format!(
+                "Fast Computer & Browser Use installed. Grant accessibility and screen recording permissions if needed.{skill_note}"
+            )
         }),
         Err(message) => Err(format!(
-            "Trycua {}, but Ghostex Computer Use skill could not be installed. {message}",
+            "Fast Computer & Browser Use {}, but Ghostex Computer Use skill could not be installed. {message}",
             if was_update { "updated" } else { "installed" }
         )),
     }
@@ -58,14 +80,14 @@ pub(crate) fn gpui_finish_desktop_control_setup(
 
 pub(crate) fn gpui_repair_ghostex_cli_commands() -> Result<String, String> {
     if gpui_uses_isolated_storage() {
-        return Err("This isolated app does not replace the shared ghostex or gx commands. Use bun run gx:isolated from its checkout.".to_string());
+        return Err("This isolated app does not replace the shared ghostex or gx commands. Use cargo xtask gx-isolated from its checkout.".to_string());
     }
     /*
     CDXC:Cli 2026-06-24-12:56:
-    CLI repair is real only when GPUI is running from a packaged app that ships the native `Contents/Resources/CLI/ghostex` binary. Development binaries must report unavailable status instead of synthesizing wrappers to a source checkout, while packaged repair writes public wrappers outside the app and replaces only marked Ghostex wrappers, app-owned CLI symlinks, or broken symlinks.
+    CLI repair is real only when GPUI is running from a packaged app that ships the native CLI binary. Development binaries must report unavailable status instead of synthesizing wrappers to a source checkout, while packaged repair writes public wrappers outside the app and replaces only marked Ghostex wrappers, app-owned CLI symlinks, or broken symlinks.
     */
     let cli_dir = gpui_bundled_ghostex_cli_resource_dir()?;
-    let cli_binary_path = cli_dir.join("ghostex");
+    let cli_binary_path = cli_dir.join(GPUI_GHOSTEX_CLI_BINARY_NAME);
     let path_entries = gpui_cli_path_entries();
     let common_dirs = gpui_common_cli_install_dirs();
     let install_dirs = gpui_cli_install_dirs(&path_entries, &common_dirs, &cli_dir);
@@ -115,34 +137,40 @@ fn gpui_describe_cli_install_dirs(install_dirs: &[PathBuf]) -> String {
     described.join(", ")
 }
 
-pub(crate) fn gpui_auto_repair_stale_ghostex_cli_wrappers() {
+/// CDXC:Cli 2026-09-24 DECISION:
+/// User: "pls fix root cause here. if we need ghostex cli then lets auto install it". Chat sends and agents need the `ghostex` command, so packaged startup installs the public `ghostex` and `gx` wrappers when either name is missing, and refreshes Ghostex-owned wrappers that point at another or older bundle (Sparkle and DMG updates swap the bundle but never rewrite them). This supersedes the 2026-08-30 rule that startup only refreshed existing wrappers and never did a first install. It runs the same repair as Settings > Integrations, so a command of the same name that Ghostex did not write is never overwritten, and when every wrapper already matches nothing is written.
+/// SEE-ALSO: `session_ghostex_cli_executable` in server/src/zmx/scripts.rs, which pins each session's prompt editor to the bundled CLI without needing PATH.
+pub(crate) fn gpui_auto_install_ghostex_cli_wrappers() {
     if gpui_uses_isolated_storage() {
         return;
     }
-    /*
-    CDXC:Cli 2026-08-30:
-    Sparkle and DMG updates replace the app bundle but never touch the public
-    PATH wrappers, so a wrapper written by an older install keeps exec'ing a
-    path that no longer exists (pre-2026-07-13 wrappers exec a removed Node
-    CLI). Packaged startup therefore refreshes wrappers Ghostex already owns
-    through the same repair the Settings action runs. It is strictly a refresh:
-    when no Ghostex-owned command exists, or every one already matches the
-    canonical wrapper text, nothing is written, so startup never performs a
-    first install for a user who did not opt in.
-    */
     let Ok(cli_dir) = gpui_bundled_ghostex_cli_resource_dir() else {
         return;
     };
-    let cli_binary_path = cli_dir.join("ghostex");
+    let cli_binary_path = cli_dir.join(GPUI_GHOSTEX_CLI_BINARY_NAME);
     let wrapper = gpui_ghostex_cli_wrapper_content(&cli_binary_path);
     let path_entries = gpui_cli_path_entries();
     let common_dirs = gpui_common_cli_install_dirs();
 
-    let mut has_stale_wrapper = false;
+    let mut needs_install = false;
     'commands: for command in ["ghostex", "gx"] {
+        let mut command_exists = false;
         for candidate in gpui_cli_command_path_candidates(command, &path_entries, &common_dirs) {
             if !gpui_path_exists_or_is_symlink(&candidate) {
                 continue;
+            }
+            command_exists = true;
+            match gpui_package_managed_cli(command, &candidate, &cli_binary_path) {
+                GpuiPackageManagedCli::Keep => continue,
+                GpuiPackageManagedCli::Relink { .. } => {
+                    needs_install = true;
+                    break 'commands;
+                }
+                GpuiPackageManagedCli::NotManaged => {}
+            }
+            if gpui_is_broken_symlink(&candidate) {
+                needs_install = true;
+                break 'commands;
             }
             if !gpui_is_ghostex_owned_command_path(command, &candidate, &cli_dir) {
                 continue;
@@ -152,16 +180,20 @@ pub(crate) fn gpui_auto_repair_stale_ghostex_cli_wrappers() {
                     .map(|content| content == wrapper)
                     .unwrap_or(false);
             if !is_current {
-                has_stale_wrapper = true;
+                needs_install = true;
                 break 'commands;
             }
         }
+        if !command_exists {
+            needs_install = true;
+            break;
+        }
     }
-    if !has_stale_wrapper {
+    if !needs_install {
         return;
     }
     if let Err(message) = gpui_repair_ghostex_cli_commands() {
-        eprintln!("ghostex-gpui could not refresh stale Ghostex CLI wrappers: {message}");
+        eprintln!("ghostex-gpui could not install or refresh the Ghostex CLI wrappers: {message}");
     }
 }
 
@@ -203,7 +235,11 @@ pub(crate) fn gpui_bundled_ghostex_cli_resource_dir() -> Result<PathBuf, String>
     let cli_dir = executable
         .parent()
         .map(|executable_dir| executable_dir.join("gxserver/bin"));
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    let cli_dir = executable
+        .parent()
+        .map(|executable_dir| executable_dir.join("resources/native"));
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     let cli_dir: Option<PathBuf> = None;
     let Some(cli_dir) = cli_dir else {
         return Err(
@@ -211,7 +247,7 @@ pub(crate) fn gpui_bundled_ghostex_cli_resource_dir() -> Result<PathBuf, String>
                 .to_string(),
         );
     };
-    if gpui_is_file(&cli_dir.join("ghostex")) {
+    if gpui_is_file(&cli_dir.join(GPUI_GHOSTEX_CLI_BINARY_NAME)) {
         Ok(cli_dir)
     } else {
         Err(
@@ -239,8 +275,38 @@ pub(crate) fn gpui_install_ghostex_cli_command(
     be shadowed by it and status would still say the CLI is unusable.
     */
     let wrapper = gpui_ghostex_cli_wrapper_content(cli_binary_path);
+    #[cfg(windows)]
+    if let Some(existing_path) = gpui_which_command(command) {
+        if !gpui_can_replace_existing_ghostex_command(command, &existing_path, cli_dir) {
+            return GpuiCliCommandInstallResult::Blocked { existing_path };
+        }
+    }
+    // Put back the package-manager links an earlier Ghostex replaced with
+    // wrapper files first, wherever they sit in the search order: the loop
+    // below stops at the first usable directory (GitHub issue #203).
     for directory in install_dirs {
-        let link_path = directory.join(command);
+        let link_path = directory.join(gpui_cli_wrapper_name(command));
+        if !gpui_path_exists_or_is_symlink(&link_path) {
+            continue;
+        }
+        if let GpuiPackageManagedCli::Relink { target } =
+            gpui_package_managed_cli(command, &link_path, cli_binary_path)
+        {
+            let _ = gpui_replace_with_symlink(&link_path, &target);
+        }
+    }
+    for directory in install_dirs {
+        let link_path = directory.join(gpui_cli_wrapper_name(command));
+        match gpui_package_managed_cli(command, &link_path, cli_binary_path) {
+            GpuiPackageManagedCli::Keep => return GpuiCliCommandInstallResult::Current,
+            GpuiPackageManagedCli::Relink { target } => {
+                if gpui_replace_with_symlink(&link_path, &target).is_ok() {
+                    return GpuiCliCommandInstallResult::Repaired;
+                }
+                continue;
+            }
+            GpuiPackageManagedCli::NotManaged => {}
+        }
         let exists = gpui_path_exists_or_is_symlink(&link_path);
         if exists && !gpui_can_replace_existing_ghostex_command(command, &link_path, cli_dir) {
             if gpui_is_executable_file(&link_path) {
@@ -273,6 +339,15 @@ pub(crate) fn gpui_install_ghostex_cli_command(
     GpuiCliCommandInstallResult::Unavailable
 }
 
+#[cfg(windows)]
+pub(crate) fn gpui_ghostex_cli_wrapper_content(cli_binary_path: &Path) -> String {
+    format!(
+        "@echo off\r\nsetlocal DisableDelayedExpansion\r\nrem {GPUI_GHOSTEX_CLI_WRAPPER_MARKER}\r\n\"{}\" %*\r\nexit /b %errorlevel%\r\n",
+        gpui_path_string(cli_binary_path).replace('%', "%%")
+    )
+}
+
+#[cfg(not(windows))]
 pub(crate) fn gpui_ghostex_cli_wrapper_content(cli_binary_path: &Path) -> String {
     /*
     CDXC:Cli 2026-07-13:
@@ -308,11 +383,15 @@ pub(crate) fn gpui_cli_path_entries() -> Vec<PathBuf> {
 }
 
 pub(crate) fn gpui_common_cli_install_dirs() -> Vec<PathBuf> {
-    gpui_unique_paths([
+    #[cfg(windows)]
+    let directories = vec![gpui_home_dir().join(".local/bin")];
+    #[cfg(not(windows))]
+    let directories = vec![
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
         gpui_home_dir().join(".local/bin"),
-    ])
+    ];
+    gpui_unique_paths(directories)
 }
 
 pub(crate) fn gpui_cli_install_dirs(
@@ -332,6 +411,13 @@ pub(crate) fn gpui_cli_install_dirs(
             }
         }
     }
+    #[cfg(windows)]
+    owned_dirs.extend(
+        common_dirs
+            .iter()
+            .filter(|directory| path_entries.contains(directory))
+            .cloned(),
+    );
     gpui_unique_paths(
         owned_dirs
             .into_iter()
@@ -346,10 +432,19 @@ pub(crate) fn gpui_cli_command_path_candidates(
     common_dirs: &[PathBuf],
 ) -> Vec<PathBuf> {
     let found = gpui_which_command(command).into_iter();
+    let wrapper_name = gpui_cli_wrapper_name(command);
     gpui_unique_paths(
         found
-            .chain(path_entries.iter().map(|directory| directory.join(command)))
-            .chain(common_dirs.iter().map(|directory| directory.join(command))),
+            .chain(
+                path_entries
+                    .iter()
+                    .map(|directory| directory.join(&wrapper_name)),
+            )
+            .chain(
+                common_dirs
+                    .iter()
+                    .map(|directory| directory.join(&wrapper_name)),
+            ),
     )
 }
 
@@ -410,7 +505,13 @@ pub(crate) fn gpui_is_ghostex_owned_command_path(
     path: &Path,
     cli_dir: &Path,
 ) -> bool {
-    if gpui_file_contains_ghostex_cli_wrapper_marker(path) {
+    if gpui_file_contains_ghostex_cli_wrapper_marker(path)
+        || matches!(
+            gpui_cli_entry_state(path),
+            GpuiCliEntryState::Symlink { resolved: Some(ref resolved) }
+                if gpui_is_package_cli_link_target(command, resolved)
+        )
+    {
         return true;
     }
     let realpath = gpui_realpath_or_self(path);
@@ -420,12 +521,197 @@ pub(crate) fn gpui_is_ghostex_owned_command_path(
     gpui_is_ghostex_app_owned_command_realpath(command, &realpath)
 }
 
+/// What a PATH entry for `ghostex` or `gx` is, as far as the package-manager rule cares.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpuiCliEntryState {
+    Missing,
+    /// `resolved` is the file the link finally points at, `None` when it dangles.
+    Symlink {
+        resolved: Option<PathBuf>,
+    },
+    /// A wrapper file Ghostex wrote (it carries the CliInstall marker).
+    MarkedWrapper,
+    OtherFile,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpuiPackageManagedCli {
+    /// No package manager owns this entry; the ordinary wrapper rules apply.
+    NotManaged,
+    /// A package manager owns this entry and it works: leave it, the CLI is installed.
+    Keep,
+    /// A package manager owns this name: make the entry the symlink it expects.
+    Relink { target: PathBuf },
+}
+
+/// CDXC:Cli 2026-10-06 WHY:
+/// Never replace a PATH entry a package manager owns. The official Homebrew cask (`brew install --cask ghostex`) links HOMEBREW_PREFIX/bin/ghostex to Ghostex.app/Contents/Resources/CLI/ghostex with a `binary` stanza, and the tap cask links bin/ghostex and bin/gx to its own wrappers in Caskroom/ghostex/<version>/.homebrew-command-wrappers/. Startup used to swap the first for a wrapper file, and Homebrew refuses to replace a file that is not a symlink, so every later `brew upgrade` failed and its rollback deleted Ghostex.app (GitHub issue #203). So a symlink that resolves to a Ghostex.app CLI or into the ghostex Caskroom counts as installed and is never rewritten, and in a Homebrew bin folder whose prefix has the ghostex cask installed, a name the cask owns is only ever written as the symlink the cask expects: a wrapper Ghostex wrote there earlier, a dangling link, or a missing entry becomes that symlink, so the next `brew upgrade` works. `gx` is a cask name only when the tap's Caskroom holds a gx wrapper; the official cask links just `ghostex`, so its `gx` stays a wrapper file Homebrew never touches. Every other install still gets the marked wrapper file (CDXC:Cli 2026-07-13), and the cask's direct link is safe because the bundled CLI is a native binary, not a shell script.
+/// SEE-ALSO: the Caskroom pattern in `gpui_is_probably_ghostex_command` (agents_hub/agent_hook_status.rs), the tap cask's conflict check (maddada/homebrew-tap, Casks/ghostex.rb) and `validateGhostexCask` in tooling/release-shared.mjs.
+pub(crate) fn gpui_package_managed_cli_decision(
+    command: &str,
+    state: &GpuiCliEntryState,
+    cask_link_target: Option<&Path>,
+) -> GpuiPackageManagedCli {
+    if let GpuiCliEntryState::Symlink {
+        resolved: Some(resolved),
+    } = state
+    {
+        if gpui_is_package_cli_link_target(command, resolved) {
+            return GpuiPackageManagedCli::Keep;
+        }
+    }
+    let Some(target) = cask_link_target else {
+        return GpuiPackageManagedCli::NotManaged;
+    };
+    match state {
+        GpuiCliEntryState::Symlink { resolved: Some(_) } => GpuiPackageManagedCli::Keep,
+        GpuiCliEntryState::Missing
+        | GpuiCliEntryState::Symlink { resolved: None }
+        | GpuiCliEntryState::MarkedWrapper => GpuiPackageManagedCli::Relink {
+            target: target.to_path_buf(),
+        },
+        // Someone else's file: the ordinary rules report it as blocking.
+        GpuiCliEntryState::OtherFile => GpuiPackageManagedCli::NotManaged,
+    }
+}
+
+/// A link target only a package manager installing Ghostex creates: the CLI
+/// inside any Ghostex.app (`CLI/gx` is itself a link to `CLI/ghostex`), or a
+/// Homebrew cask wrapper for this command.
+pub(crate) fn gpui_is_package_cli_link_target(command: &str, resolved: &Path) -> bool {
+    let normalized = gpui_path_string(resolved).replace('\\', "/").to_lowercase();
+    normalized.ends_with("/ghostex.app/contents/resources/cli/ghostex")
+        || (normalized.contains("/caskroom/ghostex/")
+            && normalized.ends_with(&format!("/.homebrew-command-wrappers/{command}")))
+}
+
+pub(crate) fn gpui_package_managed_cli(
+    command: &str,
+    link_path: &Path,
+    cli_binary_path: &Path,
+) -> GpuiPackageManagedCli {
+    let state = gpui_cli_entry_state(link_path);
+    let cask_link_target = gpui_homebrew_cask_link_target(command, link_path, cli_binary_path);
+    gpui_package_managed_cli_decision(command, &state, cask_link_target.as_deref())
+}
+
+pub(crate) fn gpui_cli_entry_state(path: &Path) -> GpuiCliEntryState {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return GpuiCliEntryState::Missing;
+    };
+    if metadata.file_type().is_symlink() {
+        return GpuiCliEntryState::Symlink {
+            resolved: fs::canonicalize(path).ok(),
+        };
+    }
+    if gpui_is_marked_ghostex_wrapper_file(path) {
+        GpuiCliEntryState::MarkedWrapper
+    } else {
+        GpuiCliEntryState::OtherFile
+    }
+}
+
+/// The symlink the installed ghostex cask expects at `link_path`, when
+/// `link_path` is `<prefix>/bin/<command>` of a Homebrew prefix that has the
+/// cask installed and the cask owns `command`.
+fn gpui_homebrew_cask_link_target(
+    command: &str,
+    link_path: &Path,
+    cli_binary_path: &Path,
+) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let bin_dir = link_path.parent()?;
+    let caskroom = ["/opt/homebrew", "/usr/local"]
+        .into_iter()
+        .map(Path::new)
+        .find(|prefix| bin_dir == prefix.join("bin"))?
+        .join("Caskroom/ghostex");
+    // An installed cask has a version folder; a failed upgrade rollback leaves
+    // only `.metadata`, and then a fresh `brew install` must find bin empty.
+    let version_dirs = fs::read_dir(&caskroom)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| entry.path())
+        .filter(|path| gpui_is_dir(path))
+        .collect::<Vec<_>>();
+    if version_dirs.is_empty() {
+        return None;
+    }
+    // The tap cask's `command_wrapper` stanzas: newest installed version wins.
+    let tap_wrapper = version_dirs
+        .iter()
+        .map(|version_dir| version_dir.join(".homebrew-command-wrappers").join(command))
+        .filter(|wrapper| gpui_is_file(wrapper))
+        .max_by_key(|wrapper| {
+            fs::metadata(wrapper)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        });
+    if tap_wrapper.is_some() {
+        return tap_wrapper;
+    }
+    // The official cask: `binary "#{appdir}/Ghostex.app/Contents/Resources/CLI/ghostex"`.
+    if command != "ghostex" {
+        return None;
+    }
+    let cask_app_cli = Path::new("/Applications/Ghostex.app/Contents/Resources/CLI/ghostex");
+    Some(if gpui_is_file(cask_app_cli) {
+        cask_app_cli.to_path_buf()
+    } else {
+        cli_binary_path.to_path_buf()
+    })
+}
+
+/// Swaps `path` for a symlink to `target` in one rename, the way
+/// `gpui_write_executable_wrapper` swaps wrapper files.
+fn gpui_replace_with_symlink(path: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "link path has no parent directory",
+            )
+        })?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ghostex");
+        let staging_path = parent.join(format!(
+            ".{file_name}.ghostex-gpui-link-{}-{}",
+            std::process::id(),
+            system_time_epoch_millis_string(SystemTime::now())
+        ));
+        let result = std::os::unix::fs::symlink(target, &staging_path)
+            .and_then(|_| fs::rename(&staging_path, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&staging_path);
+        }
+        result
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, target);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "package-manager CLI links exist only on macOS",
+        ))
+    }
+}
+
 pub(crate) fn gpui_is_ghostex_app_owned_command_realpath(command: &str, realpath: &Path) -> bool {
     let normalized = gpui_path_string(realpath).to_lowercase();
     let managed_gxserver_dir = crate::shared_settings::ghostex_storage_paths().gxserver_data_dir();
     let is_managed_ghostex_cli = realpath
         .file_name()
-        .map(|file_name| file_name.eq_ignore_ascii_case("ghostex"))
+        .map(|file_name| {
+            file_name.eq_ignore_ascii_case("ghostex")
+                || (cfg!(windows) && file_name.eq_ignore_ascii_case("ghostex.exe"))
+        })
         .unwrap_or(false)
         && gpui_path_is_relative_to(realpath, &managed_gxserver_dir);
     is_managed_ghostex_cli
@@ -554,17 +840,26 @@ pub(crate) fn gpui_install_bundled_ghostex_skill(
 ) -> Result<String, String> {
     /*
     CDXC:AgentSkills 2026-06-24-12:56:
-    GPUI Settings installs bundled Ghostex skills by resolving the fixed `ghostex` command on PATH and running only the known `ghostex <namespace> install-skill` argv. Command text never comes from React, child stdout/stderr are suppressed, failures are reported generically, and status is refreshed from disk afterward.
+    GPUI Settings installs bundled Ghostex skills through the platform's owned CLI and only the known `ghostex <namespace> install-skill` argv. Command text never comes from React, child stdout/stderr are suppressed, failures are reported generically, and status is refreshed from disk afterward.
 
     CDXC:AgentSkills 2026-06-24-13:08:
     Executing a PATH `ghostex` command from Settings requires strict Ghostex ownership evidence: a repair marker plus `ghostex-cli.mjs`, or an app-owned realpath recognized by the CLI repair ownership helper. Broad read-only status strings are not sufficient for process execution.
     */
+    #[cfg(windows)]
+    let (ghostex_path, platform_args) =
+        crate::windows_terminal_backend::ghostex_cli_invocation(args)?;
+    #[cfg(windows)]
+    let platform_args = platform_args.iter().map(String::as_str).collect::<Vec<_>>();
+    #[cfg(windows)]
+    let args = platform_args.as_slice();
+    #[cfg(not(windows))]
     let Some(ghostex_path) = gpui_which_command("ghostex") else {
         return Err(
             "Ghostex CLI was not found on PATH. Repair the Ghostex CLI before installing bundled skills."
                 .to_string(),
         );
     };
+    #[cfg(not(windows))]
     if !gpui_is_probably_ghostex_command(&ghostex_path, "ghostex") {
         return Err(
             "A ghostex command exists on PATH, but GPUI could not prove it belongs to Ghostex. Repair the Ghostex CLI before installing bundled skills."

@@ -145,6 +145,7 @@ pub(crate) fn gpui_native_resource_is_user_runtime_process(
         "codex",
         "code-server",
         "computer-use",
+        "spaceo",
         "chrome-devtools",
         "devtools",
     ]
@@ -265,18 +266,6 @@ pub(crate) fn gpui_native_resource_child_rows(
         .collect()
 }
 
-pub(crate) fn format_gpui_resource_cpu(cpu: f64) -> String {
-    format!("CPU {:.0}%", cpu.max(0.0))
-}
-
-pub(crate) fn format_gpui_resource_memory(memory_mb: f64) -> String {
-    if memory_mb >= 1024.0 {
-        format!("RAM {:.1} GB", memory_mb / 1024.0)
-    } else {
-        format!("RAM {:.0} MB", memory_mb.max(0.0))
-    }
-}
-
 pub(crate) fn find_app_bundle_root(path: &std::path::Path) -> Option<PathBuf> {
     for ancestor in path.ancestors() {
         if ancestor
@@ -289,34 +278,46 @@ pub(crate) fn find_app_bundle_root(path: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn file_url(path: &std::path::Path) -> String {
-    format!("file://{}", path.to_string_lossy())
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn file_url(path: &std::path::Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    format!("file:///{}", normalized.trim_start_matches('/'))
+/// CDXC:CefRuntime 2026-09-23 WHY:
+/// Bootstrap delivery pins the requested document URL to CEF's loaded URL; unescaped spaces in Program Files made those identities differ and left Find without its server connection.
+pub(crate) fn file_url(path: &std::path::Path) -> anyhow::Result<String> {
+    gpui::http_client::Url::from_file_path(path)
+        .map(String::from)
+        .map_err(|_| anyhow::anyhow!("CEF entry path must be an absolute file path"))
 }
 
 /// CDXC:Docs 2026-09-10 WHY:
 /// The 1,200-entry budget was exhausted by older screenshots in maestro_swift, leaving newer date folders empty in the sidebar.
 /// Project scans use the same entry budget as mounted Docs trees and report exhausted limits instead of returning partial listings.
-/// SEE-ALSO: server/src/project_docs.rs.
+/// SEE-ALSO: server/src/project_docs/limits.rs.
 pub(crate) const MANAGE_FILE_LIST_MAX_ENTRIES: usize = 20_000;
 pub(crate) const MANAGE_FILE_LIST_MAX_DEPTH: usize = 8;
 /*
 CDXC:Docs 2026-08-09:
-Mirrors `server/src/project_docs.rs`: a mounted Docs directory is a notes
+Mirrors `server/src/project_docs/limits.rs`: a mounted Docs directory is a notes
 tree with a bounded walk. Hitting a limit labels that mount with the cap instead of returning a tree that
 silently stopped.
 */
 pub(crate) const MANAGE_DOCS_TREE_MAX_ENTRIES: usize = 20_000;
 pub(crate) const MANAGE_DOCS_TREE_MAX_DEPTH: usize = 12;
+/// CDXC:Docs 2026-09-28 DECISION:
+/// User: only files that open in the Markdown editor keep the 2 MB preview and save limit, and a Markdown file over it gets an "Open in Code view" button; HTML and every other file Docs shows open at any size. The limit was an agent default nobody asked for, and it hid a 3 MB HTML guide whose screenshots were inlined as base64.
+/// SEE-ALSO: `FILE_PREVIEW_MAX_BYTES` in server/src/project_docs/limits.rs.
 pub(crate) const MANAGE_FILE_PREVIEW_MAX_BYTES: u64 = 2_000_000;
 pub(crate) const MANAGE_FILE_SAVE_MAX_BYTES: usize = 2_000_000;
 pub(crate) const MANAGE_GIT_BASELINE_MAX_BYTES: usize = 1024 * 1024;
+
+/// Whether Docs opens this file in its Markdown editor (the Docs page's `isMarkdownPath` plus the
+/// native view's `.mdx`), the only kind the preview and save limits apply to.
+pub(crate) fn manage_file_opens_in_markdown_editor(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.rsplit_once('.').is_some_and(|(_, extension)| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "md" | "markdown" | "mdown" | "mkdn" | "mdx"
+        )
+    })
+}
 pub(crate) const MANAGE_REMOTE_RESOURCE_MAX_BYTES: usize = 12 * 1024 * 1024;
 pub(crate) const MANAGE_SESSION_CONTEXT_MAX_BYTES: usize = 300_000;
 pub(crate) static MANAGE_REMOTE_RESOURCE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -325,7 +326,7 @@ pub(crate) const MANAGE_BUILT_IN_DOCS_RELATIVE_PATHS: &[&str] =
     &[MANAGE_DOCS_RELATIVE_PATH, "artifacts", "ai", "tmp"];
 /*
 CDXC:Docs 2026-08-09:
-Mirrors `EXTRA_ROOT_MOUNT_SEGMENT` in `server/src/project_docs.rs`: the
+Mirrors `EXTRA_ROOT_MOUNT_SEGMENT` in `server/src/project_docs/limits.rs`: the
 reserved first path segment that addresses the mounted Docs directory. Every
 other Docs path is project-relative, so one relative path can only ever mean one
 root and no read, save, rename, delete, move, or reveal can resolve out of the
@@ -414,8 +415,6 @@ pub(crate) const GPUI_REMOTE_GXSERVER_TUNNEL_PORT_MIN: u16 = 42_000;
 pub(crate) const GPUI_REMOTE_GXSERVER_TUNNEL_PORT_MAX: u16 = 58_999;
 pub(crate) const GPUI_REMOTE_GXSERVER_TUNNEL_ATTEMPTS: usize = 8;
 pub(crate) const GPUI_REMOTE_GXSERVER_PARAMS_MAX_BYTES: usize = 64 * 1024;
-pub(crate) const GPUI_REMOTE_GXSERVER_SIDEBAR_REQUEST_TIMEOUT_MIN_MS: u64 = 1_000;
-pub(crate) const GPUI_REMOTE_GXSERVER_SIDEBAR_REQUEST_TIMEOUT_MAX_MS: u64 = 130_000;
 pub(crate) const GPUI_REMOTE_GXSERVER_PRESENTATION_STREAM_ATTEMPTS: usize = 4;
 pub(crate) const GPUI_REMOTE_GXSERVER_PRESENTATION_STREAM_FRAME_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const GPUI_REMOTE_GXSERVER_PRESENTATION_STREAM_HANDSHAKE_TIMEOUT: Duration =
@@ -457,6 +456,9 @@ pub(crate) const GPUI_MACOS_SCREEN_RECORDING_PREFERENCES_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 pub(crate) const GPUI_MACOS_NOTIFICATION_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+/// Settings > System > Notifications, where Ghostex's toasts are allowed or blocked.
+#[cfg(target_os = "windows")]
+pub(crate) const GPUI_WINDOWS_NOTIFICATION_SETTINGS_URL: &str = "ms-settings:notifications";
 /// CDXC:Cli 2026-09-03 WHY:
 /// This value is the on-disk ownership stamp written into the public `ghostex`
 /// and `gx` wrappers and read back to tell a Ghostex wrapper from a foreign
@@ -466,19 +468,8 @@ pub(crate) const GPUI_MACOS_NOTIFICATION_SETTINGS_URL: &str =
 /// would have made CLI repair and `brew upgrade` treat their own wrappers as
 /// foreign. Changing it means accepting both spellings for at least one
 /// release.
-/// SEE-ALSO: the cask body and `validateGhostexCask` in tooling/release-ghostex.mjs.
+/// SEE-ALSO: the tap cask (maddada/homebrew-tap, Casks/ghostex.rb) and `validateGhostexCask` in tooling/release-shared.mjs.
 pub(crate) const GPUI_GHOSTEX_CLI_WRAPPER_MARKER: &str = "CDXC:CliInstall 2026-06-12-09:31";
-pub(crate) const GPUI_GTE_INSTALL_ACTION_ID: &str = "installGte";
-pub(crate) const GPUI_GTE_HOMEBREW_INSTALL_SCRIPT: &str = concat!(
-    "if command -v brew >/dev/null 2>&1; then BREW=$(command -v brew); ",
-    "elif [ -x /opt/homebrew/bin/brew ]; then BREW=/opt/homebrew/bin/brew; ",
-    "elif [ -x /usr/local/bin/brew ]; then BREW=/usr/local/bin/brew; ",
-    "else echo 'Homebrew was not found on PATH, /opt/homebrew/bin, or /usr/local/bin.' >&2; exit 127; fi; ",
-    "\"$BREW\" install maddada/tap/gte"
-);
-pub(crate) const GPUI_GTE_INSTALL_SUCCESS_MESSAGE: &str = "gte installed from Homebrew.";
-pub(crate) const GPUI_GTE_INSTALL_FAILURE_MESSAGE: &str =
-    "gte install failed. Install Homebrew or run brew install maddada/tap/gte in a terminal.";
 pub(crate) const GPUI_BUNDLED_GHOSTEX_AGENT_SKILL_NAMES: &[&str] = &[
     /*
     CDXC:AgentSkills 2026-06-26-13:47:
@@ -487,13 +478,15 @@ pub(crate) const GPUI_BUNDLED_GHOSTEX_AGENT_SKILL_NAMES: &[&str] = &[
     "ghostex-browser-use",
     "ghostex-embedded-browser-use",
     "ghostex-computer-use",
+    "ghostex-spaceo",
     "ghostex-cli",
     "ghostex-help",
-    "ghostex-fable-56-orchestration",
+    "ghostex-agents",
     "ghostex-manage-beads",
     "ghostex-auto-rename-session",
     "ghostex-move-codex-session",
     "ghostex-manage-beads",
+    "ghostex-visuals",
 ];
 
 /// CDXC:Resources 2026-09-06 WHY:

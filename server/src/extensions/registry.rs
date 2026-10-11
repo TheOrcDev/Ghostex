@@ -24,12 +24,20 @@ pub(crate) struct ExtensionRegistry {
 
 impl ExtensionRegistry {
     pub(crate) fn new_with_api_url(paths: &GxserverPaths, api_url: String) -> Self {
-        Self {
+        let registry = Self {
             extensions_dir: paths.extensions_dir.clone(),
             store_file: paths.extensions_store_file.clone(),
             gate: Arc::new(Mutex::new(())),
             runtime: ExtensionRuntime::new(api_url),
+        };
+        // CDXC:Workarea 2026-09-22 DECISION:
+        // User: remove the original Storybook extension and keep only the built-in view.
+        if registry.installed_dir().join("storybook").exists() {
+            if let Err(error) = registry.uninstall("storybook") {
+                eprintln!("Could not retire the replaced Storybook extension: {error}");
+            }
         }
+        registry
     }
 
     pub(crate) fn list(&self) -> ExtensionResult<Vec<InstalledExtension>> {
@@ -168,6 +176,11 @@ impl ExtensionRegistry {
         manifest: super::ExtensionManifest,
     ) -> ExtensionResult<InstalledExtension> {
         let id = manifest.name.clone();
+        if id == "storybook" {
+            return Err(ExtensionError::bad_request(
+                "Storybook is now a built-in view. Open it from the project view picker.",
+            ));
+        }
         self.runtime.stop(&id)?;
         let mut store = read_store(&self.store_file)?;
         let state = store_entry_for_install(&manifest, store.get(&id));
@@ -229,6 +242,9 @@ impl ExtensionRegistry {
                 .into_string()
                 .map_err(|_| ExtensionError::internal("Installed extension id is not UTF-8."))?;
             validate_extension_id(&id)?;
+            if id == "storybook" {
+                continue;
+            }
             let manifest = read_manifest(&entry.path(), Some(&id))?;
             let state = store
                 .get(&id)
@@ -339,6 +355,11 @@ impl ExtensionRegistry {
         context: ExtensionLaunchContext,
     ) -> ExtensionResult<ExtensionRuntimeStatus> {
         validate_extension_id(id)?;
+        if id == "storybook" {
+            return Err(ExtensionError::bad_request(
+                "Storybook is now a built-in view.",
+            ));
+        }
         let _guard = self.lock()?;
         let payload_dir = self.installed_dir().join(id);
         let manifest = read_manifest(&payload_dir, Some(id)).map_err(|error| {

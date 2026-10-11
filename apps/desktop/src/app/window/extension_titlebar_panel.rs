@@ -8,6 +8,9 @@ pub(crate) struct GpuiTitlebarExtensionPopupState {
     pub(crate) generation: u64,
     pub(crate) panel: Option<Entity<GpuiTitlebarExtensionPanel>>,
     pub(crate) error: Option<String>,
+    /// The page URL while the panel waits for the web runtime to start (or be installed); the
+    /// panel is created from it once CEF is ready.
+    pub(crate) waiting_for_web_runtime: Option<String>,
 }
 
 pub(crate) struct GpuiTitlebarExtensionPanel {
@@ -37,11 +40,6 @@ impl GpuiTitlebarExtensionPanel {
             false,
             None,
             Some(popup_open_handler),
-            None,
-            None,
-            None,
-            None,
-            None,
             None,
             None,
             None,

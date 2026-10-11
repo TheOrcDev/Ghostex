@@ -722,7 +722,7 @@ pub(crate) fn gpui_portless_current_user_field(argument: &str) -> Option<String>
         .filter(|value| !value.is_empty())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn gpui_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -1,0 +1,1 @@
+../../../../desktop/src/app/native_chat/completed_work_row.rs

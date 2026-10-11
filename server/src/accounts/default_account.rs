@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use std::{cmp::Ordering, collections::BTreeMap};
 /// CDXC:AgentProviders 2026-09-11 DECISION:
 /// User: each provider's account for new sessions follows one rule, with Auto (recommended) as the default and top option, then Most limit remaining, Soonest reset, Most used first, Same as last session, and finally any one pinned account. Auto combines remaining limit and reset time into one number: for every usage window, the remaining percent divided by the hours until that window resets, keeping the smallest across the account's windows as its sustainable rate; the account with the highest sustainable rate wins, so capacity about to refresh is spent first and an account whose weekly limit is nearly gone drops down even when its short window is fresh. The automatic rules consider only accounts marked Automatic, never Manual ones; a pinned account and the last-session account are explicit choices and may be Manual. Every automatic rule ranks accounts with usage data before those without, and accounts that still have capacity before exhausted ones, then applies its own order: lowest highest-window usage (most remaining), highest usage (most used first), or earliest reset time (soonest reset), with ties falling to the lower slot. Same as last session reuses the account of the most recent launch or switch for that provider, and ranks by Auto until one exists. When the rule yields no account the launch keeps the current CLI login.
-/// SEE-ALSO: launch::apply_new_session, the `defaultAccounts` and `newSessionAccounts` fields built in endpoint::state_value, packages/shared/agent-accounts.ts `quickLaunchAccountId` and `NEW_SESSION_ACCOUNT_RULES`, packages/core-ui/accounts/manager.tsx, apps/desktop/src/app/window/new_thread_picker.rs.
+/// SEE-ALSO: launch::apply_new_session, the `defaultAccounts` and `newSessionAccounts` fields built in endpoint::state_value, packages/shared/agent-accounts.ts `quickLaunchAccountId` and `NEW_SESSION_ACCOUNT_RULES`, packages/core-ui/accounts/manager.tsx (deleted 2026-10-01), apps/desktop/src/app/window/new_thread_picker.rs.
 pub(crate) fn quick_launch_account<'a>(
     registry: &'a Registry,
     snapshot: &Snapshot,
@@ -27,6 +27,7 @@ pub(crate) fn quick_launch_account<'a>(
                 .last_used_accounts
                 .get(&provider)
                 .and_then(|id| registered(id))
+                .filter(|account| account.disabled.is_none())
             {
                 return Some(account);
             }

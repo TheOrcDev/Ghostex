@@ -100,14 +100,14 @@ Suggested modules:
 - `src/protocol.rs`: Rust mirror of the current TypeScript protocol constants, envelopes, and shared structs.
 - `src/http.rs`: HTTP routing, auth/protocol gates, CORS, JSON body limit.
 - `src/events.rs`: WebSocket event hub and renderer-command dispatch.
-- `src/storage.rs`: SQLite connection, migrations, config layout.
+- `src/storage/`: SQLite connection, migrations, config layout.
 - `src/domain.rs`: project/session repository.
 - `src/presentation.rs`: sidebar presentation snapshots, search, deltas.
 - `src/zmx.rs`: zmx command construction, probing, start/attach/send/history/kill.
 - `src/agents.rs`: agent settings, launch/resume/fork plans, activity status.
 - `src/typed_ops.rs`: typed Git/GitHub/worktree/Beads operations.
-- `src/repository_clone.rs`: clone preview/jobs/cancel/poll.
-- `src/logging.rs`: support-bundle-safe structured JSONL logging.
+- `src/repository_clone/`: clone preview/jobs/cancel/poll.
+- `src/logging/`: support-bundle-safe structured JSONL logging.
 - `src/runtime.rs`: runtime metadata and status helpers.
 - `tests/compat/`: black-box compatibility tests shared against TS and Rust daemons.
 

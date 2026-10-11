@@ -18,14 +18,16 @@ pub(crate) fn gpui_bundled_agent_skill_name(skill_id: &str) -> Option<&'static s
     match skill_id {
         "browserUse" => Some("ghostex-browser-use"),
         "computerUse" => Some("ghostex-computer-use"),
+        "spaceo" => Some("ghostex-spaceo"),
         "embeddedBrowserUse" => Some("ghostex-embedded-browser-use"),
         "cli" => Some("ghostex-cli"),
         "help" => Some("ghostex-help"),
-        "fable56Orchestration" => Some("ghostex-fable-56-orchestration"),
+        "agentsOrchestration" => Some("ghostex-agents"),
         "manageBeads" => Some("ghostex-manage-beads"),
         "generateTitle" => Some("ghostex-auto-rename-session"),
         "manageBeads" => Some("ghostex-manage-beads"),
         "moveCodexSession" => Some("ghostex-move-codex-session"),
+        "visuals" => Some("ghostex-visuals"),
         _ => None,
     }
 }
@@ -70,23 +72,23 @@ pub(crate) fn gpui_cef_html_entry_url(env_var: &str, entry_file_name: &str) -> R
             .join("Contents/Resources/sidebar")
             .join(entry_file_name);
         if bundled.exists() {
-            return Ok(file_url(&bundled));
+            return file_url(&bundled);
         }
     }
 
     /*
     CDXC:PlatformSupport 2026-08-04:
     Packaged Windows and Linux builds stage every first-party CEF entry in
-    dist/sidebar beside the executable, just like sidebar_url's packaged
-    lookup. Resolve that directory before the compile-time checkout path so an
-    installed Ghostex never loads modal-host, titlebar-host, Kanban, Manage, or
-    Chat artifacts from the source tree that happened to build the binary.
+    dist/sidebar beside the executable. Resolve that directory before the
+    compile-time checkout path so an installed Ghostex never loads Manage
+    artifacts from the source tree that
+    happened to build the binary.
     */
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     if let Some(exe_dir) = executable.parent() {
         let packaged = exe_dir.join("dist/sidebar").join(entry_file_name);
         if packaged.exists() {
-            return Ok(file_url(&packaged));
+            return file_url(&packaged);
         }
     }
 
@@ -94,22 +96,16 @@ pub(crate) fn gpui_cef_html_entry_url(env_var: &str, entry_file_name: &str) -> R
         .join("dist/sidebar")
         .join(entry_file_name);
     if local.exists() {
-        return Ok(file_url(&local));
+        return file_url(&local);
     }
 
     anyhow::bail!("GPUI CEF workarea bundle entry was not found")
-}
-
-pub(crate) fn app_modal_host_url() -> Result<String> {
-    gpui_cef_html_entry_url("GHOSTEX_GPUI_APP_MODAL_HOST_URL", "modal-host.html")
-        .context("failed to resolve GPUI app-modal host bundle URL")
 }
 
 /// Where a command tab dropped into the Agents workspace should land.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandToAgentsDropPlacement {
     PaneBody(WorkspaceDropZone),
-    TabStrip(usize),
 }
 
 pub(crate) fn apply_gpui_terminal_runtime_action_events(
@@ -129,17 +125,6 @@ pub(crate) fn apply_gpui_terminal_runtime_action_events(
                 runtime_state_changed = true;
             }
             GhosttyRuntimeActionEvent::SetTitle { title } => {
-                if title == TEMP_REMOTE_LOCAL_READY_TITLE || title == TEMP_REMOTE_SSH_READY_TITLE {
-                    support_logs::append_temporary(
-                        support_logs::GpuiSupportLog::TerminalFocus,
-                        if title == TEMP_REMOTE_LOCAL_READY_TITLE {
-                            "TEMP.remoteNewTerminal.localWrapperReady"
-                        } else {
-                            "TEMP.remoteNewTerminal.remoteCommandReady"
-                        },
-                        serde_json::json!({ "engine": "ghostty" }),
-                    );
-                }
                 osc_states.entry(runtime_session_id).or_default().title = Some(title);
                 runtime_state_changed = true;
             }

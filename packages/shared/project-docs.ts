@@ -67,7 +67,9 @@ export type ProjectDocsRequest = {
     | 'createFolder'
     | 'move'
     | 'revealInFinder'
+    | 'openInCodeView'
     | 'openDocsFoldersSettings'
+    | 'openDocsFile'
     | 'annotationSendTarget'
     | 'sendAnnotationFeedback';
   content?: string;
@@ -169,13 +171,13 @@ export function decodeProjectDocsResourceResponse(value: unknown, requestId: str
     value.action !== PROJECT_DOCS_RESOURCE_ACTION ||
     value.requestId !== requestId
   ) {
-    throw new Error('The Docs service returned an invalid resource response.');
+    throw new Error('The Files service returned an invalid resource response.');
   }
   if (typeof value.error === 'string' && value.error.length > 0) {
     throw new Error(value.error);
   }
   if (typeof value.dataBase64 !== 'string') {
-    throw new Error('The Docs service returned an invalid resource response.');
+    throw new Error('The Files service returned an invalid resource response.');
   }
   const decoded = globalThis.atob(value.dataBase64);
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
@@ -196,7 +198,7 @@ export async function readProjectDocsResource(
 
 function checkedProjectDocsResponse(value: unknown, requestId: string): Record<string, unknown> {
   if (!isProjectDocsResponseRecord(value) || value.requestId !== requestId) {
-    throw new Error('The Docs service returned an invalid response.');
+    throw new Error('The Files service returned an invalid response.');
   }
   if (typeof value.error === 'string' && value.error.length > 0) {
     throw new Error(value.error);
@@ -218,7 +220,7 @@ export async function listProjectMarkdownDocumentPaths(
     requestId
   );
   if (!Array.isArray(response.entries)) {
-    throw new Error('Docs did not return the project file list.');
+    throw new Error('The Files service did not return the project file list.');
   }
   return response.entries.flatMap((entry) => {
     if (!isProjectDocsResponseRecord(entry) || entry.kind !== 'file' || typeof entry.path !== 'string') {
@@ -250,7 +252,7 @@ export async function saveProjectMarkdownDocument(
     saveRequestId
   );
   if (!isProjectDocsResponseRecord(saved.file)) {
-    throw new Error('Docs did not return the saved Markdown file.');
+    throw new Error('The Files service did not return the saved Markdown file.');
   }
 
   const pathRequestId = createProjectDocsRequestId('saved-message-path');
@@ -264,7 +266,7 @@ export async function saveProjectMarkdownDocument(
     pathRequestId
   );
   if (typeof resolved.fullPath !== 'string' || resolved.fullPath.length === 0) {
-    throw new Error('Docs did not return the saved Markdown path.');
+    throw new Error('The Files service did not return the saved Markdown path.');
   }
   return { path: resolved.fullPath };
 }
@@ -285,7 +287,7 @@ export function requestProjectDocsFromHost(
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       transport.eventTarget.removeEventListener(transport.eventName, handleResponse);
-      reject(new Error('Docs request timed out.'));
+      reject(new Error('Files request timed out.'));
     }, transport.timeoutMs);
     function handleResponse(event: Event) {
       const response = (event as CustomEvent<ProjectDocsResponse>).detail;

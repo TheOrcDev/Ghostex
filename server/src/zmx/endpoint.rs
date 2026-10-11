@@ -584,6 +584,34 @@ pub fn dispatch_zmx_lifecycle_endpoint(
                         presentation_session: None,
                     });
                 }
+                /*
+                CDXC:SessionSleep 2026-09-24 DECISION:
+                User: a session whose agent still has a background shell or monitor running (the grey
+                dot) is not inactive, so Sleep Inactive, Close Inactive and Auto Sleep skip it. The
+                decline lives here so every client's sweep gets the same answer; an explicit Sleep on
+                the row still goes through.
+                */
+                if crate::presentation::session_background_work_detected_at(&session).is_some() {
+                    return Ok(ZmxEndpointOutput {
+                        created_workspace_terminal: None,
+                        result: json!({ "declined": "backgroundWork", "session": session }),
+                        presentation_session: None,
+                    });
+                }
+                /*
+                CDXC:SessionSleep 2026-10-01 DECISION:
+                User: "please don't sleep terminal sessions that have shell running or a question
+                status". A session with an unanswered question card (the pink question dot) is
+                waiting on the user, so every client's inactivity sweep is declined here too; an
+                explicit Sleep on the row still goes through.
+                */
+                if crate::session_chat_async_questions::pending_question_count(&session) > 0 {
+                    return Ok(ZmxEndpointOutput {
+                        created_workspace_terminal: None,
+                        result: json!({ "declined": "pendingQuestion", "session": session }),
+                        presentation_session: None,
+                    });
+                }
             }
             let target_lifecycle = if endpoint_path == "/api/sleepSession" {
                 "sleeping"
@@ -636,6 +664,21 @@ pub(crate) fn read_zmx_session_history_capture(
         read_zmx_session_screen_capture(&zmx_name)
     };
     capture.map_err(ZmxEndpointError::DependencyUnavailable)
+}
+
+/// The session's screen as a VT capture whatever the agent, for a reader that needs the styling.
+pub(crate) fn read_zmx_session_history_capture_vt(
+    repository: &DomainRepository<'_>,
+    project_id: &str,
+    session_id: &str,
+) -> ZmxEndpointResult<ZmxHistoryCapture> {
+    let lifecycle = LifecycleParams {
+        project_id: project_id.to_string(),
+        session_id: session_id.to_string(),
+    };
+    let session = require_session(repository, &lifecycle)?;
+    let zmx_name = provider_zmx_session_name(&session)?;
+    read_zmx_session_screen_capture_vt(&zmx_name).map_err(ZmxEndpointError::DependencyUnavailable)
 }
 
 /*
@@ -787,11 +830,13 @@ impl ZmxQueuedSessionMessage {
     submitted. The clear burst obeys the same rule for the same reason.
     */
     fn steps(&self) -> Vec<crate::session_chat_send::SessionChatSendStep> {
-        if crate::session_chat_composer::session_chat_composer_agent_id(&self.session).as_deref()
-            == Some("grok")
-        {
+        let agent = crate::session_chat_composer::session_chat_composer_agent_id(&self.session);
+        // Empryo opens its command palette on the Ctrl+K below and steers a running turn on a
+        // bare Return, so it takes the chat send's own clear and submit (CDXC:SessionChat
+        // 2026-10-06 in session_chat_send/steps.rs).
+        if let Some(agent @ ("grok" | "empryo")) = agent.as_deref() {
             let mut steps = crate::session_chat_send::build_session_chat_message_steps(
-                Some("grok"),
+                Some(agent),
                 &self.text,
                 &[],
                 false,
@@ -805,8 +850,18 @@ impl ZmxQueuedSessionMessage {
             }
             return steps;
         }
-        let mut steps =
-            crate::session_chat_send::build_agent_tui_clear_input_steps(None, &self.text);
+        // CDXC:SessionChat 2026-09-26 WHY:
+        // Native Windows PowerShell clears its input with Escape. The agent Ctrl+U/Ctrl+K burst is inserted literally by its console reader and makes the next command fail.
+        let mut steps = if cfg!(windows) && agent.is_none() {
+            vec![
+                crate::session_chat_send::SessionChatSendStep::Write("\u{1b}".to_string()),
+                crate::session_chat_send::SessionChatSendStep::SleepMs(
+                    crate::session_chat_send::SESSION_CHAT_CLEAR_INPUT_SETTLE_MS,
+                ),
+            ]
+        } else {
+            crate::session_chat_send::build_agent_tui_clear_input_steps(None, &self.text)
+        };
         steps.push(crate::session_chat_send::SessionChatSendStep::Write(
             if self.submit {
                 crate::session_chat_send::disambiguate_agent_tui_submit_text(&self.text)
@@ -928,6 +983,7 @@ pub fn dispatch_zmx_session_interaction_endpoint(
     let diagnostic_source = read_diagnostic_input_source(params);
     match endpoint_path {
         "/api/readSessionText" => {
+            let agent = crate::session_chat_composer::session_chat_composer_agent_id(&session);
             let result = run_zmx_interaction_command(
                 build_zmx_history_command(&zmx_name, &zmx.executable_path),
                 ZmxCommandOptions {
@@ -945,7 +1001,15 @@ pub fn dispatch_zmx_session_interaction_endpoint(
             output.insert("provider".to_string(), json!("zmx"));
             output.insert("session".to_string(), session);
             output.insert("source".to_string(), json!("history"));
-            output.insert("text".to_string(), Value::String(result.stdout));
+            let (text, suggestion) = super::read_text_suggestion::mark_claude_input_suggestion(
+                agent.as_deref(),
+                &zmx_name,
+                result.stdout,
+            );
+            if let Some(suggestion) = suggestion {
+                output.insert("inputSuggestion".to_string(), Value::String(suggestion));
+            }
+            output.insert("text".to_string(), Value::String(text));
             output.insert(
                 "truncated".to_string(),
                 Value::Bool(result.stdout_truncated),
@@ -1050,9 +1114,12 @@ from stdin) instead of growing a second pty-write mechanism. One call = one
 stdin burst; the queue owns all pacing (clear burst, bracketed-paste body,
 separate delayed Enter) between bursts.
 */
+/// CDXC:SessionChat 2026-09-16 WHY:
+/// Escape and terminal controls must not wait for a fresh login shell to source the user's profile on every keystroke.
+/// The bundled provider receives these bytes on stdin; the user's existing terminal shell owns their interpretation.
 pub(crate) fn session_chat_zmx_write(zmx_name: &str, payload: &str) -> Result<i32, String> {
     let zmx = require_bundled_zmx()?;
-    let result = run_zmx_interaction_command(
+    let result = run_zmx_profileless_command(
         build_zmx_send_command(zmx_name, &zmx.executable_path),
         ZmxCommandOptions {
             stdin: Some(payload.to_string()),

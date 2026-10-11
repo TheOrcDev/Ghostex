@@ -41,6 +41,12 @@ jobs:
     env:
       GHOSTEX_RELEASE_PLAN: ${{ inputs.plan }}
       GHOSTEX_RELEASE_WORKFLOW_SHA: ${{ github.sha }}
+      GOMOBILE_PIN: v0.0.0-20260821190718-4776eadac327
+      # The NDK compiler cache (ccache) and the gomobile bridge cache are keyed
+      # on this pin, so a bump invalidates both.
+      ANDROID_NDK_VERSION: 29.0.14206865
+      # Builds the Rust chat core's Android libraries (packages/gx-chat-mobile/build.sh).
+      CARGO_NDK_VERSION: 4.1.2
     steps:
       - uses: actions/checkout@v6
         with:
@@ -75,37 +81,107 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;29.0.14206865"
+          # The cache keys below name the NDK through ANDROID_NDK_VERSION; a pin
+          # bump that forgets the job env would otherwise serve a stale bridge.
+          test -d "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
       # The tailcat gomobile bridge is build output, so it is deliberately not in
       # git (four ~35 MB libgojni.so files). It is generated here from the
       # committed Go source, after the submodule checkout that creates its
       # destination and after the NDK install that gomobile needs, and before the
       # Gradle build that compiles GhostexSshConnection.kt against it.
-      - uses: actions/setup-go@v6
+      #
+      # CDXC:Release 2026-09-16 WHY: the 9.6.0 run spent 4 minutes in this step
+      # on every release although its inputs (the Go sources, go.mod/go.sum, the
+      # gomobile pin, the Go toolchain, the NDK) rarely change. The staged output
+      # is therefore cached on exactly those inputs; on a hit the Go toolchain is
+      # not even installed. A miss rebuilds from source exactly as before.
+      - name: Restore the tailcat gomobile bridge
+        id: tailcat_bridge_cache
+        uses: actions/cache@v6
         with:
-          go-version: '1.27.0'
+          path: |
+            apps/mobile/app/modules/ghostex-native/android/libs/tailcatbridge.jar
+            apps/mobile/app/modules/ghostex-native/android/src/main/jniLibs
+          key: tailcat-bridge-android-${{ runner.os }}-go1.27.1-ndk${{ env.ANDROID_NDK_VERSION }}-gomobile-${{ env.GOMOBILE_PIN }}-${{ hashFiles('apps/mobile/tailcat-bridge/*.go', 'apps/mobile/tailcat-bridge/go.mod', 'apps/mobile/tailcat-bridge/go.sum', 'apps/mobile/tailcat-bridge/build.sh') }}
+      - uses: actions/setup-go@v6
+        if: steps.tailcat_bridge_cache.outputs.cache-hit != 'true'
+        with:
+          go-version: '1.27.1'
           cache-dependency-path: apps/mobile/tailcat-bridge/go.sum
       - name: Build the tailcat gomobile bridge
-        env:
-          GOMOBILE_PIN: v0.0.0-20260821190718-4776eadac327
+        if: steps.tailcat_bridge_cache.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
           export PATH="$(go env GOPATH)/bin:$PATH"
           go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_PIN" "golang.org/x/mobile/cmd/gobind@$GOMOBILE_PIN"
           gomobile init
           apps/mobile/tailcat-bridge/build.sh --target android
+      - name: Verify the tailcat gomobile bridge
+        run: |
           MODULE=apps/mobile/app/modules/ghostex-native/android
           test -s "$MODULE/libs/tailcatbridge.jar"
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             test -s "$MODULE/src/main/jniLibs/$abi/libgojni.so"
           done
+      # CDXC:Release 2026-09-25 WHY: the phone's chat runs on the Rust chat core
+      # through UniFFI (`apps/mobile/app/modules/gx-chat-core`). Its `.so` files
+      # and Kotlin bindings are gitignored outputs of
+      # `packages/gx-chat-mobile/build.sh`, so without this step Gradle cannot
+      # compile the module. They are built from this checkout, so the APK
+      # carries the same chat core as the desktop release, for all four ABIs
+      # the APK ships (a missing ABI would crash the chat on that phone). The
+      # staged output is cached on exactly its inputs: the three crates, the
+      # toolchain pin inside `packages/gx-chat-mobile`, the NDK and cargo-ndk.
+      - name: Restore the Rust chat core for Android
+        id: gx_chat_core_cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            apps/mobile/app/modules/gx-chat-core/android/src/main/jniLibs
+            apps/mobile/app/modules/gx-chat-core/android/src/main/java/dev/ghostex/gxchatcore/uniffi
+          key: gx-chat-core-android-${{ runner.os }}-ndk${{ env.ANDROID_NDK_VERSION }}-cargo-ndk${{ env.CARGO_NDK_VERSION }}-${{ hashFiles('packages/gx-chat-mobile/**', 'packages/gx-chat-core/**', 'packages/gx-protocol/**') }}
+      - name: Build the Rust chat core for Android
+        if: steps.gx_chat_core_cache.outputs.cache-hit != 'true'
+        run: |
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' packages/gx-chat-mobile/rust-toolchain.toml)"
+          test -n "$toolchain"
+          tooling/release-gpui/retry.sh 3 5 -- rustup toolchain install "$toolchain" --profile minimal
+          tooling/release-gpui/retry.sh 3 5 -- cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          GX_CHAT_ANDROID_ABIS="arm64-v8a armeabi-v7a x86 x86_64" \
+            packages/gx-chat-mobile/build.sh --target android
+      - name: Verify the Rust chat core
+        run: |
+          MODULE=apps/mobile/app/modules/gx-chat-core/android/src/main
+          test -s "$MODULE/java/dev/ghostex/gxchatcore/uniffi/gx_chat_mobile.kt"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -s "$MODULE/jniLibs/$abi/libgx_chat_mobile.so"
+          done
       - name: Install repository dependencies
-        # `tooling/release-mobile/android.sh` runs `bun run build:mobile-chat`,
+        # `tooling/release-mobile/android.sh` runs `generate-chat-agents.mjs`,
         # which imports esbuild from the ROOT node_modules. The React Native
         # install below is scoped to apps/mobile/app and does not provide it.
         run: tooling/release-gpui/retry.sh 3 5 -- bun install --frozen-lockfile
       - name: Install React Native dependencies
         working-directory: apps/mobile/app
         run: bun install --frozen-lockfile
+      # CDXC:Release 2026-09-16 WHY: the 9.6.0 Gradle step took 22 minutes with
+      # every one of its 911 tasks executed. About 18 of those minutes were NDK
+      # C++ compilation (expo-modules-core, reanimated, worklets, screens,
+      # gesture-handler, and the app's own autolinking glue, each for four ABIs),
+      # which Gradle's build cache cannot cover because AGP's CMake tasks are not
+      # cacheable. ccache in front of the NDK clang covers exactly that part and
+      # is what React Native itself documents for CI. The Gradle build cache
+      # (~/.gradle/caches/build-cache-1, inside the cached path) covers the rest:
+      # the Kotlin compilation of the Expo and React Native Gradle plugins during
+      # configuration, and the Kotlin/Java/dex work of every module.
+      # The Gradle configuration cache is deliberately not enabled: it lives in
+      # android/.gradle, which `expo prebuild` recreates on every run, and its
+      # inputs include the release version and signing properties, so it would
+      # never hit between releases.
+      # Neither cache changes what the APK contains: ccache and the Gradle build
+      # cache return the same bytes the compilers would produce for the same
+      # inputs, and signing is untouched.
       - name: Restore Gradle build cache
         uses: actions/cache@v6
         with:
@@ -114,6 +190,22 @@ jobs:
             ~/.gradle/wrapper
           key: react-native-android-gradle-${{ runner.os }}-${{ hashFiles('apps/mobile/app/bun.lock', 'apps/mobile/app/package.json') }}
           restore-keys: react-native-android-gradle-${{ runner.os }}-
+      - name: Enable the Gradle build cache
+        run: |
+          mkdir -p ~/.gradle
+          printf 'org.gradle.caching=true\n' >> ~/.gradle/gradle.properties
+      - name: Restore the NDK compiler cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: react-native-android-ccache-${{ runner.os }}-ndk${{ env.ANDROID_NDK_VERSION }}-${{ hashFiles('apps/mobile/app/bun.lock', 'apps/mobile/app/package.json') }}
+          restore-keys: react-native-android-ccache-${{ runner.os }}-ndk${{ env.ANDROID_NDK_VERSION }}-
+      - name: Install ccache
+        id: ccache
+        run: |
+          sudo apt-get install -y --no-install-recommends ccache \
+            || { sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ccache; }
+          ccache --zero-stats
       - name: Restore external Android signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
@@ -127,7 +219,22 @@ jobs:
           GHOSTEX_ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           GHOSTEX_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
           GHOSTEX_RELEASE_SOURCE_SHA: ${{ github.sha }}
+          # CMake (>= 3.17) reads these to prefix every NDK clang invocation
+          # with ccache; AGP inherits the Gradle daemon's environment. The
+          # compiler is identified by its version string rather than the
+          # default mtime because sdkmanager installs the NDK afresh on every
+          # runner; the sloppiness flags let a fresh checkout's header
+          # timestamps hit entries written by an earlier run.
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_DIR: /home/runner/.cache/ccache
+          CCACHE_COMPILERCHECK: '%compiler% --version'
+          CCACHE_SLOPPINESS: include_file_ctime,include_file_mtime,time_macros
+          CCACHE_MAXSIZE: 2G
         run: tooling/release-gpui/android.sh "${{ inputs.version }}"
+      - name: Report ccache statistics
+        if: ${{ always() && steps.ccache.conclusion == 'success' }}
+        run: ccache --show-stats
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:

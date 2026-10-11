@@ -57,6 +57,19 @@ pub(crate) fn create_attach_session_metadata_with_observed_state(
     } else {
         None
     };
+    let probed_session = if probe.lifecycle_state == "missing"
+        && explicit_startup_text.is_none()
+        && queued_launch_startup_text.is_none()
+    {
+        crate::agents::seed_empryo_wake_session(
+            repository,
+            &project,
+            probed_session,
+            agent_settings,
+        )?
+    } else {
+        probed_session
+    };
     let startup_text = explicit_startup_text
         .clone()
         .or(queued_launch_startup_text.clone())
@@ -122,6 +135,12 @@ pub(crate) fn create_attach_session_metadata_with_observed_state(
         build_zmx_attach_command(attach_command_input)
     };
     let mut attach = Map::new();
+    // CDXC:SessionChat 2026-09-21 WHY: `session` below is the stored record, whose icon lives in `launchSettings.icon` or, for an older custom-agent session, only in the project's custom agent list. The desktop decides Chat View support from the icon before any presentation row reaches it, so it gets the same resolved icon the sidebar projection publishes instead of re-deriving it from an agent id.
+    if let Some(agent_icon) =
+        crate::presentation::util::session_agent_icon(Some(&project), &session_for_attach)
+    {
+        attach.insert("agentIcon".to_string(), Value::String(agent_icon));
+    }
     attach.insert("attachCommand".to_string(), Value::String(attach_command));
     if let Some(cwd) = cwd {
         attach.insert("cwd".to_string(), Value::String(cwd));
@@ -197,6 +216,19 @@ pub(crate) fn start_session_provider_with_observed_state(
         get_queued_agent_launch_startup_text_for_session(&probed_session)
     } else {
         None
+    };
+    let probed_session = if probe.lifecycle_state == "missing"
+        && explicit_startup_text.is_none()
+        && queued_launch_startup_text.is_none()
+    {
+        crate::agents::seed_empryo_wake_session(
+            repository,
+            &project,
+            probed_session,
+            agent_settings,
+        )?
+    } else {
+        probed_session
     };
     let startup_text = explicit_startup_text
         .clone()
@@ -277,6 +309,11 @@ pub(crate) fn start_session_provider_with_observed_state(
         })
     };
     let start = run_zmx_start_command(&zmx_name, &zmx.executable_path, command)?;
+    // CDXC:SessionChat 2026-09-28 WHY: A new terminal is not the screen a slash command's output was being read from. A capture left open read the restore banner as that command's result and replaced it (observed 2026-09-28 with Hermes's `/compress`).
+    crate::session_chat_app_command::stop_local_command_output(
+        &lifecycle.project_id,
+        &lifecycle.session_id,
+    );
     let provider_state = ProviderProbe {
         error: None,
         lifecycle_state: "exists".to_string(),
@@ -317,6 +354,10 @@ pub(crate) fn start_session_provider_with_observed_state(
     before.
     */
     let session = crate::agents::arm_draft_launch_activity_suppression(repository, &session)?;
+    if crate::agentbox::is_agentbox_session(&session) {
+        crate::agentbox::wake_agentbox_activity_poller();
+    }
+    crate::session_chat_empryo_tabs::select_empryo_own_tab_after_start(&session, None);
     Ok((
         json!({
             "exitCode": start.result.exit_code,
@@ -389,7 +430,17 @@ pub(crate) fn kill_and_cache_session_provider(
     let session = require_session(repository, lifecycle)?;
     let zmx = require_zmx()?;
     let zmx_name = provider_zmx_session_name(&session)?;
-    let kill = kill_zmx_session(&zmx_name, &zmx.executable_path);
+    let mut kill = kill_zmx_session(&zmx_name, &zmx.executable_path);
+    // CDXC:SessionSleep 2026-09-27 WHY:
+    // A daemon that already exited makes `kill` fail (wmx: "cannot find the file specified"), and
+    // keeping the old lifecycle left a dead session "running" that no Close could retire. Only a
+    // probe that finds the session missing turns the failure into the stop it asked for.
+    if !kill.killed
+        && probe_zmx_session(&zmx_name, &zmx.executable_path).lifecycle_state == "missing"
+    {
+        kill.killed = true;
+        kill.error = None;
+    }
     let timestamp = now_iso();
     let provider_state = if kill.killed {
         missing_provider_state_patch(&session, &timestamp)?
@@ -420,6 +471,10 @@ pub(crate) fn kill_and_cache_session_provider(
     );
     update.insert("providerState".to_string(), Value::Object(provider_state));
     let updated = repository.update_session_for_lifecycle(&update)?;
+    // Every close passes here; closing a box session stops its box (agentbox/lifecycle.rs).
+    if kill.killed && lifecycle_state == "stopped" {
+        crate::agentbox::stop_session_box_in_background(repository, &updated);
+    }
     Ok((kill, updated))
 }
 
@@ -569,7 +624,9 @@ pub fn read_zmx_session_process_identities(
     )
     .map_err(ZmxEndpointError::DependencyUnavailable)?;
     if result.exit_code != 0 {
-        return Ok(HashMap::new());
+        return Err(ZmxEndpointError::DependencyUnavailable(
+            "Could not read the session process snapshot.".to_string(),
+        ));
     }
     let (ps_output, zmx_list_output) = parse_zmx_process_snapshot_sections(&result.stdout);
     let mut identities =
@@ -624,7 +681,7 @@ pub fn read_zmx_session_process_identities(
 
 pub fn read_zmx_existing_session_names() -> Result<HashSet<String>, ZmxEndpointError> {
     let zmx = require_zmx()?;
-    let result = run_zmx_probe_command(
+    let result = run_zmx_profileless_command(
         {
             #[cfg(windows)]
             {

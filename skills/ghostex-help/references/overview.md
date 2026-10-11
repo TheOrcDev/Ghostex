@@ -8,31 +8,62 @@ automation and remote-access layers around those sessions.
 
 Run `ghostex guide <chapter>` for the details:
 
-  features    Views, sidebar, sessions, chat, agents and orchestration, browser,
-              editor, board, docs, automations, remote and mobile, notifications
-  settings    Every setting with its key, type, allowed values, default, and
-              the page it lives on (use with `ghostex settings`)
-  hotkeys     Every shortcut and its default binding
+features Views, sidebar, sessions, chat, agents and orchestration, orchestrators, browser,
+editor, board, docs, automations, remote and mobile, notifications
+settings Every setting with its key, type, allowed values, default, and
+the page it lives on (use with `ghostex settings`)
+hotkeys Every shortcut and its default binding
 
 ## The window
 
-- **Titlebar**: the project name and icon, Back/Forward, the view tabs
-  (Agents, Code, Browser, Kanban, Automate, Docs), and on the right the Help,
-  Tips, Resources, Git, Actions, and Open In buttons. Views other than Agents
-  are extensions that load on demand and sleep when unused.
-  View tabs stay centered; in compact mode their dropdown moves to the left,
-  immediately after the Next (Forward) button.
+- **Work area header**: the window has no separate title bar. The first row of
+  the work area shows Hide sidebar, Back/Forward, and the project icon, project
+  name and current session title as one breadcrumb. On the right are the
+  **Start**, **Open** and **Commit** buttons (Quick Actions, Open In and Git
+  actions, each with a caret for its menu; Start and Open show only while the
+  Actions and Open In extensions are on, and Actions is off by default), a **⋯** menu holding Ask Ghostex,
+  Tips & Tricks, Resources, Dev servers, Extensions and Customize, and the command terminal
+  and view panel toggles. The header covers your sessions only: when a view panel
+  is open, the panel's own tabs take the rest of that same row, so the tabs sit
+  over the view and the header's buttons over your sessions. Narrow the Agents
+  Panel and the buttons drop their labels and the breadcrumb drops the project
+  name. There is no line under the header: your chat fades out beneath it. Drag
+  the header, or the sidebar's Search row, to move the window.
 - **Sidebar** (left by default): projects, their sessions, tags and filters,
-  remote machines, Quick chats, and the More Options menu (Settings, Search by
-  Prompt, Previous Sessions, Mobile & Remote, Extensions).
-- **Work area**: the current project's view. In Agents it is a grid of
-  terminal panes and tabs; each pane can show the raw terminal or the Session
-  Chat rendering of the same agent conversation.
+  remote machines, Quick chats, and the More Options menu under the button at
+  the top right (Add Project, Sort & Filter, Sessions, Import Sessions, Search by
+  Prompt, Agents Hub, All Automations, Mobile & Remote, Join Discord, then
+  New Window, Check for Updates, Restart Ghostex, Quit Ghostex, and Quit Ghostex
+  & BG Service, which also stops the background service and every session). The
+  Notifications bell is in its top row; the Commands row at the bottom carries a
+  chart button that shows or hides your account usage meters above it, and the
+  Settings gear, which is where Settings and its Hotkeys page open from. Drag
+  the sidebar narrow and the Search and Commands rows become icon buttons, lined
+  up on the right, that keep their names and shortcuts in their tooltips.
+- **Work area**: your sessions, and the views open beside them. The sessions are
+  a grid of terminal panes and tabs; each pane can show the raw terminal or the
+  Session Chat rendering of the same agent conversation. Opening Code, Browser,
+  Kanban, Automate or Files puts it in a panel on the right with a divider you can
+  drag, and your agents keep running on the left. The panel's tab strip shares
+  the header's row: several views can be open at once, the **+** opens another,
+  and the two buttons at its end pop the view out into its own window or expand
+  it over the Agents Panel. With nothing open it shows **Open a view**, a picker of
+  everything this project can open. Project views load on demand and sleep when unused.
+  The view panel toggle at the right end of the header, or Cmd+Option+B, opens
+  and closes the whole panel.
+- **More windows**: File > New Window (Cmd+Shift+N) opens another full window
+  on the same projects and sessions, for a second monitor or Space; each window
+  keeps its own sidebar selection, panes and views, and every open window comes
+  back at the next launch.
 - **Quick Access** (Cmd+Shift+P): search every command, pane action, settings
   shortcut, and recent session. Cmd+P opens it on Recent Sessions.
-- **Settings** (Cmd+,): pages for General, Integrations, Extensions, Remote,
-  Projects, Agents, Accounts, Actions, Open In, Hotkeys, and About, with one
+- **Settings** (Cmd+,): pages for General, Integrations, Cloud Boxes, Extensions, Remote,
+  Projects, Agents, Accounts, Actions and Open In (each while its extension is on), Hotkeys, Debugging, and About, with one
   search box that finds rows on every page.
+- **Dialogs** such as Quick Access, Settings, Search by Prompt and Add Project open
+  over the middle of the window and stay open when you click somewhere else. Close
+  one with Escape or the round × in its top-right corner, which appears while the
+  pointer is over the dialog.
 
 ## Key concepts
 
@@ -47,8 +78,12 @@ Run `ghostex guide <chapter>` for the details:
   terminal for the same session with one click or hotkey.
 - **Agents**: the configured agent buttons per project (built-in CLIs plus
   custom commands), Global Actions, and the Agents Hub catalog.
+- **Orchestrator**: an agent session you talk to that hands the work to
+  threads (agent sessions it starts, shown indented under it in the sidebar)
+  and reports back when they finish or need you. Start one from a project's
+  Select Agent menu with New Orchestrator.
 - **Extensions**: optional views and panels (Code, Browser, Kanban, Automate,
-  Docs, and third-party ones) installed from Settings > Extensions.
+  Files, and third-party ones) installed from Settings > Extensions.
 - **gxserver**: the local daemon that owns sessions, projects, settings sync,
   automations, and the HTTP API the `ghostex` CLI, the web app, and the mobile
   app talk to. A remote machine runs its own gxserver; the desktop app connects

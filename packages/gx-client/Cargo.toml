@@ -1,0 +1,22 @@
+# CDXC:StateSync 2026-09-19 WHY:
+# Native transport for the Rust store in packages/gx-core: one std thread that owns the local daemon's `/api/events` socket, parses frames off the UI thread, and hands the host `gx_core::Event` values. It is native only (threads, sockets), so it is a separate crate from the platform-neutral core; the web build gets its own adapter. It talks to the loopback daemon only: plain `ws://` and `http://`, never TLS. `tungstenite` and `ureq` are pinned to the versions and features the desktop crate and packages/gx-chat-client use so the desktop build resolves no second copy of either.
+[package]
+name = "ghostex-gx-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ghostex_gx_client"
+path = "src/lib.rs"
+
+[dependencies]
+ghostex-gx-protocol = { path = "../gx-protocol" }
+ghostex-gx-core = { path = "../gx-core" }
+serde_json = "1"
+tungstenite = "0.28"
+ureq = { version = "3.3.0", default-features = false, features = ["platform-verifier", "rustls"] }
+
+[dev-dependencies]
+# The `live` example resolves the daemon's state directory the way the daemon does.
+ghostex-paths = { path = "../paths" }

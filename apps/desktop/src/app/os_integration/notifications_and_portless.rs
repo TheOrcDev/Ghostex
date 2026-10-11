@@ -157,12 +157,12 @@ impl GhostexGpuiApp {
             let (available, message) = if played_sound {
                 (
                     true,
-                    "Played the configured completion sound. macOS attention notifications are disabled in Settings.",
+                    "Played the configured completion sound. Attention notifications are disabled in Settings.",
                 )
             } else {
                 (
                     false,
-                    "The completion sound preview failed and macOS attention notifications are disabled in Settings.",
+                    "The completion sound preview failed and attention notifications are disabled in Settings.",
                 )
             };
             self.dispatch_gpui_settings_action_status(
@@ -172,7 +172,8 @@ impl GhostexGpuiApp {
                 cx,
             );
         } else if !played_sound {
-            let message = "Current Settings have completion sounds and macOS attention notifications disabled.";
+            let message =
+                "Current Settings have completion sounds and attention notifications disabled.";
             self.dispatch_gpui_settings_action_status(
                 "testAgentTaskCompletion",
                 false,

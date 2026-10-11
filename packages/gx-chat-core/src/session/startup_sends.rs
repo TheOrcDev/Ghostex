@@ -1,0 +1,153 @@
+//! Sends that were accepted on another client, or before this view existed, reconstructed from the
+//! queue.
+//!
+//! Ported from `packages/core-ui/chat/session-chat-startup-sends.ts`.
+
+use ghostex_gx_protocol::StartupDelivery;
+use serde_json::Value;
+
+use crate::session::text::normalize_pending_text;
+use crate::state::PendingSend;
+
+fn queue_field<'a>(prompt: &'a Value, key: &str) -> Option<&'a str> {
+    prompt.get(key)?.as_str()
+}
+
+/// Reconstructs accepted sends and reconciles each receipt with the immediate local echo.
+///
+/// CDXC:SessionChat 2026-09-27 WHY:
+/// A queued row holds the draft as written, so a Claude skill pill is still its `[/name](…/SKILL.md)` link, while the local echo and the turn Claude records carry the bare `/name` gxserver types. Comparing the raw row left the first message of a new chat unpaired: the core built a second "Waiting for agent…" echo from the row, which never matched the recorded turn and stayed under it for good. The row is read as the agent receives it, like the echo.
+pub fn pending_with_startup_sends(
+    pending: &[PendingSend],
+    queue: &[Value],
+    agent: Option<&str>,
+) -> Vec<PendingSend> {
+    let queue_ids: Vec<&str> = queue
+        .iter()
+        .filter_map(|row| queue_field(row, "id"))
+        .collect();
+    let mut entries: Vec<PendingSend> = pending
+        .iter()
+        .filter(|entry| match &entry.startup_delivery {
+            Some(delivery) => {
+                delivery.state != "failed" || queue_ids.contains(&delivery.prompt_id.as_str())
+            }
+            None => true,
+        })
+        .cloned()
+        .collect();
+    let mut matched: Vec<String> = Vec::new();
+
+    for prompt in queue {
+        let Some(prompt_id) = queue_field(prompt, "id") else {
+            continue;
+        };
+        let by_receipt = entries
+            .iter()
+            .position(|entry| entry.queued_prompt_id.as_deref() == Some(prompt_id));
+        let startup_send = prompt
+            .get("startupSend")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !startup_send && by_receipt.is_none() {
+            continue;
+        }
+        // A queue broadcast can beat the send response. Pair identical local sends one at a time
+        // until their receipts arrive; the persisted identity is the row id.
+        let prompt_text = crate::composer::skill_invocation::agent_skill_text(
+            queue_field(prompt, "text").unwrap_or_default(),
+            agent,
+        );
+        let prompt_text = prompt_text.as_ref();
+        let at = by_receipt.or_else(|| {
+            entries.iter().position(|entry| {
+                entry.queued_prompt_id.is_none()
+                    && entry.image_paths.is_empty()
+                    && !matched.contains(&entry.id)
+                    && normalize_pending_text(&entry.text) == normalize_pending_text(prompt_text)
+            })
+        });
+        let delivery = StartupDelivery {
+            prompt_id: prompt_id.to_string(),
+            state: queue_field(prompt, "state").unwrap_or_default().to_string(),
+            error_message: queue_field(prompt, "errorMessage")
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        };
+        match at {
+            Some(at) => {
+                matched.push(entries[at].id.clone());
+                let entry = &mut entries[at];
+                let changed = entry.queued_prompt_id.as_deref() != Some(prompt_id)
+                    || entry
+                        .startup_delivery
+                        .as_ref()
+                        .map(|value| value.state.as_str())
+                        != Some(delivery.state.as_str())
+                    || entry
+                        .startup_delivery
+                        .as_ref()
+                        .and_then(|value| value.error_message.clone())
+                        != delivery.error_message;
+                if changed {
+                    entry.queued_prompt_id = Some(prompt_id.to_string());
+                    entry.startup_delivery = Some(delivery);
+                }
+            }
+            None => entries.push(PendingSend {
+                id: format!("startup:{prompt_id}"),
+                queued_prompt_id: Some(prompt_id.to_string()),
+                startup_delivery: Some(delivery),
+                text: prompt_text.to_string(),
+                image_paths: Vec::new(),
+                sent_at_ms: parse_iso_ms(queue_field(prompt, "createdAt")).unwrap_or(0),
+                after_message_id: None,
+                after_message_timestamp: None,
+                matching_occurrence: None,
+                matching_after_timestamp: None,
+                sent_while_working: false,
+                shell_command: false,
+            }),
+        }
+    }
+    entries
+}
+
+/// Preserves hidden startup sends in their slots when the visible queue is reordered.
+pub fn full_queue_order(queue: &[Value], visible_ids: &[String]) -> Vec<String> {
+    let mut requested: Vec<String> = Vec::new();
+    for id in visible_ids {
+        if requested.contains(id) {
+            continue;
+        }
+        if queue
+            .iter()
+            .any(|prompt| queue_field(prompt, "id") == Some(id.as_str()))
+        {
+            requested.push(id.clone());
+        }
+    }
+    let mut index = 0;
+    queue
+        .iter()
+        .filter_map(|prompt| queue_field(prompt, "id"))
+        .map(|id| {
+            if requested.iter().any(|value| value == id) {
+                let value = requested.get(index).cloned().unwrap_or_default();
+                index += 1;
+                value
+            } else {
+                id.to_string()
+            }
+        })
+        .collect()
+}
+
+/// `Date.parse` of an ISO 8601 stamp in epoch milliseconds.
+///
+/// One rule for the whole crate since 2026-09-22 (`crate::jstime`). This copy ignored a numeric
+/// offset outright and returned a whole second for a one- or two-digit fraction, so a `+04:00`
+/// stamp was read four hours late and `.5` lost half a second.
+pub fn parse_iso_ms(value: Option<&str>) -> Option<i64> {
+    crate::jstime::parse_iso_millis_utc(value?).map(|millis| millis as i64)
+}

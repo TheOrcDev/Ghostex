@@ -64,6 +64,10 @@ pub(crate) fn session_agent_icon(project: Option<&Value>, session: &Value) -> Op
     }
 
     let agent_id = string_field(session, "agentId")?;
+    project_custom_agent_icon(project, &agent_id).or(Some(agent_id))
+}
+
+pub(crate) fn project_custom_agent_icon(project: Option<&Value>, agent_id: &str) -> Option<String> {
     project
         .and_then(|project| project.get("customAgents"))
         .and_then(Value::as_array)
@@ -72,13 +76,12 @@ pub(crate) fn session_agent_icon(project: Option<&Value>, session: &Value) -> Op
                 agent
                     .get("agentId")
                     .and_then(Value::as_str)
-                    .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(&agent_id))
+                    .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(agent_id))
             })
         })
         .and_then(|agent| string_field(agent, "icon"))
         .map(|icon| icon.trim().to_string())
         .filter(|icon| !icon.is_empty())
-        .or(Some(agent_id))
 }
 
 pub(crate) fn value_field(value: &Value, key: &str) -> Value {

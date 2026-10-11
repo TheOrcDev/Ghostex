@@ -1,0 +1,15 @@
+# CDXC:Settings 2026-10-01 DECISION:
+# User (answer 33A, docs/2026-10-01/zero-ts/NEXT-STEPS.md): the Settings search rows, defaults and hotkeys move from TypeScript to Rust, into a small crate that native Settings and gxserver read directly, with the Ghostex Help files generated from it byte for byte.
+# Pure data plus the code that renders it: no gpui, no I/O, so the desktop, the GPUI web build, gx-core, gxserver and `cargo xtask` all link it.
+[package]
+name = "ghostex-settings-catalog"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ghostex_settings_catalog"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"

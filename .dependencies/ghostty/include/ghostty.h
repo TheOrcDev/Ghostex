@@ -799,6 +799,12 @@ typedef struct {
   uint32_t height;
 } ghostty_action_initial_size_s;
 
+// apprt.action.ResizeWindow
+typedef struct {
+  uint32_t width;
+  uint32_t height;
+} ghostty_action_resize_window_s;
+
 // apprt.action.CellSize
 typedef struct {
   uint32_t width;
@@ -1009,6 +1015,7 @@ typedef enum {
   GHOSTTY_ACTION_READONLY,
   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
   GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW,
+  GHOSTTY_ACTION_RESIZE_WINDOW,
 } ghostty_action_tag_e;
 
 typedef union {
@@ -1021,6 +1028,7 @@ typedef union {
   ghostty_action_resize_split_s resize_split;
   ghostty_action_size_limit_s size_limit;
   ghostty_action_initial_size_s initial_size;
+  ghostty_action_resize_window_s resize_window;
   ghostty_action_cell_size_s cell_size;
   ghostty_action_scrollbar_s scrollbar;
   ghostty_action_inspector_e inspector;
@@ -1264,6 +1272,7 @@ GHOSTTY_API void ghostty_inspector_text(ghostty_inspector_t, const char*);
 GHOSTTY_API bool ghostty_inspector_metal_init(ghostty_inspector_t, void*);
 GHOSTTY_API void ghostty_inspector_metal_render(ghostty_inspector_t, void*, void*);
 GHOSTTY_API bool ghostty_inspector_metal_shutdown(ghostty_inspector_t);
+GHOSTTY_API ghostty_string_s ghostty_custom_shader_load_msl(const char*);
 #endif
 
 // APIs I'd like to get rid of eventually but are still needed for now.

@@ -2,7 +2,12 @@
 // move, no logic changes; items made pub(crate) so main.rs and sibling
 // modules can still reach them). See docs/2026-08-22/repo-restructure/SPLITS.md C1.
 
+use crate::app::render::workarea_header::workarea_header_bottom_y;
 use crate::*;
+
+#[path = "cef_surface_site_prompt.rs"]
+mod site_prompt;
+pub(crate) use site_prompt::{SitePromptContent, SitePromptIcon, cef_surface_for_browser};
 
 pub(crate) struct CefSurface {
     background: Hsla,
@@ -10,8 +15,11 @@ pub(crate) struct CefSurface {
     pub(crate) focus_handle: FocusHandle,
     id: String,
     visible: bool,
-    session_chat_pane_focused: Option<bool>,
-    workarea_light_theme: Option<bool>,
+    /// When the page last went off screen, for the idle sweep (`app/web_page_sleep.rs`).
+    hidden_since: Option<std::time::Instant>,
+    workarea_theme: Option<(bool, u32, u32, bool)>,
+    /// What the page asked of the computer, waiting for an answer (`site_prompt`).
+    site_prompts: site_prompt::SitePromptQueue,
 }
 
 impl CefSurface {
@@ -39,13 +47,8 @@ impl CefSurface {
         popup_open_handler: Option<cef::BrowserPopupOpenHandler>,
         page_metadata_handler: Option<cef::BrowserPageMetadataHandler>,
         media_access_handler: Option<cef::BrowserMediaAccessHandler>,
-        sidebar_runtime_settings: Option<cef::SidebarRuntimeSettingsSnapshot>,
-        sidebar_gxserver_bootstrap: Option<cef::SidebarGxserverBootstrap>,
-        sidebar_bridge_event_handler: Option<cef::SidebarBridgeEventHandler>,
         project_workarea_bridge_event_handler: Option<cef::ProjectWorkareaBridgeEventHandler>,
         manage_docs_resource_scope: Option<cef::ManageDocsResourceScope>,
-        app_modal_host_bridge_surface: Option<cef::AppModalHostBridgeSurface>,
-        app_modal_host_bridge_event_handler: Option<cef::AppModalHostBridgeEventHandler>,
         page_load_end_handler: Option<cef::PageLoadEndHandler>,
         cx: &mut gpui::App,
     ) -> Result<gpui::Entity<Self>, String> {
@@ -59,13 +62,8 @@ impl CefSurface {
             popup_open_handler,
             page_metadata_handler,
             media_access_handler,
-            sidebar_runtime_settings,
-            sidebar_gxserver_bootstrap,
-            sidebar_bridge_event_handler,
             project_workarea_bridge_event_handler,
             manage_docs_resource_scope,
-            app_modal_host_bridge_surface,
-            app_modal_host_bridge_event_handler,
             None,
             None,
             page_load_end_handler,
@@ -85,6 +83,7 @@ impl CefSurface {
         visible: bool,
         bridge_surface: cef::ExtensionBridgeSurfaceSpec,
         bridge_event_handler: cef::ExtensionBridgeEventHandler,
+        page_load_end_handler: Option<cef::PageLoadEndHandler>,
         cx: &mut gpui::App,
     ) -> Result<gpui::Entity<Self>, String> {
         let browser = Rc::new(CefBrowser::new(
@@ -99,14 +98,9 @@ impl CefSurface {
             None,
             None,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
             Some(bridge_surface),
             Some(bridge_event_handler),
-            None,
+            page_load_end_handler,
         )?);
         Ok(cx.new(|cx| Self::from_browser(id, background, visible, browser, cx)))
     }
@@ -119,44 +113,64 @@ impl CefSurface {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         browser.set_visible(visible);
+        #[cfg(target_os = "linux")]
+        {
+            // CDXC:FocusRouting 2026-09-19 WHY:
+            // Native Chromium clicks bypass GPUI's mouse listeners; mirror their focus into the existing handle so the address bar blurs.
+            // Subscribe to actual pointer presses rather than CEF focus notifications, which can recursively fire during programmatic handoffs.
+            let surface = cx.entity().downgrade();
+            let async_cx = cx.to_async();
+            let foreground = cx.foreground_executor().clone();
+            browser.on_native_pointer_focus(Rc::new(move || {
+                let surface = surface.clone();
+                let mut async_cx = async_cx.clone();
+                foreground
+                    .spawn(async move {
+                        let _ = surface.update_in(&mut async_cx, |surface, window, cx| {
+                            if surface.visible && surface.browser.owns_native_focus() {
+                                surface.focus_handle.focus(window, cx);
+                            }
+                        });
+                    })
+                    .detach();
+            }));
+        }
+        let browser_id = browser.identifier();
+        site_prompt::register_site_prompt_surface(browser_id, cx.weak_entity());
+        let entity_id = cx.entity_id();
+        cx.on_release(move |_, _| {
+            site_prompt::unregister_site_prompt_surface(browser_id, entity_id)
+        })
+        .detach();
         Self {
             background,
             browser,
             focus_handle: cx.focus_handle().tab_stop(false),
             id,
             visible,
-            session_chat_pane_focused: None,
-            workarea_light_theme: None,
+            hidden_since: (!visible).then(std::time::Instant::now),
+            workarea_theme: None,
+            site_prompts: site_prompt::SitePromptQueue::new(cx),
         }
-    }
-
-    pub(crate) fn browser(&self) -> Rc<CefBrowser> {
-        self.browser.clone()
     }
 
     pub(crate) fn load_url(&mut self, url: &str) {
-        self.session_chat_pane_focused = None;
         self.browser.load_url(url);
     }
 
-    pub(crate) fn set_session_chat_pane_focused(&mut self, focused: bool, force: bool) {
-        if !force && self.session_chat_pane_focused == Some(focused) {
-            return;
-        }
-        let script = format!(
-            "(() => {{ const ns = window.ghostexGpui = window.ghostexGpui || {{}}; ns.sessionChatPaneFocused = {focused}; ns.onSessionChatPaneFocusChanged?.({focused}); }})();"
-        );
-        if self.execute_app_owned_script(&script) {
-            self.session_chat_pane_focused = Some(focused);
-        }
-    }
-
     pub(crate) fn refresh_workarea_theme(&mut self, light: bool) {
-        if self.workarea_light_theme != Some(light)
-            && self.execute_app_owned_script(workarea_theme_script(light))
+        let chrome = crate::app::consts::GPUI_TITLEBAR_BACKGROUND_RGB
+            .load(std::sync::atomic::Ordering::Relaxed) as u32;
+        let content = crate::app::helpers::work_area_background_for_variant(
+            crate::shared_settings::shared_sidebar_settings_snapshot().object(),
+            light,
+        );
+        let glass = crate::app::helpers::window_glass_active();
+        if self.workarea_theme != Some((light, chrome, content, glass))
+            && self.execute_app_owned_script(&workarea_theme_script(light, chrome, content, glass))
         {
-            self.workarea_light_theme = Some(light);
-            self.background = chrome_color(0x0e0e0e, 0xffffff).into();
+            self.workarea_theme = Some((light, chrome, content, glass));
+            self.background = gpui::rgb(content).into();
         }
     }
 
@@ -165,62 +179,6 @@ impl CefSurface {
             self.background = background;
             cx.notify();
         }
-    }
-
-    pub(crate) fn refresh_sidebar_runtime_settings(
-        &mut self,
-        runtime_settings: cef::SidebarRuntimeSettingsSnapshot,
-    ) {
-        /*
-        CDXC:CefRuntime 2026-06-23-06:57:
-        The GPUI sidebar needs a callable post-load refresh path for strict debug/beta gates plus the saved shared Settings object without adding a broad settings watcher or event bus. Keep this as a narrow CEF surface forwarder so future callers can target only the sidebar main frame.
-        */
-        self.browser
-            .refresh_sidebar_runtime_settings(runtime_settings);
-    }
-
-    pub(crate) fn refresh_sidebar_gxserver_bootstrap(
-        &mut self,
-        gxserver_bootstrap: Option<cef::SidebarGxserverBootstrap>,
-    ) {
-        /*
-        CDXC:ServerDaemon 2026-06-24-11:17:
-        Sidebar bootstrap refreshes use the existing CEF surface wrapper only for the sidebar main frame. This forwards an app-owned snapshot to the private browser-to-renderer message path and must not call generic JavaScript injection, touch Browser/workarea/modal CEF surfaces, persist tokens, log URLs/tokens/paths/titles, or synthesize fallback gxserver data.
-        */
-        self.browser
-            .refresh_sidebar_gxserver_bootstrap(gxserver_bootstrap);
-    }
-
-    pub(crate) fn activate_session_chat(
-        &mut self,
-        url: &str,
-        generation: &str,
-        bootstrap: cef::SidebarGxserverBootstrap,
-        initial_snapshot: Option<serde_json::Value>,
-        initial_presentation: Option<serde_json::Value>,
-    ) {
-        self.session_chat_pane_focused = None;
-        self.browser.activate_session_chat(
-            url,
-            generation,
-            bootstrap,
-            initial_snapshot,
-            initial_presentation,
-        );
-    }
-
-    pub(crate) fn refresh_session_chat_gxserver_bootstrap(
-        &mut self,
-        gxserver_bootstrap: Option<cef::SidebarGxserverBootstrap>,
-    ) {
-        /*
-        CDXC:SessionChat 2026-07-31:
-        Session Chat surfaces refresh their bootstrap through the dedicated
-        chat process message, with the same non-logging/no-persistence scope
-        as the sidebar refresh above.
-        */
-        self.browser
-            .refresh_session_chat_gxserver_bootstrap(gxserver_bootstrap);
     }
 
     pub(crate) fn can_go_back(&self) -> bool {
@@ -259,10 +217,6 @@ impl CefSurface {
         self.browser.zoom_level().abs() > BROWSER_ZOOM_EPSILON
     }
 
-    pub(crate) fn refresh_session_chat_zoom(&mut self) {
-        self.browser.refresh_session_chat_zoom();
-    }
-
     pub(crate) fn zoom_level(&self) -> f64 {
         self.browser.zoom_level()
     }
@@ -289,17 +243,6 @@ impl CefSurface {
 
     pub(crate) fn focus(&mut self) {
         self.browser.focus();
-    }
-
-    pub(crate) fn paste(&mut self) -> bool {
-        self.browser.paste()
-    }
-
-    /// CDXC:Onboarding 2026-08-18: forwards one host-side "f"
-    /// key press (see the CEF backend for why injected JavaScript cannot put
-    /// the tutorial player in fullscreen).
-    pub(crate) fn send_fullscreen_toggle_key(&self) {
-        self.browser.send_fullscreen_toggle_key();
     }
 
     /// The surface's CEF child view, for the AppKit pointer observer that turns
@@ -363,9 +306,36 @@ impl CefSurface {
         ))
     }
 
+    /// Gives the page a frame before its window first paints; painting places it from then on.
+    pub(crate) fn set_initial_bounds(&self, bounds: Bounds<Pixels>, scale_factor: f32) {
+        self.browser.set_bounds(bounds, scale_factor);
+    }
+
     pub(crate) fn set_visible(&mut self, visible: bool) {
+        if visible && !self.visible && crate::app::panel_motion::view_panel_would_slide_open() {
+            self.browser
+                .set_motion_hidden(true, std::time::Duration::ZERO);
+        }
+        if visible {
+            self.hidden_since = None;
+        } else if self.visible || self.hidden_since.is_none() {
+            self.hidden_since = Some(std::time::Instant::now());
+        }
         self.visible = visible;
         self.browser.set_visible(visible);
+    }
+
+    /// How long the page has been off screen, `None` while it is shown.
+    pub(crate) fn hidden_for(&self) -> Option<std::time::Duration> {
+        self.hidden_since.map(|since| since.elapsed())
+    }
+
+    pub(crate) fn page_keep_awake(&self) -> crate::cef::PageKeepAwake {
+        self.browser.page_keep_awake()
+    }
+
+    pub(crate) fn ask_page_keep_awake(&self) {
+        self.browser.ask_page_keep_awake();
     }
 
     #[cfg(target_os = "macos")]
@@ -391,7 +361,8 @@ impl CefSurface {
             root,
             collapsed,
             width as f64,
-            TITLEBAR_HEIGHT as f64,
+            workarea_header_bottom_y() as f64,
+            sidebar_cef_prepaint_background_color(),
             companion_hidden,
             requested,
             keep_under_pointer,
@@ -415,12 +386,16 @@ impl Render for CefSurface {
         let browser = self.browser.clone();
         let focus_handle = self.focus_handle.clone();
         let id = self.id.clone();
+        let site_prompt_row = self.render_site_prompt_row(window, cx);
 
-        div()
+        let page = div()
             .id(id)
             .key_context(CEF_KEY_CONTEXT)
             .track_focus(&focus_handle)
-            .size_full()
+            .when(site_prompt_row.is_none(), |page| page.size_full())
+            .when(site_prompt_row.is_some(), |page| {
+                page.w_full().flex_1().min_h_0()
+            })
             .bg(if self.id == "gpui-sidebar" {
                 titlebar_background()
             } else if self.id.starts_with("ghostex-gpui-session-chat-renderer-") {
@@ -432,10 +407,9 @@ impl Render for CefSurface {
                 let view = view.clone();
                 canvas(
                     move |bounds, window, cx| {
-                        let scale_factor = window.scale_factor();
                         view.update(cx, |surface, _| {
                             if surface.visible {
-                                surface.browser.set_bounds(bounds, scale_factor);
+                                place_browser_view(&surface.browser, bounds, window);
                             } else {
                                 surface.browser.set_visible(false);
                             }
@@ -453,7 +427,42 @@ impl Render for CefSurface {
                 self.id.clone(),
                 window,
                 cx,
-            ))
+            ));
+        // A page's question sits above the page, which shrinks to make room (`site_prompt`).
+        match site_prompt_row {
+            Some(row) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(row)
+                .child(page)
+                .into_any_element(),
+            None => page.into_any_element(),
+        }
+    }
+}
+
+/// Gives the page's native view its frame. A slide that only pushes the page (app/panel_motion.rs)
+/// resizes it live, the way a divider drag does. While the view panel itself slides, a page whose
+/// frame would change, or which would poke outside the clip GPUI draws it in, keeps its last frame
+/// and goes transparent until the slide settles, because GPUI cannot clip an AppKit child view.
+fn place_browser_view(browser: &CefBrowser, bounds: Bounds<Pixels>, window: &Window) {
+    let scale_factor = window.scale_factor();
+    let hold = crate::app::panel_motion::view_panel_sliding() && {
+        let mask = window.content_mask().bounds;
+        let tolerance = px(0.5);
+        let clipped = bounds.origin.x < mask.origin.x - tolerance
+            || bounds.origin.y < mask.origin.y - tolerance
+            || bounds.right() > mask.right() + tolerance
+            || bounds.bottom() > mask.bottom() + tolerance;
+        clipped || browser.bounds_differ(bounds, scale_factor)
+    };
+    browser.set_motion_hidden(
+        hold,
+        crate::app::panel_motion::panel_content_fade_duration(),
+    );
+    if !hold {
+        browser.set_bounds(bounds, scale_factor);
     }
 }
 
@@ -532,7 +541,9 @@ impl Element for CefElement {
         }
 
         self.browser.set_visible(true);
-        self.browser.set_bounds(bounds, window.scale_factor());
+        place_browser_view(&self.browser, bounds, window);
+        // CDXC:Tooltips 2026-09-24 SEE-ALSO: the tooltip positioners in gpui (`window.rs`) and gpui-component (`tooltip.rs`) lay tooltips out around the regions recorded here, because the page's native view draws over anything GPUI paints inside its frame.
+        window.occlude_native_region(bounds);
         #[cfg(target_os = "macos")]
         if self.surface_id != APP_MODAL_HOST_ID
             && let Some(native_view) = self.browser.native_view()

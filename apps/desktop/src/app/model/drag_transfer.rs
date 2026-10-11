@@ -51,6 +51,43 @@ pub(crate) fn workspace_pane_body_drop_zone(
     WorkspaceDropZone::Center
 }
 
+/// CDXC:CommandPane 2026-09-22 DECISION:
+/// User: "allow splitting vertically not just horizontally by dragging tabs around in the new side
+/// panel command terminal". A Terminal view group classifies body drops like an Agents pane, all
+/// four edges, so a top or bottom drop makes a vertical split there. The Commands pane keeps its
+/// horizontal-only rule below.
+pub(crate) fn command_pane_body_drop_zone_for_dock(
+    dock: CommandPaneDock,
+    bounds: Bounds<Pixels>,
+    position: gpui::Point<Pixels>,
+) -> WorkspaceDropZone {
+    match dock {
+        CommandPaneDock::Panel => command_pane_body_drop_zone(bounds, position),
+        CommandPaneDock::View => workspace_pane_body_drop_zone(bounds, position),
+    }
+}
+
+pub(crate) fn command_pane_drop_zone_split_axis(zone: WorkspaceDropZone) -> WorkspaceSplitAxis {
+    match zone {
+        WorkspaceDropZone::Top | WorkspaceDropZone::Bottom => WorkspaceSplitAxis::Vertical,
+        WorkspaceDropZone::Left | WorkspaceDropZone::Right | WorkspaceDropZone::Center => {
+            WorkspaceSplitAxis::Horizontal
+        }
+    }
+}
+
+/// Whether a drop zone splits a group in `dock`, as opposed to grouping into it.
+pub(crate) fn command_pane_drop_zone_splits(
+    dock: CommandPaneDock,
+    zone: WorkspaceDropZone,
+) -> bool {
+    match zone {
+        WorkspaceDropZone::Left | WorkspaceDropZone::Right => true,
+        WorkspaceDropZone::Top | WorkspaceDropZone::Bottom => dock == CommandPaneDock::View,
+        WorkspaceDropZone::Center => false,
+    }
+}
+
 pub(crate) fn command_pane_body_drop_zone(
     bounds: Bounds<Pixels>,
     position: gpui::Point<Pixels>,
@@ -127,76 +164,6 @@ pub(crate) fn transfer_command_placeholder_to_workspace_with_source_close(
         .and_then(|leaf| leaf.tab_group.active_session_id());
     let inserted =
         agents_workspace.add_placeholder_session_from_command_title(target_pane_id, title, zone)?;
-
-    if close_source(command_pane, source_group_id, source_session_id) {
-        Some(inserted)
-    } else {
-        rollback_command_to_workspace_insert(
-            agents_workspace,
-            inserted.0,
-            inserted.1,
-            target_pane_id,
-            target_active_before,
-            focused_pane_before,
-            focus_mode_pane_before,
-        );
-        None
-    }
-}
-
-pub(crate) fn transfer_command_placeholder_to_workspace_tab_strip(
-    agents_workspace: &mut WorkspaceModel,
-    command_pane: &mut CommandPaneModel,
-    source_group_id: CommandPaneGroupId,
-    source_session_id: CommandSessionId,
-    target_pane_id: WorkspacePaneId,
-    insertion_index: usize,
-) -> Option<(WorkspacePaneId, TerminalSessionId)> {
-    transfer_command_placeholder_to_workspace_tab_strip_with_source_close(
-        agents_workspace,
-        command_pane,
-        source_group_id,
-        source_session_id,
-        target_pane_id,
-        insertion_index,
-        |command_pane, group_id, session_id| command_pane.close_session(group_id, session_id),
-    )
-}
-
-pub(crate) fn transfer_command_placeholder_to_workspace_tab_strip_with_source_close(
-    agents_workspace: &mut WorkspaceModel,
-    command_pane: &mut CommandPaneModel,
-    source_group_id: CommandPaneGroupId,
-    source_session_id: CommandSessionId,
-    target_pane_id: WorkspacePaneId,
-    insertion_index: usize,
-    mut close_source: impl FnMut(&mut CommandPaneModel, CommandPaneGroupId, CommandSessionId) -> bool,
-) -> Option<(WorkspacePaneId, TerminalSessionId)> {
-    /*
-    CDXC:Workarea 2026-06-22-16:04:
-    Tab-strip command-to-Agents drops must be transactional at the shell model boundary: validate the command source, insert the selected Mounting Agents shell session at the requested tab-strip index first, then remove the command source through existing close semantics so final command sessions collapse only after the Agents tab exists. If command close fails after insertion, remove the inserted Agents session instead of leaving a duplicate shell tab.
-
-    CDXC:Workarea 2026-06-25-19:28:
-    Command-to-Agents tab-strip rollback must preserve the exact pre-transfer Agents tab order, active tab, and focus when command removal fails after a successful index insert. The inserted placeholder is the only rolled-back Agents state, and the command source remains a command-pane placeholder without moving command text, stdout/stderr, paths, process state, libghostty state, or terminal content.
-    */
-    let source_has_session = command_pane
-        .find_leaf(source_group_id)
-        .is_some_and(|leaf| leaf.tab_group.has_session(source_session_id));
-    if !source_has_session {
-        return None;
-    }
-
-    let title = command_pane.session(source_session_id)?.title.clone();
-    let focused_pane_before = agents_workspace.focused_pane;
-    let focus_mode_pane_before = agents_workspace.focus_mode_pane;
-    let target_active_before = agents_workspace
-        .find_leaf(target_pane_id)
-        .and_then(|leaf| leaf.tab_group.active_session_id());
-    let inserted = agents_workspace.insert_placeholder_session_from_command_title_at(
-        target_pane_id,
-        insertion_index,
-        title,
-    )?;
 
     if close_source(command_pane, source_group_id, source_session_id) {
         Some(inserted)

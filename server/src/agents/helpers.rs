@@ -16,7 +16,10 @@ pub(crate) fn default_agent_icon_to_id(icon: &str) -> Option<&'static str> {
         "cursor-cli" => Some("cursor"),
         "mastra" => Some("mastra"),
         "devin" => Some("devin"),
+        // CDXC:AgentProviders 2026-10-06 DECISION: "`empryo` is a built-in agent id, with `em` as a command alias. Custom agents whose icon is Empryo resolve to the `empryo` family." The alias folds live in normalize_agent_id (agents/identity/agent_ids.rs) and the hook and process tables.
+        "empryo" => Some("empryo"),
         "factory-droid" => Some("droid"),
+        "freebuff" => Some("freebuff"),
         "gemini" => Some("gemini"),
         "grok-build" => Some("grok"),
         "hermes-agent" => Some("hermes-agent"),
@@ -46,6 +49,8 @@ pub(crate) fn default_agent_command(agent_id: &str) -> Option<&'static str> {
         "mastra" => Some("mastracode"),
         "devin" => Some("devin"),
         "droid" => Some("droid"),
+        "empryo" => Some("empryo"),
+        "freebuff" => Some("freebuff"),
         "gemini" => Some("gemini"),
         "grok" => Some("grok"),
         "hermes-agent" => Some("hermes"),
@@ -238,6 +243,8 @@ pub(crate) fn quote_shell_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// CDXC:AgentProviders 2026-09-22 WHY:
+/// Interrupting a restored CLI during an account switch is an intentional exit, not a failed resume. POSIX signal exit statuses must not launch the old account's fallback command while the switch is returning to the shell.
 pub(crate) fn wrap_restored_terminal_resume_command(
     command: &str,
     display_command: &str,
@@ -267,7 +274,7 @@ pub(crate) fn wrap_restored_terminal_resume_command(
     ];
     if let Some(fallback_command) = fallback_command.filter(|fallback| *fallback != command) {
         lines.extend([
-            "if [ \"$__ghostex_restore_resume_status\" -ne 0 ]; then".to_string(),
+            "if [ \"$__ghostex_restore_resume_status\" -ne 0 ] && [ \"$__ghostex_restore_resume_status\" -lt 128 ]; then".to_string(),
             format!(
                 "  printf '%s\\n' {}",
                 quote_shell_arg("Exact resume failed; trying saved fallback resume command.")

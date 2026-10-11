@@ -72,7 +72,7 @@ fn configured_theme(path: &Path, visiting: &mut HashSet<std::path::PathBuf>) -> 
                 "config-file" => {
                     let value = value.strip_prefix('?').unwrap_or(value);
                     let include = if let Some(relative) = value.strip_prefix("~/") {
-                        std::path::PathBuf::from(std::env::var_os("HOME")?).join(relative)
+                        std::path::PathBuf::from(super::user_home_dir()?).join(relative)
                     } else {
                         path.parent()?.join(value)
                     };

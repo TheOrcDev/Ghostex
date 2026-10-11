@@ -95,39 +95,6 @@ describe('immutable code-server component identity', () => {
 });
 
 describe('phased macOS code-server prerequisite contract', () => {
-  test.each([
-    ['x64', 'release-build-gxserver-x64.yml'],
-    ['arm64', 'release-build-gxserver-arm64.yml'],
-  ])('publishes the Linux %s archive from its gxserver phase', (arch, workflowName) => {
-    const source = workflow(workflowName);
-    expect(source).toContain(`--platform linux-${arch} --github-output`);
-    expect(source).toContain('name: ${{ steps.code_server_identity.outputs.artifact_name }}');
-    expect(source).toContain('ARCHIVE="$OUTPUT/${{ steps.code_server_identity.outputs.archive_name }}"');
-    expect(source).toContain('lib/node');
-    expect(source).toContain('out/node/entry.js');
-    expect(source).toContain('lib/vscode/out/server-main.js');
-    expect(source).toContain('if-no-files-found: error');
-  });
-
-  test('downloads both archives from the exact release-state prerequisite runs', () => {
-    const source = workflow('release-build-macos.yml');
-    for (const arch of ['x64', 'arm64']) {
-      expect(source).toContain(`path: build/runtime-artifacts/code-server-${arch}`);
-      expect(source).toContain(`run-id: \${{ inputs.gxserver_${arch}_run_id }}`);
-      expect(source).toContain(`linux-${arch}.tar.gz`);
-    }
-    expect(source).toContain('name: ${{ steps.code_server_identity.outputs.artifact_name }}');
-    expect(source).toContain(
-      'name: release-code-server-${{ steps.code_server_identity.outputs.component_version }}-linux-arm64'
-    );
-    expect(source).toContain(
-      'GHOSTEX_CODE_SERVER_COMPONENT_VERSION: ${{ steps.code_server_identity.outputs.component_version }}'
-    );
-    expect(source).toContain('does not match verified release state run');
-    expect(source).toContain('.release-automation/tooling/release-gpui/verify-code-server-archive.mjs');
-    expect(source).toContain('--platform "linux-$1"');
-  });
-
   test('keeps every other active macOS release entry path fail-closed', () => {
     const reusableWorkflow = workflow('release-gpui-macos.yml');
     // CDXC:Release 2026-08-13: release-gpui-runtime.yml was
@@ -229,7 +196,7 @@ describe('phased macOS code-server prerequisite contract', () => {
     );
   });
 
-  test.each(['release-build-gxserver-x64.yml', 'release-build-gxserver-arm64.yml', 'release-gpui-code-server.yml'])(
+  test.each(['release-gpui-code-server.yml'])(
     'binds the producer checksum to the exact archive name in %s',
     (workflowName) => {
       const source = workflow(workflowName);
@@ -240,8 +207,8 @@ describe('phased macOS code-server prerequisite contract', () => {
 
 describe('active WSL2 code-server consumer contract', () => {
   test('shares one complete archive payload contract between release and installed consumers', () => {
-    const nativeVerifier = repoFile('apps/desktop/src/component_store.rs');
-    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform.rs');
+    const nativeVerifier = repoFile('apps/desktop/src/component_store/code_server_archive.rs');
+    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform/packaged_install.rs');
 
     expect(CODE_SERVER_ARCHIVE_CONTRACT.requiredEntries).toEqual(
       expect.arrayContaining([
@@ -266,27 +233,26 @@ describe('active WSL2 code-server consumer contract', () => {
       expect.arrayContaining(['lib/node', 'lib/vscode/node_modules/@vscode/ripgrep/bin/rg'])
     );
     expect(CODE_SERVER_ARCHIVE_CONTRACT.readinessSignal).toBe('promptEditorIpcReady');
-    expect(nativeVerifier).toContain('include_str!("../../../packages/shared/code-server-archive-contract.json")');
+    expect(nativeVerifier).toContain('include_str!("../../../../packages/shared/code-server-archive-contract.json")');
     expect(nativeVerifier).toContain('verify_installed_windows_code_server_component');
     expect(windowsConsumer).toContain('verify_code_server_archive');
     expect(windowsConsumer).toContain('code_server_payload_shell_validation_script');
   });
 
-  test('routes start-gpui through the WSL builder and downloads the canonical producer archive plus sidecar', () => {
-    const launcher = repoFile('tooling/start-gpui.mjs');
+  test('routes the start through the WSL builder and downloads the public component archive plus sidecar', () => {
+    const launcher = repoFile('tooling/xtask/src/start/mod.rs');
+    const windows = repoFile('tooling/xtask/src/start/windows.rs');
 
-    expect(launcher).toContain("isWsl\n        ? 'build-windows-app-wsl.sh'\n        : 'build-windows-app.ps1'");
-    expect(launcher).toContain(
-      "codeServerComponentIdentity({ codeServerRoot: path.join(repoRoot, '.dependencies/code-server') })"
-    );
-    expect(launcher).toContain(
-      'codeServerComponentNames(windowsCodeServerIdentity.componentVersion, `linux-${windowsArch}`)'
-    );
-    expect(launcher).toContain('windowsCodeServerNames.archiveName');
-    expect(launcher).toContain('windowsCodeServerNames.artifactName');
-    expect(launcher).toContain('hasWindowsWslCodeServerArchive !== hasWindowsWslCodeServerSidecar');
-    expect(launcher).toContain('GHOSTEX_CODE_SERVER_COMPONENT_VERSION: windowsCodeServerIdentity.componentVersion');
-    expect(launcher).not.toContain('Windows WSL2 Source runtime extraction');
+    expect(launcher).toMatch(/if self\.is_wsl \{\s*"build-windows-app-wsl\.sh"\s*\} else \{\s*"build-windows-app\.ps1"/);
+    expect(windows).toContain('"tooling/release-gpui/code-server-component-identity.mjs"');
+    expect(windows).toContain('".dependencies/code-server"');
+    expect(windows).toContain('&format!("linux-{arch}")');
+    expect(windows).toContain('field("archive_name")');
+    expect(windows).toContain('field("download_tag")');
+    expect(windows).toContain('"tooling/release-gpui/components-repo.mjs"');
+    expect(windows).toContain('if has_archive != has_sidecar {');
+    expect(windows).toContain('"GHOSTEX_CODE_SERVER_COMPONENT_VERSION"');
+    expect(windows).not.toContain('Windows WSL2 Source runtime extraction');
   });
 
   test('authenticates the exact source-derived archive before WSL staging or component repackaging', () => {
@@ -340,9 +306,11 @@ describe('active WSL2 code-server consumer contract', () => {
   });
 
   test('authenticates every configured, bundled, and on-demand archive before WSL extraction or reuse', () => {
-    const componentStore = repoFile('apps/desktop/src/component_store.rs');
+    const componentStore = ['store.rs', 'code_server_archive.rs']
+      .map((file) => repoFile(`apps/desktop/src/component_store/${file}`))
+      .join('\n');
     const sourceServer = repoFile('apps/desktop/src/app/helpers/source_server/code_server.rs');
-    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform.rs');
+    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform/packaged_install.rs');
     const verifyIndex = windowsConsumer.indexOf('crate::component_store::verify_code_server_archive(');
     const extractIndex = windowsConsumer.indexOf('tar -xzf - -C', verifyIndex);
     const outerSidecarDownloadIndex = componentStore.indexOf('if let Some(sidecar_name) = &asset.sha256_sidecar_name');
@@ -386,7 +354,7 @@ describe('active WSL2 code-server consumer contract', () => {
       'mv -f -- "$marker_next" "$marker_path"\nfalse',
     ],
   ])('rolls back a WSL Source install failure %s', async (_label, needle, injected) => {
-    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform.rs');
+    const windowsConsumer = repoFile('apps/desktop/src/windows_terminal_backend/platform/packaged_install.rs');
     const installerSection = windowsConsumer.slice(
       windowsConsumer.indexOf('fn install_packaged_source_runtime('),
       windowsConsumer.indexOf('fn ensure_source_runtime_installed(')

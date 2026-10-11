@@ -29,18 +29,17 @@ impl GpuiLocalWorkspaceAttachIntent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuiLocalWorkspaceAttachOrigin {
     SidebarFocus,
+    /// A fork's focus, which names the session it was forked from as its placement target.
+    /// Completion lands it unless the user selected something else in the meantime; it does not
+    /// wait for the published focus to name the fork (CDXC:SessionFork 2026-09-24 in
+    /// gx_store/sidebar_lifecycle.rs).
+    Fork,
     SurfacedRestore,
     WakeRecovery,
     /// A keep-view focus (another project's remembered view stays up) whose
     /// session has no usable tab yet. Completion inserts or re-arms the tab as
     /// the pane's active one without switching to Agents or taking focus.
     BackgroundSelect,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GpuiSidebarWorkspaceTerminalLifecycleResultMessage {
-    pub(crate) ok: bool,
-    pub(crate) request_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +68,6 @@ pub(crate) enum GpuiLocalWorkspaceLifecycleMutationKind {
     /// CDXC:Workarea 2026-09-04 WHY:
     /// A startup-restore wake of a pane that is not the focused pane.
     /// It mutates the tab exactly like `DirectWake`, but the sidebar must not move its focused session to it: every restored split pane wakes at once, the RPCs finish in any order, and the last one to finish used to become the persisted focus, so the next restart came back on a different pane's session.
-    /// SEE-ALSO: `keepSidebarFocus` in apps/desktop/sidebar/gxserver-runtime/helpers/terminal-lifecycle.ts.
     RestoreWake,
     ScopedSleep,
 }
@@ -106,15 +104,6 @@ impl From<&GpuiSidebarWorkspaceTerminalFocusMessage> for GpuiLocalWorkspaceSessi
 
 impl From<&GpuiSidebarWorkspaceTerminalRenameCommandMessage> for GpuiLocalWorkspaceSessionKey {
     fn from(message: &GpuiSidebarWorkspaceTerminalRenameCommandMessage) -> Self {
-        Self {
-            project_id: message.project_id.clone(),
-            session_id: message.session_id.clone(),
-        }
-    }
-}
-
-impl From<&GpuiSidebarWorkspaceTerminalEnterMessage> for GpuiLocalWorkspaceSessionKey {
-    fn from(message: &GpuiSidebarWorkspaceTerminalEnterMessage) -> Self {
         Self {
             project_id: message.project_id.clone(),
             session_id: message.session_id.clone(),

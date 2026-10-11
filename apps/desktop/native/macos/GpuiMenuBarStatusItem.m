@@ -404,7 +404,13 @@ static void GhostexGpuiMenuBarStatusActivateApplication(void) {
   CGFloat maxOffset = MAX(0.0, trackHeight - knobHeight);
   CGFloat y =
       NSMaxY(self.bounds) - knobHeight - maxOffset * _knobOffsetFraction;
-  [[NSColor.tertiaryLabelColor colorWithAlphaComponent:0.8] setFill];
+  NSAppearanceName appearance = [self.effectiveAppearance
+      bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
+  BOOL dark = [appearance isEqualToString:NSAppearanceNameDarkAqua];
+  [[NSColor colorWithSRGBRed:(dark ? 0x42 : 0xbc) / 255.0
+                      green:(dark ? 0x43 : 0xbc) / 255.0
+                       blue:(dark ? 0x46 : 0xbd) / 255.0
+                      alpha:1.0] setFill];
   [[NSBezierPath
       bezierPathWithRoundedRect:NSMakeRect(0.0, y, NSWidth(self.bounds),
                                            knobHeight)
@@ -815,7 +821,7 @@ static const CGFloat GhostexGpuiMenuBarStatusFooterRowHeight = 30.0;
 static const CGFloat GhostexGpuiMenuBarStatusEmptyHeight = 44.0;
 static const CGFloat GhostexGpuiMenuBarStatusContentHorizontalPadding = 16.0;
 static const CGFloat GhostexGpuiMenuBarStatusContentVerticalPadding = 8.0;
-static const CGFloat GhostexGpuiMenuBarStatusScrollbarWidth = 2.0;
+static const CGFloat GhostexGpuiMenuBarStatusScrollbarWidth = 5.0;
 static const CGFloat GhostexGpuiMenuBarStatusProjectSectionSpacing = 10.0;
 static const CGFloat GhostexGpuiMenuBarStatusProjectTitleCardGap = 4.0;
 static const CGFloat GhostexGpuiMenuBarStatusProjectCardHorizontalPadding = 6.0;
@@ -844,11 +850,9 @@ static const NSTimeInterval GhostexGpuiMenuBarStatusIdleSessionMaximumAge =
      callbacks, and Restart/Quit footer rows so opening it does not raise the
      main app.
 
-     CDXC:StatusPet 2026-06-26-06:29:
-     Pixel parity with the native menu-bar dropdown requires a hover-only 2px
-     scrollbar pinned to the panel's right edge. Keep it as visible AppKit
-     chrome with the system scroller disabled; it must not introduce hidden hit
-     regions or input rerouting.
+     CDXC:DesignSystem 2026-09-16 DECISION:
+     User: all app scrollbars share the 5px hover-only style and exact light/dark colors, superseding the menu-bar dropdown's earlier 2px style.
+     SEE-ALSO: packages/components/ui/scrollbar-theme.css.
      */
     _panel.delegate = self;
     _panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |

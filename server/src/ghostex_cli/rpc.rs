@@ -268,6 +268,32 @@ fn request_gxserver_body(
     body: &Value,
     flags: &Flags,
 ) -> CliResult<Value> {
+    let body = request_gxserver_envelope(target, pathname, body, flags)?;
+    let mut merged = Map::new();
+    merged.insert("ok".to_string(), Value::Bool(true));
+    if let Some(result) = body.get("result").and_then(Value::as_object) {
+        for (key, value) in result {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    merged.insert(
+        "requestId".to_string(),
+        body.get("requestId").cloned().unwrap_or(Value::Null),
+    );
+    Ok(Value::Object(merged))
+}
+
+/// The gxserver response envelope (`{ok, result, requestId, ...}`) exactly as the daemon sent it,
+/// for a caller that needs `result` untouched rather than spread into the top level.
+///
+/// A refusal is still an `Err`: [`CliError::Rpc`] keeps the daemon's body, so its `error` code
+/// survives for the caller.
+pub fn request_gxserver_envelope(
+    target: &Target,
+    pathname: &str,
+    body: &Value,
+    flags: &Flags,
+) -> CliResult<Value> {
     let _tunnel = ensure_gxserver_tunnel_for_rpc(target, flags)?;
     let timeout_ms = flags
         .number("timeout")
@@ -288,6 +314,9 @@ fn request_gxserver_body(
             (true, status, read_json_body(response))
         }
         Err(ureq::Error::Status(status, response)) => (false, status, read_json_body(response)),
+        Err(error) if timed_out_after_connecting(&error) => {
+            return Err(timeout_error(target, pathname, body, timeout_ms));
+        }
         Err(error) => {
             return Err(connection_error_for_target(target, &error.to_string()));
         }
@@ -321,19 +350,7 @@ fn request_gxserver_body(
             })
         })));
     }
-    let body = response_body.unwrap_or_else(|| json!({}));
-    let mut merged = Map::new();
-    merged.insert("ok".to_string(), Value::Bool(true));
-    if let Some(result) = body.get("result").and_then(Value::as_object) {
-        for (key, value) in result {
-            merged.insert(key.clone(), value.clone());
-        }
-    }
-    merged.insert(
-        "requestId".to_string(),
-        body.get("requestId").cloned().unwrap_or(Value::Null),
-    );
-    Ok(Value::Object(merged))
+    Ok(response_body.unwrap_or_else(|| json!({})))
 }
 
 fn read_json_body(response: ureq::Response) -> Option<Value> {
@@ -344,6 +361,51 @@ fn read_json_body(response: ureq::Response) -> Option<Value> {
         .read_to_string(&mut text)
         .ok()?;
     parse_json_value(&text)
+}
+
+/// A request gxserver accepted but did not answer in time. ureq reports a failed connect as
+/// `ConnectionFailed`; a timeout while waiting for the answer is an `Io` error.
+fn timed_out_after_connecting(error: &ureq::Error) -> bool {
+    let ureq::Error::Transport(transport) = error else {
+        return false;
+    };
+    transport.kind() == ureq::ErrorKind::Io
+        && std::error::Error::source(transport)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some_and(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )
+            })
+}
+
+/// CDXC:Cli 2026-10-05 WHY:
+/// A request that timed out while gxserver was running said "Could not connect to local gxserver … Start it with gx server start", which sent callers off to start a server that was up and, for a send, hid that gxserver keeps typing the message after the CLI stops waiting. A timeout now says so, and a send's says the message may still arrive and to retry only with the same request id, which gxserver delivers at most once (session_chat_send_requests.rs). A refused connection keeps the start-it-first message.
+fn timeout_error(target: &Target, pathname: &str, body: &Value, timeout_ms: f64) -> CliError {
+    let mut message = format!(
+        "gxserver at {} did not answer {} within {} ms. It is running but did not finish in time; the request may still complete.",
+        target.base_url,
+        pathname,
+        timeout_ms.max(0.0) as u64
+    );
+    if matches!(
+        pathname,
+        "/api/sendSessionChatMessage"
+            | "/api/queueSessionChatPrompt"
+            | "/api/answerSessionChatPrompt"
+            | "/api/sendSessionChatQueuedPrompt"
+    ) {
+        message.push_str(" The message may still be delivered: read the chat before sending it again, and retry only with the same request id");
+        if let Some(id) = body
+            .pointer("/params/sendRequestId")
+            .and_then(Value::as_str)
+        {
+            message.push_str(&format!(" ({id})"));
+        }
+        message.push_str(" (--request-id for ghostex agents send, --send-request-id for the chat commands) so it is never delivered twice.");
+    }
+    CliError::Other(message)
 }
 
 fn connection_error_for_target(target: &Target, _detail: &str) -> CliError {
@@ -388,6 +450,19 @@ fn js_value_to_string(value: &Value) -> String {
     }
 }
 
+/// CDXC:Cli 2026-10-04 WHY:
+/// A global ref is this machine's when its server id is the one in the local gxserver's `identity.json`, beside the auth token the local target already reads. Deciding it only by a 1-second `/api/health/server` probe failed whenever gxserver answered slowly (just after a restart): `ghostex agents send` then resolved its own sender ref `S8g:…` as a remote server with no connection profile and refused the send. The probe stays for a state folder without the file.
+fn local_gxserver_server_id() -> Option<String> {
+    let text = std::fs::read_to_string(gxserver_root().join("identity.json")).ok()?;
+    let identity = parse_json_value(&text)?;
+    identity
+        .get("serverId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 pub fn resolve_gxserver_server_target(flags: &Flags, params: &Value) -> CliResult<Target> {
     let server = flags
         .text("server")
@@ -404,6 +479,9 @@ pub fn resolve_gxserver_server_target(flags: &Flags, params: &Value) -> CliResul
     if let Some(global_ref) = find_global_ref_candidate(params) {
         let server_id = global_ref.split(':').next().unwrap_or_default().to_string();
         let local = resolve_local_gxserver_target()?;
+        if local_gxserver_server_id().as_deref() == Some(server_id.as_str()) {
+            return Ok(local);
+        }
         if let Ok(Some(health)) = fetch_gxserver_health(&local, 1_000) {
             if health.get("serverId").and_then(Value::as_str) == Some(server_id.as_str()) {
                 return Ok(local);

@@ -73,6 +73,30 @@ pub(crate) fn gpui_app_modal_sidebar_state_message_from_settings_snapshot_and_po
     portless_state_override: Option<serde_json::Value>,
     active_project_id: Option<&str>,
 ) -> serde_json::Value {
+    gpui_app_modal_sidebar_state_message_from_gxserver_hydrate(
+        settings_snapshot,
+        &gpui_fetch_app_modal_gxserver_hydrate(portless_state_override, active_project_id),
+    )
+}
+
+/// The parts of the app-modal hydrate that come from gxserver. Settings themselves are local and are always read fresh when the message is assembled, so a held copy of this struct only ever lags on projects, agents, actions, Recent Projects, pinned prompts, session tags and Portless.
+#[derive(Clone, PartialEq)]
+pub(crate) struct GpuiAppModalGxserverHydrate {
+    pub(crate) active_project_id: Option<String>,
+    agents: serde_json::Value,
+    commands: serde_json::Value,
+    global_commands: serde_json::Value,
+    project_settings_projects: Vec<serde_json::Value>,
+    recent_projects: Vec<serde_json::Value>,
+    pinned_prompts: Vec<serde_json::Value>,
+    custom_session_tags: Option<serde_json::Value>,
+    portless_state: Option<serde_json::Value>,
+}
+
+pub(crate) fn gpui_fetch_app_modal_gxserver_hydrate(
+    portless_state_override: Option<serde_json::Value>,
+    active_project_id: Option<&str>,
+) -> GpuiAppModalGxserverHydrate {
     /*
     CDXC:Settings 2026-06-24-11:14:
     The GPUI Settings modal host hydrates from the shared settings service snapshot, not a second ad hoc file read. The payload remains intentionally minimal for current GPUI parity, but it carries the saved settings object and service revision for both open-time hydration and post-save `sidebarState` refreshes.
@@ -103,17 +127,6 @@ pub(crate) fn gpui_app_modal_sidebar_state_message_from_settings_snapshot_and_po
     CDXC:AgentLauncher 2026-06-24-20:34:
     Agent/action HUD rows are read through gxserver's `/api/readSidebarHud` production projection. The app-modal host still reads project settings and Recent Projects from their existing gxserver contracts, but it no longer hand-normalizes custom agent/action metadata from `/api/listProjects`.
     */
-    let settings_object = settings_snapshot.object().clone();
-    let runtime_settings =
-        sidebar_runtime_settings_snapshot_from_shared_settings(settings_snapshot);
-    let completion_sound = settings_object
-        .get("completionSound")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("arcade")
-        .to_string();
-    let completion_sound_label = gpui_completion_sound_label(&completion_sound);
-    let theme = gpui_app_modal_sidebar_theme_from_settings(&settings_object);
-    let settings = serde_json::Value::Object(settings_object);
     let portless_state = GPUI_PORTLESS_APP_INTEGRATION_ENABLED
         .then(|| portless_state_override.or_else(gpui_sidebar_portless_state))
         .flatten();
@@ -142,6 +155,45 @@ pub(crate) fn gpui_app_modal_sidebar_state_message_from_settings_snapshot_and_po
         .map(gpui_pinned_prompt_value)
         .collect::<Vec<_>>();
     let custom_session_tags = gpui_read_gxserver_custom_session_tags(Duration::from_secs(2));
+    GpuiAppModalGxserverHydrate {
+        active_project_id: active_project_id.map(str::to_string),
+        agents,
+        commands,
+        global_commands,
+        project_settings_projects,
+        recent_projects,
+        pinned_prompts,
+        custom_session_tags,
+        portless_state,
+    }
+}
+
+pub(crate) fn gpui_app_modal_sidebar_state_message_from_gxserver_hydrate(
+    settings_snapshot: &shared_settings::SharedSidebarSettingsSnapshot,
+    hydrate: &GpuiAppModalGxserverHydrate,
+) -> serde_json::Value {
+    let settings_object = settings_snapshot.object().clone();
+    let runtime_settings =
+        sidebar_runtime_settings_snapshot_from_shared_settings(settings_snapshot);
+    let completion_sound = settings_object
+        .get("completionSound")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("arcade")
+        .to_string();
+    let completion_sound_label = gpui_completion_sound_label(&completion_sound);
+    let theme = gpui_app_modal_sidebar_theme_from_settings(&settings_object);
+    let settings = serde_json::Value::Object(settings_object);
+    let GpuiAppModalGxserverHydrate {
+        agents,
+        commands,
+        global_commands,
+        project_settings_projects,
+        recent_projects,
+        pinned_prompts,
+        custom_session_tags,
+        portless_state,
+        ..
+    } = hydrate.clone();
 
     let mut message = serde_json::json!({
         "groups": [],
@@ -193,6 +245,7 @@ pub(crate) fn gpui_app_modal_sidebar_state_message_from_settings_snapshot_and_po
             "viewMode": "grid",
             "visibleCount": 1,
             "visibleSlotLabels": [],
+            "windowGlassBlockedBySystem": window_glass_blocked_by_system(),
         },
         "pinnedPrompts": pinned_prompts,
         "previousSessions": [],
@@ -254,6 +307,18 @@ pub(crate) fn gpui_session_chat_uses_light_theme(
     }
 }
 
+/// CDXC:Theming 2026-09-22 DECISION:
+/// User: the workarea header (the top bar) matches the theme too. Every surface that backs a GPUI
+/// chat, the transcript, the header band over it, its fade ramp and the chat placeholders, reads
+/// this one colour: the chat's own theme variant's work area colour (`work_area_background_for_variant`,
+/// the chrome at the work area contrast stepped toward white), so a tinted preset carries into all of them at once.
+pub(crate) fn gpui_session_chat_background_rgb(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> u32 {
+    let light = gpui_session_chat_uses_light_theme(settings);
+    work_area_background_for_variant(settings, light)
+}
+
 pub(crate) fn gpui_session_chat_font_family_from_settings(
     settings: &serde_json::Map<String, serde_json::Value>,
 ) -> String {
@@ -265,61 +330,19 @@ pub(crate) fn gpui_session_chat_font_family_from_settings(
         .to_string()
 }
 
-pub(crate) fn gpui_session_chat_custom_transcript_width_enabled_from_settings(
-    settings: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    settings
-        .get("sessionChatCustomTranscriptWidthEnabled")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(crate) fn gpui_session_chat_transcript_width_percent_from_settings(
-    settings: &serde_json::Map<String, serde_json::Value>,
-) -> u8 {
-    const MIN_PERCENT: f64 = 50.0;
-    const MAX_PERCENT: f64 = 100.0;
-    const STEP_PERCENT: f64 = 5.0;
-    const DEFAULT_PERCENT: f64 = 75.0;
-
-    let value = settings
-        .get("sessionChatTranscriptWidthPercent")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(DEFAULT_PERCENT)
-        .clamp(MIN_PERCENT, MAX_PERCENT);
-    ((value / STEP_PERCENT).round() * STEP_PERCENT) as u8
-}
-
-pub(crate) fn gpui_session_chat_file_edit_previews_from_settings(
-    settings: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    settings
-        .get("sessionChatFileEditPreviews")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(crate) fn gpui_session_chat_verbose_mode_from_settings(
-    settings: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    settings
-        .get("sessionChatVerboseMode")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(crate) fn gpui_session_chat_simple_mode_from_settings(
-    settings: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    settings
-        .get("sessionChatSimpleMode")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(crate) fn current_sidebar_max_width(window: &Window) -> f32 {
+/// CDXC:Workarea 2026-09-20 WHY:
+/// With a view open the workarea has to hold the Agents column, the split divider and the view panel,
+/// so the sidebar may only grow into what is left after all three.
+pub(crate) fn current_sidebar_max_width(window: &Window, mode: TitlebarMode) -> f32 {
+    let workspace_min_width = if mode.is_project_editor_mode() {
+        WORKAREA_AGENTS_COLUMN_MIN_WIDTH
+            + WORKSPACE_SPLIT_HANDLE_THICKNESS
+            + WORKAREA_VIEW_PANEL_MIN_WIDTH
+    } else {
+        WORKSPACE_MIN_WIDTH
+    };
     let max_for_window =
-        window.bounds().size.width.as_f32() - SIDEBAR_DIVIDER_WIDTH - WORKSPACE_MIN_WIDTH;
+        window.bounds().size.width.as_f32() - SIDEBAR_DIVIDER_WIDTH - workspace_min_width;
     SIDEBAR_MAX_WIDTH.min(max_for_window).max(SIDEBAR_MIN_WIDTH)
 }
 

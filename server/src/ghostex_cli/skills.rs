@@ -1,6 +1,5 @@
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::ghostex_cli::args::{multi_value_flag, parse_args, Flags};
 use crate::ghostex_cli::launchers;
@@ -19,12 +18,14 @@ builds install the skill version that matches their CLI commands.
 const GHOSTEX_BROWSER_SKILL_NAME: &str = "ghostex-browser-use";
 const GHOSTEX_EMBEDDED_BROWSER_SKILL_NAME: &str = "ghostex-embedded-browser-use";
 const GHOSTEX_COMPUTER_USE_SKILL_NAME: &str = "ghostex-computer-use";
+const GHOSTEX_SPACEO_SKILL_NAME: &str = "ghostex-spaceo";
 const GHOSTEX_CLI_SKILL_NAME: &str = "ghostex-cli";
 const GHOSTEX_MANAGE_BEADS_SKILL_NAME: &str = "ghostex-manage-beads";
-const GHOSTEX_FABLE_56_ORCHESTRATION_SKILL_NAME: &str = "ghostex-fable-56-orchestration";
+const GHOSTEX_AGENTS_ORCHESTRATION_SKILL_NAME: &str = "ghostex-agents";
 const GHOSTEX_AUTO_RENAME_SESSION_SKILL_NAME: &str = "ghostex-auto-rename-session";
 const GHOSTEX_MOVE_CODEX_SESSION_SKILL_NAME: &str = "ghostex-move-codex-session";
 const GHOSTEX_HELP_SKILL_NAME: &str = "ghostex-help";
+const GHOSTEX_VISUALS_SKILL_NAME: &str = "ghostex-visuals";
 
 /// JS stringFlag: trimmed non-empty string or nothing.
 fn string_flag(value: Option<String>) -> Option<String> {
@@ -222,7 +223,7 @@ fn install_ghostex_agent_skill(
         let launch = launchers::resolve_gxserver_cli_launch()?;
         let mut full_args = launch.args.clone();
         full_args.extend(gxserver_args);
-        let mut child = Command::new(&launch.command);
+        let mut child = crate::platform::process::background_command(&launch.command);
         child.args(&full_args);
         if let Some(cwd) = &launch.cwd {
             child.current_dir(cwd);
@@ -341,6 +342,24 @@ pub fn install_computer_use_skill_command(args: &[String]) -> CliResult<()> {
     )
 }
 
+pub fn spaceo_command(args: &[String]) -> CliResult<()> {
+    skill_surface_command(
+        args,
+        &usage::spaceo_usage(),
+        "spaceo",
+        &install_spaceo_skill_command,
+    )
+}
+
+pub fn install_spaceo_skill_command(args: &[String]) -> CliResult<()> {
+    install_ghostex_agent_skill(
+        args,
+        "spaceo help",
+        &["GHOSTEX_SPACEO_SKILL_SOURCE"],
+        GHOSTEX_SPACEO_SKILL_NAME,
+    )
+}
+
 pub fn cli_command(args: &[String]) -> CliResult<()> {
     skill_surface_command(args, &usage::cli_usage(), "cli", &install_cli_skill_command)
 }
@@ -398,27 +417,26 @@ pub fn install_manage_beads_skill_command(args: &[String]) -> CliResult<()> {
     )
 }
 
-pub fn fable56_orchestration_command(args: &[String]) -> CliResult<()> {
+pub fn agents_orchestration_command(args: &[String]) -> CliResult<()> {
     skill_surface_command(
         args,
-        &usage::fable56_orchestration_usage(),
-        "fable-5.6-orchestration",
-        &install_fable56_orchestration_skill_command,
+        &usage::agents_orchestration_usage(),
+        "agents-orchestration",
+        &install_agents_orchestration_skill_command,
     )
 }
 
-pub fn install_fable56_orchestration_skill_command(args: &[String]) -> CliResult<()> {
+pub fn install_agents_orchestration_skill_command(args: &[String]) -> CliResult<()> {
     /*
-    Agents need a bundled pipeline skill on top of `$ghostex-cli`:
-    plan a multi-phase task inline with Fable, launch one Codex gpt-5.6 worker
-    pane per phase through supported Ghostex CLI commands, then verify with a
-    Fable pane and spawn targeted fixers until verification passes.
+    The skill carries no command reference of its own: it sends the agent to
+    `ghostex agents --help` and `ghostex --help` and adds model-independent
+    orchestration habits on top.
     */
     install_ghostex_agent_skill(
         args,
-        "ghostex --help",
-        &["GHOSTEX_FABLE_56_ORCHESTRATION_SKILL_SOURCE"],
-        GHOSTEX_FABLE_56_ORCHESTRATION_SKILL_NAME,
+        "ghostex agents --help",
+        &["GHOSTEX_AGENTS_ORCHESTRATION_SKILL_SOURCE"],
+        GHOSTEX_AGENTS_ORCHESTRATION_SKILL_NAME,
     )
 }
 
@@ -456,6 +474,19 @@ pub fn install_help_skill_command(args: &[String]) -> CliResult<()> {
         "ghostex guide",
         &["GHOSTEX_HELP_SKILL_SOURCE"],
         GHOSTEX_HELP_SKILL_NAME,
+    )
+}
+
+pub fn install_visuals_skill_command(args: &[String]) -> CliResult<()> {
+    /*
+    `$ghostex-visuals` teaches agents the chat's ```visual blocks and `ghostex show` pages; its
+    entry point is the `visual` verb that checks a block before the agent replies.
+    */
+    install_ghostex_agent_skill(
+        args,
+        "ghostex visual --help",
+        &["GHOSTEX_VISUALS_SKILL_SOURCE"],
+        GHOSTEX_VISUALS_SKILL_NAME,
     )
 }
 

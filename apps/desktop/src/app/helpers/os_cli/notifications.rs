@@ -3,19 +3,6 @@ use anyhow::Result;
 use crate::app::helpers::*;
 use crate::*;
 
-#[cfg(target_os = "macos")]
-pub(crate) fn gpui_native_app_shot_capture_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onNativeAppShotCaptured==='function'){{bridge.onNativeAppShotCaptured(payload);}}else{{const pending=Array.isArray(bridge.pendingNativeAppShots)?bridge.pendingNativeAppShots:[];pending.push(payload);bridge.pendingNativeAppShots=pending;}}}})(); undefined;"
-    )
-}
-
-pub(crate) fn gpui_native_app_shot_prompt_result_script(message: &serde_json::Value) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onNativeAppShotPromptResult==='function'){{bridge.onNativeAppShotPromptResult(payload);}}else{{const pending=Array.isArray(bridge.pendingNativeAppShotPromptResults)?bridge.pendingNativeAppShotPromptResults:[];pending.push(payload);bridge.pendingNativeAppShotPromptResults=pending;}}}})(); undefined;"
-    )
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GpuiMacOSNotificationAuthorizationStatus {
     Unsupported,
@@ -55,14 +42,18 @@ impl GpuiMacOSNotificationAuthorizationStatus {
 
     pub(crate) fn message(self) -> &'static str {
         match self {
-            Self::Authorized => "macOS allows Ghostex notification banners.",
-            Self::Provisional => "macOS allows provisional Ghostex notification banners.",
-            Self::NotDetermined => "macOS notification permission has not been decided yet.",
-            Self::Denied => {
-                "macOS is not allowing Ghostex notification banners. Use Open macOS Notification Settings to allow notifications."
+            Self::Authorized => "The operating system allows Ghostex notification banners.",
+            Self::Provisional => {
+                "The operating system allows provisional Ghostex notification banners."
             }
-            Self::Unsupported => "macOS notification banners are not available in this GPUI build.",
-            Self::Unknown => "GPUI could not read macOS notification permission status.",
+            Self::NotDetermined => "Notification permission has not been decided yet.",
+            Self::Denied => {
+                "The operating system is not allowing Ghostex notification banners. Use Open Notification Settings to allow notifications."
+            }
+            Self::Unsupported => {
+                "System notification banners are not available in this GPUI build."
+            }
+            Self::Unknown => "GPUI could not read notification permission status.",
         }
     }
 
@@ -141,44 +132,44 @@ pub(crate) fn gpui_macos_notification_test_action_message(
         GpuiMacOSNotificationDeliveryResult::Sent => {
             if completion_sound_enabled && played_sound {
                 (
-                    "Played the completion sound and sent a macOS notification test.",
+                    "Played the completion sound and sent a notification test.",
                     true,
                 )
             } else if completion_sound_enabled {
                 (
-                    "Sent a macOS notification test. The completion sound preview reported a separate failure.",
+                    "Sent a notification test. The completion sound preview reported a separate failure.",
                     true,
                 )
             } else {
-                ("Sent a macOS notification test.", true)
+                ("Sent a notification test.", true)
             }
         }
         GpuiMacOSNotificationDeliveryResult::PermissionDenied => {
             if completion_sound_enabled && played_sound {
                 (
-                    "Played the completion sound, but macOS is not allowing Ghostex notification banners. Use Open macOS Notification Settings to allow notifications.",
+                    "Played the completion sound, but the operating system is not allowing Ghostex notification banners. Use Open Notification Settings to allow notifications.",
                     false,
                 )
             } else {
                 (
-                    "macOS is not allowing Ghostex notification banners. Use Open macOS Notification Settings to allow notifications.",
+                    "The operating system is not allowing Ghostex notification banners. Use Open Notification Settings to allow notifications.",
                     false,
                 )
             }
         }
         GpuiMacOSNotificationDeliveryResult::PermissionNotDetermined => (
-            "macOS did not return a notification permission decision. Use the notification permission button or Open macOS Notification Settings.",
+            "The operating system did not return a notification permission decision. Use the notification permission button or Open Notification Settings.",
             false,
         ),
         GpuiMacOSNotificationDeliveryResult::Unsupported => (
-            "macOS notification banners are not available in this GPUI build.",
+            "System notification banners are not available in this GPUI build.",
             false,
         ),
         GpuiMacOSNotificationDeliveryResult::Failed => {
-            ("GPUI could not send a macOS notification test.", false)
+            ("GPUI could not send a notification test.", false)
         }
         GpuiMacOSNotificationDeliveryResult::Unknown => (
-            "GPUI could not determine whether the macOS notification test was sent.",
+            "GPUI could not determine whether the notification test was sent.",
             false,
         ),
     }
@@ -222,7 +213,7 @@ pub(crate) const GPUI_COPY_SOUND_FILE_NAME: &str = "copy.mp3";
 /// User: "I want this copy sound to actually play everywhere in the app when we copy something."
 /// Every user-initiated copy in the desktop app funnels through this one function: the native GPUI copy sites, terminal copy on select and Cmd+C in both terminal engines, and every React page through the `playCopySound` bridge message.
 /// It owns the bundled `copy.mp3` asset and the `copySound` setting (Settings > Notifications > Sounds), so no call site carries its own gate or audio element.
-/// SEE-ALSO: packages/core-ui/copy-sound.ts (React entry point), apps/desktop/src/app/remote_conn/app_modal_bridge.rs, apps/desktop/src/app/session_chat.rs, apps/desktop/src/app/workspace_events.rs (bridge arms), apps/desktop/scripts/build-macos-app.sh (asset list).
+/// SEE-ALSO: packages/core-ui/copy-sound.ts (React entry point), apps/desktop/src/app/remote_conn/app_modal_bridge.rs, apps/desktop/src/app/session_chat/, apps/desktop/src/app/workspace_events.rs (bridge arms), apps/desktop/scripts/build-macos-app.sh (asset list).
 pub(crate) fn gpui_play_copy_sound() {
     let settings_snapshot = shared_settings::shared_sidebar_settings_snapshot();
     let enabled = settings_snapshot
@@ -239,6 +230,24 @@ pub(crate) fn gpui_play_copy_sound() {
     let _ = gpui_spawn_completion_sound_player(&sound_path);
 }
 
+/// CDXC:Clipboard 2026-09-22 DECISION:
+/// User: "We need to add copy indicators for every place that you copy in the app. We need to show
+/// a small tooltip whenever they copy that appears on screen that says 'Copied!'". Every copy site
+/// gives its feedback through this one function, after writing the clipboard itself or through
+/// `gpui_copy_to_clipboard`: the copy sound when that setting is on, and the "Copied!" bubble at
+/// the pointer (`app::window::copied_indicator`). The React pages inside the app reach it through
+/// the `playCopySound` bridge message they already post, so they need no second message.
+pub(crate) fn gpui_copy_feedback(cx: &mut gpui::App) {
+    gpui_play_copy_sound();
+    crate::app::window::copied_indicator::show_copied_indicator(cx);
+}
+
+/// Writes `item` to the clipboard with the feedback every copy in the app gives.
+pub(crate) fn gpui_copy_to_clipboard(item: gpui::ClipboardItem, cx: &mut gpui::App) {
+    cx.write_to_clipboard(item);
+    gpui_copy_feedback(cx);
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn gpui_request_macos_notification_permission()
 -> GpuiMacOSNotificationAuthorizationStatus {
@@ -247,7 +256,21 @@ pub(crate) fn gpui_request_macos_notification_permission()
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows asks no permission up front: this reports whether Windows lets Ghostex show toasts.
+#[cfg(target_os = "windows")]
+pub(crate) fn gpui_request_macos_notification_permission()
+-> GpuiMacOSNotificationAuthorizationStatus {
+    gpui_windows_notification_status()
+}
+
+/// Linux notification daemons ask no permission; delivery itself reports a missing `notify-send`.
+#[cfg(target_os = "linux")]
+pub(crate) fn gpui_request_macos_notification_permission()
+-> GpuiMacOSNotificationAuthorizationStatus {
+    GpuiMacOSNotificationAuthorizationStatus::Authorized
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn gpui_request_macos_notification_permission()
 -> GpuiMacOSNotificationAuthorizationStatus {
     GpuiMacOSNotificationAuthorizationStatus::Unsupported
@@ -261,7 +284,22 @@ pub(crate) fn gpui_deliver_macos_settings_test_notification() -> GpuiMacOSNotifi
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn gpui_deliver_macos_settings_test_notification() -> GpuiMacOSNotificationDeliveryResult
+{
+    gpui_deliver_windows_test_notification()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn gpui_deliver_macos_settings_test_notification() -> GpuiMacOSNotificationDeliveryResult
+{
+    gpui_deliver_linux_notification(
+        "Agent task complete",
+        "This is a Ghostex notification test.",
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn gpui_deliver_macos_settings_test_notification() -> GpuiMacOSNotificationDeliveryResult
 {
     GpuiMacOSNotificationDeliveryResult::Unsupported
@@ -321,11 +359,45 @@ pub(crate) fn gpui_deliver_macos_session_attention_notification(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn gpui_deliver_macos_session_attention_notification(
+    candidate: GpuiSessionAttentionNotificationCandidate,
+) -> GpuiMacOSNotificationDeliveryResult {
+    gpui_deliver_windows_notification(candidate)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn gpui_deliver_macos_session_attention_notification(
+    candidate: GpuiSessionAttentionNotificationCandidate,
+) -> GpuiMacOSNotificationDeliveryResult {
+    gpui_deliver_linux_notification(&candidate.title, &candidate.body)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn gpui_deliver_macos_session_attention_notification(
     _candidate: GpuiSessionAttentionNotificationCandidate,
 ) -> GpuiMacOSNotificationDeliveryResult {
     GpuiMacOSNotificationDeliveryResult::Unsupported
+}
+
+/// CDXC:Notifications 2026-10-05 WHY:
+/// Linux shows system notifications through the desktop's freedesktop notification daemon via `notify-send` (libnotify), which every major desktop ships; a click cannot be routed back without keeping a process waiting per notification, so Linux notifications only inform. A missing `notify-send` reports the banners as unavailable.
+#[cfg(target_os = "linux")]
+pub(crate) fn gpui_deliver_linux_notification(
+    title: &str,
+    body: &str,
+) -> GpuiMacOSNotificationDeliveryResult {
+    let status = std::process::Command::new("notify-send")
+        .args(["--app-name=Ghostex", "--", title, body])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match status {
+        Ok(status) if status.success() => GpuiMacOSNotificationDeliveryResult::Sent,
+        Ok(_) => GpuiMacOSNotificationDeliveryResult::Failed,
+        Err(_) => GpuiMacOSNotificationDeliveryResult::Unsupported,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -371,42 +443,6 @@ pub(crate) fn gpui_menu_bar_status_native_projects(
         })
         .collect::<Vec<_>>();
     (project_owners, project_entries)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn register_gpui_app_shots_callback_target(
-    app: gpui::WeakEntity<GhostexGpuiApp>,
-    async_app: gpui::AsyncApp,
-) {
-    /*
-    CDXC:AppShots 2026-06-25-23:07:
-    The macOS App Shots monitor is process-global, but its callback target is the live GPUI root entity only. Register and remove it with the root lifecycle so native flags monitors cannot route captures to stale windows or fallback targets.
-    */
-    GPUI_APP_SHOTS_CALLBACK_TARGET.with(|target| {
-        *target.borrow_mut() = Some(GpuiAppShotsCallbackTarget { app, async_app });
-    });
-    let images_directory = shared_settings::ghostex_storage_paths().images_dir();
-    let Ok(images_directory) = std::ffi::CString::new(gpui_path_string(&images_directory)) else {
-        return;
-    };
-    unsafe {
-        GhostexGpuiInstallAppShotsEventMonitors(images_directory.as_ptr());
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn unregister_gpui_app_shots_callback_target() {
-    unsafe {
-        GhostexGpuiRemoveAppShotsEventMonitors();
-    }
-    GPUI_APP_SHOTS_CALLBACK_TARGET.with(|target| {
-        *target.borrow_mut() = None;
-    });
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn gpui_app_shots_callback_target() -> Option<GpuiAppShotsCallbackTarget> {
-    GPUI_APP_SHOTS_CALLBACK_TARGET.with(|target| target.borrow().clone())
 }
 
 #[cfg(target_os = "macos")]

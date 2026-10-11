@@ -1,0 +1,366 @@
+{
+  "catalogUrl": "http://127.0.0.1:47811/catalog/catalog.json",
+  "installed": [
+    {
+      "id": "storybook-runner",
+      "manifest": {
+        "author": "Ghostex",
+        "categories": [
+          "Developer Tools",
+          "Productivity"
+        ],
+        "defaultPlacement": "view",
+        "description": "Runs the project Storybook and opens it as a focused workspace view.",
+        "icon": "icon.svg",
+        "name": "storybook-runner",
+        "permissions": [
+          "exec",
+          "network"
+        ],
+        "placements": [
+          "view",
+          "popup"
+        ],
+        "preferences": [
+          {
+            "description": "The command used to launch Storybook.",
+            "name": "command",
+            "required": true,
+            "title": "Launch command",
+            "type": "textfield"
+          },
+          {
+            "description": "Open the view as soon as the server is ready.",
+            "name": "autoOpen",
+            "title": "Open when ready",
+            "type": "checkbox",
+            "default": true
+          },
+          {
+            "description": "Which package manager runs the command.",
+            "name": "manager",
+            "title": "Package manager",
+            "type": "dropdown",
+            "data": [
+              {
+                "title": "Bun",
+                "value": "bun"
+              },
+              {
+                "title": "npm",
+                "value": "npm"
+              },
+              {
+                "title": "pnpm",
+                "value": "pnpm"
+              }
+            ]
+          }
+        ],
+        "server": {
+          "command": "bun storybook --port {port}",
+          "readiness": {
+            "httpGet": "/"
+          }
+        },
+        "title": "Storybook Runner",
+        "version": "1.2.0"
+      },
+      "runtime": {
+        "state": "stopped"
+      },
+      "state": {
+        "chatBarAutoOpen": false,
+        "enabled": true,
+        "grantedPermissions": [
+          "exec",
+          "network"
+        ],
+        "pinned": true,
+        "placement": "view",
+        "preferences": {
+          "command": "bun storybook",
+          "manager": "bun"
+        },
+        "storage": {},
+        "terminalPlacement": "splitRight",
+        "version": "1.1.0"
+      }
+    },
+    {
+      "id": "lazygit",
+      "manifest": {
+        "author": "Ghostex",
+        "categories": [
+          "Developer Tools"
+        ],
+        "description": "A fast terminal interface for inspecting the current repository.",
+        "icon": "icon.svg",
+        "kind": "terminal-pane",
+        "name": "lazygit",
+        "permissions": [
+          "exec"
+        ],
+        "terminal": {
+          "command": "lazygit",
+          "cwd": "{projectPath}",
+          "requires": [
+            "lazygit"
+          ]
+        },
+        "title": "Lazygit",
+        "version": "1.0.0"
+      },
+      "runtime": {
+        "state": "stopped"
+      },
+      "state": {
+        "chatBarAutoOpen": false,
+        "enabled": false,
+        "grantedPermissions": [
+          "exec"
+        ],
+        "pinned": false,
+        "preferences": {},
+        "storage": {},
+        "terminalPlacement": "splitRight",
+        "version": "1.0.0"
+      }
+    },
+    {
+      "id": "session-scratchpad",
+      "manifest": {
+        "author": "Ghostex",
+        "categories": [
+          "Productivity"
+        ],
+        "defaultPlacement": "chat-bar",
+        "description": "Keeps session-specific notes beside the chat composer.",
+        "icon": "icon.svg",
+        "name": "session-scratchpad",
+        "permissions": [],
+        "placements": [
+          "chat-bar"
+        ],
+        "server": {
+          "static": "dist"
+        },
+        "title": "Session Scratchpad",
+        "version": "1.0.0"
+      },
+      "runtime": {
+        "state": "stopped"
+      },
+      "state": {
+        "chatBarAutoOpen": false,
+        "enabled": true,
+        "grantedPermissions": [],
+        "pinned": true,
+        "placement": "chat-bar",
+        "preferences": {},
+        "storage": {},
+        "terminalPlacement": "splitRight",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "catalog": {
+    "schemaVersion": 1,
+    "publishedAt": "2026-09-20T10:00:00.000Z",
+    "extensions": [
+      {
+        "author": "Ghostex",
+        "categories": [
+          "Developer Tools",
+          "Productivity"
+        ],
+        "changelog": "extensions/storybook-runner/CHANGELOG.md",
+        "defaultPlacement": "view",
+        "description": "Runs the project Storybook and opens it as a focused workspace view.",
+        "icon": "icon.svg",
+        "name": "storybook-runner",
+        "permissions": [
+          "exec",
+          "network"
+        ],
+        "placements": [
+          "view",
+          "popup"
+        ],
+        "readme": "extensions/storybook-runner/README.md",
+        "screenshots": [],
+        "server": {
+          "command": "bun storybook --port {port}",
+          "readiness": {
+            "httpGet": "/"
+          }
+        },
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "title": "Storybook Runner",
+        "version": "1.2.0",
+        "zip": "storybook-runner-1.2.0.zip"
+      },
+      {
+        "author": "maddada",
+        "categories": [
+          "Monitoring"
+        ],
+        "changelog": "extensions/port-watch/CHANGELOG.md",
+        "defaultPlacement": "popup",
+        "description": "Lists the ports your project's dev servers listen on and opens any of them in the Browser view.",
+        "icon": "icon.svg",
+        "name": "port-watch",
+        "permissions": [
+          "network",
+          "exec"
+        ],
+        "placements": [
+          "popup",
+          "view"
+        ],
+        "readme": "extensions/port-watch/README.md",
+        "screenshots": [],
+        "server": {
+          "command": "port-watch serve --port {port}",
+          "readiness": {
+            "httpGet": "/health"
+          }
+        },
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "title": "Port Watch",
+        "version": "0.4.1",
+        "zip": "port-watch-0.4.1.zip"
+      },
+      {
+        "author": "Ghostex",
+        "categories": [
+          "Productivity"
+        ],
+        "changelog": "extensions/team-wiki/CHANGELOG.md",
+        "defaultPlacement": "view",
+        "description": "Opens your team wiki beside your sessions.",
+        "icon": "icon.svg",
+        "name": "team-wiki",
+        "permissions": [],
+        "placements": [
+          "view"
+        ],
+        "readme": "extensions/team-wiki/README.md",
+        "screenshots": [],
+        "server": {
+          "url": "https://wiki.example.com/"
+        },
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "title": "Team Wiki",
+        "version": "2.0.0",
+        "zip": "team-wiki-2.0.0.zip"
+      },
+      {
+        "author": "Jane Doe",
+        "categories": [
+          "Developer Tools"
+        ],
+        "changelog": "extensions/htop/CHANGELOG.md",
+        "description": "Watch processes and memory in a terminal pane next to your agent.",
+        "icon": "icon.svg",
+        "kind": "terminal-pane",
+        "name": "htop",
+        "permissions": [
+          "exec"
+        ],
+        "readme": "extensions/htop/README.md",
+        "screenshots": [],
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "terminal": {
+          "command": "htop"
+        },
+        "title": "htop",
+        "version": "1.0.3",
+        "zip": "htop-1.0.3.zip"
+      }
+    ]
+  },
+  "readme": "# Storybook Runner\n\nRun your project Storybook inside Ghostex, with the active project and worktree context already selected.\n\n## Features\n\n- Starts on demand\n- Works as a full view or popup\n- Stops with gxserver\n\nUse `bun storybook` or any command that accepts a **port**.",
+  "changelog": "## 1.2.0\n\n- Adds popup placement and faster readiness checks.\n\n## 1.1.0\n\n- First public release.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\" stroke=\"#e5e5e5\" stroke-width=\"3\"><rect x=\"8\" y=\"8\" width=\"32\" height=\"32\" rx=\"8\"/><path d=\"M16 24h16M24 16v16\"/></svg>",
+  "pluginSettingsStatus": {
+    "plugins": [
+      {
+        "canReinstall": true,
+        "id": "code",
+        "sizeBytes": 157286400,
+        "status": "installed",
+        "statusLabel": "Installed",
+        "version": "1.136.1"
+      },
+      {
+        "canReinstall": true,
+        "id": "cef",
+        "sizeBytes": 419430400,
+        "status": "installed",
+        "statusLabel": "Installed",
+        "version": "140.1.14"
+      }
+    ],
+    "type": "pluginSettingsStatus"
+  },
+  "customViews": [
+    {
+      "enabled": true,
+      "id": "custom-view-tasks",
+      "name": "Tasks",
+      "url": "https://ticktick.com/webapp#q/all/tasks"
+    },
+    {
+      "enabled": false,
+      "id": "custom-view-tower",
+      "name": "Tower",
+      "url": "https://tower.wecourts.com/"
+    }
+  ],
+  "viewScopes": {},
+  "projectViewProjects": [
+    {
+      "name": "Ghostex",
+      "path": "/Users/you/dev/ghostex",
+      "projectId": "project-ghostex"
+    },
+    {
+      "name": "Infra Control Plane",
+      "path": "/Users/you/dev/platform/infra-control-plane",
+      "projectId": "project-infra"
+    },
+    {
+      "name": "Customer Web",
+      "path": "/Users/you/dev/products/customer-web-application",
+      "projectId": "project-web"
+    },
+    {
+      "name": "Operations Dashboard",
+      "path": "/Users/you/dev/internal/tools/operations-dashboard",
+      "projectId": "project-ops"
+    }
+  ],
+  "projectViewSpaces": [
+    {
+      "name": "Macbook",
+      "sectionKey": "local",
+      "spaceId": "space-1-a"
+    },
+    {
+      "name": "Ghostex",
+      "sectionKey": "local",
+      "spaceId": "space-2-b"
+    },
+    {
+      "name": "ShortPoint",
+      "sectionKey": "local",
+      "spaceId": "space-3-c"
+    },
+    {
+      "name": "My Apps",
+      "sectionKey": "local",
+      "spaceId": "space-4-d"
+    }
+  ]
+}

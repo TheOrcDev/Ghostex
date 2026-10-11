@@ -54,12 +54,6 @@ pub(crate) struct CommandPaneHoverTab {
     pub(crate) session_id: CommandSessionId,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceHoverTab {
-    pub(crate) pane_id: WorkspacePaneId,
-    pub(crate) session_id: TerminalSessionId,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BrowserHoverTab {
     pub(crate) pane_id: BrowserPaneId,

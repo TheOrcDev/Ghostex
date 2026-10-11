@@ -1,46 +1,25 @@
+import { checkClientStorage } from '../../tooling/client-storage/check.mjs';
+checkClientStorage();
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { defineConfig, type Plugin } from 'vite';
-import { writeDocsClassicAssets } from '../../tooling/docs-classic-assets';
-import {
-  MERMAID_ASSET_DIR_NAME,
-  mermaidClassicScriptEsbuildPlugin,
-  writeMermaidClassicAssets,
-} from '../../tooling/mermaid-classic-assets.mjs';
-import {
-  SHIKI_ASSET_DIR_NAME,
-  shikiClassicScriptEsbuildPlugin,
-  writeShikiClassicAssets,
-} from '../../tooling/shiki-classic-assets.mjs';
+import { writeClassicModuleAssets } from '../../tooling/docs-classic-assets';
 
 const gpuiRoot = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(gpuiRoot, '..', '..');
 const sidebarOutDir = path.resolve(gpuiRoot, 'dist/sidebar');
-const cefHtmlEntries = [
-  'index.html',
-  'chat.html',
-  'find.html',
-  'kanban.html',
-  'manage.html',
-  'modal-host.html',
-  'model-picker.html',
-  'titlebar-host.html',
-] as const;
+const cefHtmlEntries = ['manage.html', 'work.html'] as const;
 /*
  * CDXC:CefRuntime 2026-06-28-16:18:
- * GPUI CEF entry modules should describe the stable surface they mount, not the historical porting phase. Keep this explicit entry map as the source of truth for the sidebar, Kanban, and Manage bundle inputs so HTML wrappers, Vite output, and packaged resources stay aligned.
+ * GPUI CEF entry modules should describe the stable surface they mount, not the historical porting phase. Keep this explicit entry map as the source of truth for the CEF bundle inputs so HTML wrappers, Vite output, and packaged resources stay aligned.
  */
 const cefHtmlEntryScripts = {
-  'index.html': path.resolve(gpuiRoot, 'sidebar/main.tsx'),
-  'chat.html': path.resolve(gpuiRoot, 'sidebar/chat-main.tsx'),
-  'find.html': path.resolve(gpuiRoot, 'sidebar/find-main.tsx'),
-  'kanban.html': path.resolve(gpuiRoot, 'sidebar/kanban-main.tsx'),
   'manage.html': path.resolve(gpuiRoot, 'sidebar/manage-main.tsx'),
-  'modal-host.html': path.resolve(gpuiRoot, 'views/modal-host.tsx'),
-  'model-picker.html': path.resolve(gpuiRoot, 'views/model-picker-host.tsx'),
-  'titlebar-host.html': path.resolve(gpuiRoot, 'views/titlebar-host.tsx'),
+  // CDXC:WorkMode 2026-10-09 SEE-ALSO: the Work view's page (app/work_view/ loads it into the view panel).
+  'work.html': path.resolve(gpuiRoot, 'sidebar/work-main.tsx'),
 } satisfies Record<(typeof cefHtmlEntries)[number], string>;
 
 function inlineCefHtmlAssets(): Plugin {
@@ -53,23 +32,18 @@ function inlineCefHtmlAssets(): Plugin {
        * The packaged GPUI sidebar is loaded by CEF from a file:// app resource URL. Chromium blocks external module scripts and stylesheets from that opaque origin, so the app bundle must ship a self-contained HTML entry that mounts React without relaxing file-origin security switches.
        *
        * CDXC:CefRuntime 2026-06-24-11:03:
-       * Source-independent Kanban and Manage GPUI workarea pages are first-party CEF HTML entries beside the sidebar entry. Inline every emitted CEF entry so real runtime surfaces can navigate to bundled file URLs without a dev server, WKWebView/WebKit, temporary pages, or relaxed file-origin switches.
-       *
-       * CDXC:AppModal 2026-06-24-10:42:
-       * The GPUI app-modal window loads the same React modal host entry as macOS through a first-party CEF HTML file. Keep modal-host.html in the inlined CEF entry set so Settings, Hotkeys, and Command Palette can open without WebKit, duplicated modal UI, temporary pages, or dev-server-only assets.
-       *
-       * CDXC:Onboarding 2026-06-24-23:17:
-       * The GPUI info dropdown loads the shared React titlebar-host Tips panel through a first-party CEF HTML entry. Keep titlebar-host.html in the same single-file inlining path as modal-host.html so the gpui-component Popover can show production Tips content without AppKit/Swift dropdowns, duplicate GPUI tips data, or dev-server-only module loading.
+       * The Files view's embed page (manage.html) is a first-party CEF HTML entry beside the sidebar entry. Inline every emitted CEF entry so real runtime surfaces can navigate to bundled file URLs without a dev server, WKWebView/WebKit, temporary pages, or relaxed file-origin switches.
        *
        * CDXC:CefRuntime 2026-06-24-22:01:
-       * Inlining only Vite's entry chunks leaves `import "./chunk.js"` specifiers inside the HTML-root module, even though emitted chunks live under assets/. CEF then loads a blank file:// sidebar before React can mount. Keep Vite as the CSS/HTML producer, but replace each CEF entry script with a single esbuild browser bundle so sidebar, Kanban, Manage, app-modal, and titlebar-panel hosts do not depend on file-url module graph loading or relaxed Chromium switches.
+       * Inlining only Vite's entry chunks leaves `import "./chunk.js"` specifiers inside the HTML-root module, even though emitted chunks live under assets/. CEF then loads a blank file:// sidebar before React can mount. Keep Vite as the CSS/HTML producer, but replace each CEF entry script with a single esbuild browser bundle so the Manage page does not depend on file-url module graph loading or relaxed Chromium switches.
        *
        * CDXC:CefRuntime 2026-06-24-22:07:
        * Rebuild the final file from the source HTML instead of regex-editing Vite's transformed inline JavaScript. Generated React code can contain script-tag-shaped strings, so final HTML assembly must extract only emitted style tags from Vite output, then inject the esbuild single-file module into the original CEF wrapper.
        *
        * CDXC:CefRuntime 2026-07-08:
-       * Entries that load their page module through a dynamic import (Manage's shared Docs app, Kanban's tasks placeholder) get their CSS attached to the dynamic chunk instead of a <link> in the entry HTML, and Vite's runtime CSS loader is removed with the replaced module script while the esbuild bundle drops .css imports. Walk each entry's full chunk graph, including dynamic imports, and inline every reachable CSS asset so pages like Docs keep their editor styles without shipping unrelated entries' CSS.
+       * Entries that load their page module through a dynamic import (Manage's embed page) get their CSS attached to the dynamic chunk instead of a <link> in the entry HTML, and Vite's runtime CSS loader is removed with the replaced module script while the esbuild bundle drops .css imports. Walk each entry's full chunk graph, including dynamic imports, and inline every reachable CSS asset so pages like Manage keep their styles without shipping unrelated entries' CSS.
        */
+      const stagedImages = collectCefStagedImages(bundle, outDir);
       for (const htmlEntry of cefHtmlEntries) {
         const htmlPath = path.join(outDir, htmlEntry);
         if (!fs.existsSync(htmlPath)) {
@@ -95,62 +69,18 @@ function inlineCefHtmlAssets(): Plugin {
         const finalHtml = injectInlineStyleTags(
           replaceCefEntryModuleScript(
             fs.readFileSync(path.join(gpuiRoot, htmlEntry), 'utf8'),
-            await buildInlineCefEntryScript(cefHtmlEntryScripts[htmlEntry], htmlEntry === 'manage.html' ? outDir : undefined)
+            await buildInlineCefEntryScript(
+              cefHtmlEntryScripts[htmlEntry],
+              stagedImages,
+              cefClassicModuleTargets[htmlEntry]
+            )
           ),
           styleTags
         );
 
         fs.writeFileSync(htmlPath, finalHtml);
       }
-    },
-  };
-}
-
-/*
- * CDXC:PromptEditor 2026-08-01:
- * The Agents Hub modal in modal-host.html loads
- * Monaco at runtime through its AMD loader from ./monaco/vs — the only
- * Monaco route that works from CEF's file:// origin, since the ESM build
- * spawns module workers the single-file bundle cannot ship. Stage the
- * min/vs runtime beside the inlined CEF entries; build-macos-app.sh mirrors
- * dist/sidebar wholesale into Contents/Resources/sidebar.
- */
-function stageMonacoVs(): Plugin {
-  return {
-    name: 'ghostex-gpui-stage-monaco-vs',
-    closeBundle() {
-      const monacoSource = path.join(repoRoot, 'node_modules', 'monaco-editor', 'min', 'vs');
-      if (!fs.existsSync(path.join(monacoSource, 'loader.js'))) {
-        throw new Error(`monaco-editor min/vs runtime is missing at ${monacoSource}.`);
-      }
-      const monacoDest = path.join(sidebarOutDir, 'monaco', 'vs');
-      fs.rmSync(monacoDest, { force: true, recursive: true });
-      fs.cpSync(monacoSource, monacoDest, { recursive: true });
-    },
-  };
-}
-
-/*
- * CDXC:SessionChat 2026-08-21:
- * Session Chat highlights fenced code with Shiki, loading the engine and one
- * grammar per language on demand. Those loaders are dynamic imports, which the
- * single-file CEF bundler above cannot code-split: esbuild inlines every
- * dynamic import when splitting is off, and a file:// CEF page cannot fetch
- * module chunks anyway. Left alone that turned chat.html from 1.3 MB into
- * 4.9 MB of highlighter parsed by EVERY chat pane.
- *
- * So the highlighter ships the way Monaco does: prebuilt classic scripts staged
- * beside the bundle, pulled in by <script src> only when a fence needs them.
- * tooling/shiki-classic-assets.mjs owns both the staged files and the loader
- * shim, and the mobile chat build uses the same module so the two hosts cannot
- * drift apart.
- */
-function stageShikiChatRuntime(): Plugin {
-  return {
-    name: 'ghostex-gpui-stage-shiki-chat-runtime',
-    async closeBundle() {
-      await writeShikiClassicAssets(path.join(sidebarOutDir, SHIKI_ASSET_DIR_NAME));
-      await writeMermaidClassicAssets(path.join(sidebarOutDir, MERMAID_ASSET_DIR_NAME));
+      removeUnloadableCefChunks(outDir);
     },
   };
 }
@@ -166,6 +96,23 @@ type CefOutputBundleEntry =
       type: 'chunk';
       viteMetadata?: { importedCss: Set<string> };
     };
+
+/*
+ * CDXC:CefRuntime 2026-09-21 WHY:
+ * Every page's script and styles are inlined (or staged as classic scripts) above, and a file:// page cannot load Vite's module chunks or stylesheets at all, so the emitted assets/*.js and assets/*.css were about 19 MB shipped in every install that nothing could read.
+ * Images and fonts stay: pages reference them from beside the HTML.
+ */
+function removeUnloadableCefChunks(outDir: string): void {
+  const assetsDir = path.join(outDir, 'assets');
+  if (!fs.existsSync(assetsDir)) {
+    return;
+  }
+  for (const fileName of fs.readdirSync(assetsDir)) {
+    if (/\.(js|css)(\.map)?$/.test(fileName)) {
+      fs.rmSync(path.join(assetsDir, fileName));
+    }
+  }
+}
 
 function collectCefEntryCssFileNames(
   bundle: Record<string, CefOutputBundleEntry>,
@@ -254,7 +201,61 @@ function replaceCefEntryModuleScript(html: string, bundledScript: string): strin
   throw new Error('Ghostex CEF build did not emit a module script to inline.');
 }
 
-async function buildInlineCefEntryScript(entryPoint: string, docsOutDir?: string): Promise<string> {
+/*
+ * CDXC:CefRuntime 2026-09-21 WHY:
+ * Inlining every image as a base64 data URL put about 18 MB of pet spritesheets and Discover screenshots inside the module script of modal-host.html (the React modal page, deleted 2026-10-01), so every Settings, Hotkeys, or Command Palette open showed a blank window while CEF parsed a 21 MB script; the image-free Find page (1.2 MB) painted at once.
+ * Scripts and stylesheets must stay inlined because a file:// page cannot load them, but images load fine from beside the page, so images above the threshold are referenced from the copies Vite already emits under assets/ and resolved against the document URL.
+ * Small images stay inlined so icons and textures paint with the first frame.
+ */
+const CEF_INLINE_IMAGE_BYTE_LIMIT = 32 * 1024;
+const CEF_STAGED_IMAGE_FILTER = /\.(gif|jpe?g|png|webp)$/i;
+
+interface CefStagedImages {
+  fileNameByContentHash: Map<string, string>;
+  outDir: string;
+}
+
+function cefImageContentHash(source: string | Uint8Array): string {
+  return crypto.createHash('sha256').update(source).digest('hex');
+}
+
+function collectCefStagedImages(bundle: Record<string, CefOutputBundleEntry>, outDir: string): CefStagedImages {
+  const fileNameByContentHash = new Map<string, string>();
+  for (const entry of Object.values(bundle)) {
+    if (entry.type === 'asset' && CEF_STAGED_IMAGE_FILTER.test(entry.fileName)) {
+      fileNameByContentHash.set(cefImageContentHash(entry.source), entry.fileName);
+    }
+  }
+  return { fileNameByContentHash, outDir };
+}
+
+function stagedCefImageFileName(stagedImages: CefStagedImages, imagePath: string, contents: Buffer): string {
+  const contentHash = cefImageContentHash(contents);
+  const emitted = stagedImages.fileNameByContentHash.get(contentHash);
+  if (emitted) {
+    return emitted;
+  }
+  // Vite only emits images its own module graph reached; an image only the esbuild bundle imports is staged here.
+  const parsed = path.parse(imagePath);
+  const fileName = `assets/${parsed.name}-${contentHash.slice(0, 8)}${parsed.ext}`;
+  fs.mkdirSync(path.join(stagedImages.outDir, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(stagedImages.outDir, fileName), contents);
+  stagedImages.fileNameByContentHash.set(contentHash, fileName);
+  return fileName;
+}
+
+/** Pages whose code loads on demand as classic scripts (see tooling/docs-classic-assets.ts); every other entry stays one inline module. */
+const cefClassicModuleTargets: Partial<
+  Record<(typeof cefHtmlEntries)[number], { label: string; runtimeDirName: string }>
+> = {
+  'manage.html': { label: 'Docs', runtimeDirName: 'docs-runtime' },
+};
+
+async function buildInlineCefEntryScript(
+  entryPoint: string,
+  stagedImages: CefStagedImages,
+  classicModuleTarget?: { label: string; runtimeDirName: string }
+): Promise<string> {
   const options: esbuild.BuildOptions = {
     absWorkingDir: repoRoot,
     alias: {
@@ -284,11 +285,11 @@ async function buildInlineCefEntryScript(entryPoint: string, docsOutDir?: string
     logLevel: 'silent',
     minify: true,
     platform: 'browser',
-    plugins: [createCefSingleFileEsbuildPlugin()],
+    plugins: [createCefSingleFileEsbuildPlugin(stagedImages)],
     target: ['chrome120'],
     write: false,
   };
-  if (docsOutDir) return writeDocsClassicAssets(docsOutDir, options);
+  if (classicModuleTarget) return writeClassicModuleAssets(stagedImages.outDir, options, classicModuleTarget);
   const result = await esbuild.build(options);
   const script = result.outputFiles.find((file) => file.path === '<stdout>');
   if (!script) {
@@ -297,7 +298,11 @@ async function buildInlineCefEntryScript(entryPoint: string, docsOutDir?: string
   return script.text;
 }
 
-function createCefSingleFileEsbuildPlugin(): esbuild.Plugin {
+/**
+ * CDXC:Build 2026-09-26 WHY:
+ * esbuild can load thousands of icon modules at once. Synchronous reads close each file before the next loader runs, avoiding Windows EMFILE errors from unbounded asynchronous opens.
+ */
+function createCefSingleFileEsbuildPlugin(stagedImages: CefStagedImages): esbuild.Plugin {
   return {
     name: 'ghostex-gpui-cef-single-file',
     setup(build) {
@@ -309,14 +314,19 @@ function createCefSingleFileEsbuildPlugin(): esbuild.Plugin {
         contents: '',
         loader: 'js',
       }));
-      // See stageShikiChatRuntime: CEF pages load the Shiki engine and its
-      // grammars as classic scripts from ./shiki, never as ES module chunks.
-      // The shared plugin swaps both dynamic-import modules for that loader
-      // before esbuild can inline the highlighter into every chat pane.
-      shikiClassicScriptEsbuildPlugin().setup(build);
-      mermaidClassicScriptEsbuildPlugin().setup(build);
-      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args) => {
-        const contents = await fs.promises.readFile(args.path, 'utf8');
+      build.onLoad({ filter: CEF_STAGED_IMAGE_FILTER }, (args) => {
+        const contents = fs.readFileSync(args.path);
+        if (contents.byteLength <= CEF_INLINE_IMAGE_BYTE_LIMIT) {
+          return undefined;
+        }
+        const fileName = stagedCefImageFileName(stagedImages, args.path, contents);
+        return {
+          contents: `export default new URL(${JSON.stringify(`./${fileName}`)}, document.baseURI).href;`,
+          loader: 'js',
+        };
+      });
+      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, (args) => {
+        const contents = fs.readFileSync(args.path, 'utf8');
         return {
           contents: contents.replace(/\s+with\s*\{\s*type\s*:\s*["']text["']\s*\}/g, ''),
           loader: args.path.endsWith('.tsx') || args.path.endsWith('.jsx') ? 'tsx' : 'ts',
@@ -330,24 +340,20 @@ function createCefSingleFileEsbuildPlugin(): esbuild.Plugin {
 export default defineConfig({
   base: './',
   root: gpuiRoot,
-  plugins: [inlineCefHtmlAssets(), stageMonacoVs(), stageShikiChatRuntime()],
+  plugins: [inlineCefHtmlAssets()],
   build: {
     emptyOutDir: true,
     outDir: sidebarOutDir,
+    // The gzip size report compresses every chunk only to print sizes nobody reads here.
+    reportCompressedSize: false,
     rolldownOptions: {
       /*
        * CDXC:CefRuntime 2026-06-14-12:50:
-       * The GPUI shell resolves the bundled sidebar through Contents/Resources/sidebar/index.html. Keep the Vite HTML entry at the package root so production-style packaging and local development share that single entry URL.
+       * The GPUI shell resolves the bundled pages through Contents/Resources/sidebar/<entry>.html. Keep the Vite HTML entries at the package root so production-style packaging and local development share those URLs.
        */
       input: {
-        index: path.resolve(gpuiRoot, 'index.html'),
-        chat: path.resolve(gpuiRoot, 'chat.html'),
-        find: path.resolve(gpuiRoot, 'find.html'),
-        kanban: path.resolve(gpuiRoot, 'kanban.html'),
         manage: path.resolve(gpuiRoot, 'manage.html'),
-        modalHost: path.resolve(gpuiRoot, 'modal-host.html'),
-        modelPicker: path.resolve(gpuiRoot, 'model-picker.html'),
-        titlebarHost: path.resolve(gpuiRoot, 'titlebar-host.html'),
+        work: path.resolve(gpuiRoot, 'work.html'),
       },
     },
   },

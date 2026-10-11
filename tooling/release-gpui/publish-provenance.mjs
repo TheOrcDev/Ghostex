@@ -459,7 +459,7 @@ export function renderBuildProvenanceNotes(releaseProvenance) {
 
 /* The four-way status vocabulary (§11.3) used by the publisher and the verifier. */
 export function summarizeReleaseProvenance(releaseProvenance, { plan = releaseProvenance.plan } = {}) {
-  const summary = { built: [], reused: [], skippedAsUnchanged: [], skippedByFlag: [] };
+  const summary = { built: [], missing: [], reused: [], skippedAsUnchanged: [], skippedByFlag: [] };
   for (const product of PRODUCT_IDS) {
     const record = releaseProvenance.products[product];
     if (record) {
@@ -476,11 +476,18 @@ export function summarizeReleaseProvenance(releaseProvenance, { plan = releasePr
     const planned = plan?.products?.[product];
     if (planned?.action === 'skip') {
       summary.skippedByFlag.push({ product, reason: planned.reason });
+    } else if (planned?.action === 'build' || planned?.action === 'reuse') {
+      /* Planned, never published: the state a stage that has not run yet (or died) leaves behind. */
+      summary.missing.push({ action: planned.action, product });
     }
   }
   return summary;
 }
 
+/**
+ * @param {any} releaseProvenance
+ * @param {{ plan?: any }} [options]
+ */
 export function renderReleaseProvenanceReport(releaseProvenance, { plan } = {}) {
   const summary = summarizeReleaseProvenance(releaseProvenance, { plan });
   const lines = [];
@@ -491,7 +498,57 @@ export function renderReleaseProvenanceReport(releaseProvenance, { plan } = {}) 
     `SKIPPED   by flag: ${summary.skippedByFlag.map((entry) => entry.product).join(', ') || '(none)'}; ` +
       `as unchanged: ${summary.skippedAsUnchanged.map((entry) => entry.product).join(', ') || '(none)'}`
   );
+  if (summary.missing.length > 0) {
+    lines.push(
+      `MISSING   ${summary.missing.map((entry) => `${entry.product} (planned ${entry.action}, no record)`).join(' · ')}`
+    );
+  }
   return lines.join('\n');
+}
+
+/*
+ * The plan's view of the live release, product by product. A product the plan
+ * resolved as build or reuse must have every one of its required asset names on
+ * the release and, when the release carries a provenance record, a product
+ * record. The record's action is not compared with the plan's: an amend run's
+ * plan overlays `reuse` onto products whose records legitimately still say
+ * `built` from the original run. A product the plan skipped by flag is reported
+ * as such, never as missing. Optional artifacts (the Velopack delta package) are
+ * not required. Pure: the caller supplies the live asset names.
+ * SEE-ALSO: release-final-verify.mjs (planned-products-live).
+ */
+export function verifyPlannedProductCoverage({ liveAssetNames, plan, releaseProvenance = null, version }) {
+  const products = plan?.products;
+  if (!products || typeof products !== 'object' || Array.isArray(products)) {
+    throw new Error('the plan carries no per-product actions');
+  }
+  const live = new Set(liveAssetNames);
+  const result = { covered: [], failures: [], missing: [], skippedByFlag: [] };
+  for (const productId of PRODUCT_IDS) {
+    const entry = products[productId];
+    const action = entry?.action ?? 'skip';
+    if (action === 'skip') {
+      result.skippedByFlag.push({ product: productId, reason: entry?.reason ?? 'not in the recorded plan' });
+      continue;
+    }
+    if (action !== 'build' && action !== 'reuse') {
+      result.failures.push(`${productId} has unknown plan action ${action}`);
+      continue;
+    }
+    const required = productDefinition(productId).artifacts(version);
+    const missingAssets = required.filter((name) => !live.has(name));
+    const record = releaseProvenance?.products?.[productId] ?? null;
+    const problems = [];
+    if (missingAssets.length > 0) problems.push(`missing ${missingAssets.join(', ')}`);
+    if (releaseProvenance && !record) problems.push('no provenance record');
+    if (problems.length > 0) {
+      result.missing.push({ action, missingAssets, product: productId, recorded: Boolean(record) });
+      result.failures.push(`${productId} was planned as ${action} but ${problems.join(' and ')}`);
+      continue;
+    }
+    result.covered.push({ action, assets: required, product: productId });
+  }
+  return result;
 }
 
 /*

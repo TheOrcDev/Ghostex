@@ -10,8 +10,9 @@
 # resources, portless admin runtime, updater integration, signing,
 # desktop-entry/icon install, and package formats (deb/rpm/AppImage/flatpak).
 # Source is an on-demand code-server component in relocatable packages. Dev
-# builds resolve the repository checkout through the baked CARGO_MANIFEST_DIR
-# candidate instead.
+# builds resolve a built repository checkout through the baked
+# CARGO_MANIFEST_DIR candidate, and otherwise install the published component
+# matching the checkout from the manifest staged in step 4.
 #
 # Development layouts keep CEF beside the executable. Release layouts stage a
 # CEF-free native bootstrap plus the internal runtime; the bootstrap installs
@@ -24,10 +25,10 @@
 #     libcef.so, libEGL.so, ...        <- CEF Release/ payload
 #     icudtl.dat, *.pak, *.bin,
 #     locales/                         <- CEF Resources/ payload
-#     dist/sidebar/                    <- sidebar bundle; the /dist/sidebar/
-#                                         path segment is load-bearing for the
-#                                         CEF helper first-party URL check and
-#                                         the sidebar_url() Linux arm.
+#     dist/sidebar/                    <- the CEF page bundles; the
+#                                         /dist/sidebar/ path segment is
+#                                         load-bearing for the CEF helper's
+#                                         first-party URL check.
 #
 # Runtime notes:
 # - The app forces X11 app-wide (XWayland on Wayland desktops) and appends
@@ -55,11 +56,15 @@ fi
 # into CEF_PATH. Honor an explicit location so WSL builds can keep the CEF
 # archive on the Linux filesystem, where unpacking can preserve timestamps.
 export CEF_PATH="${CEF_PATH:-$GPUI_DIR/build/cef-cache}"
+# shellcheck source=cef-distribution.sh
+source "$SCRIPT_DIR/cef-distribution.sh"
+ghostex_prepare_versioned_cef_path "$CEF_PATH" >/dev/null
+CEF_RUST_TARGET="$(uname -m)-unknown-linux-gnu"
 
 # 1) Sidebar bundle (same steps as the macOS script).
 (
 	cd "$REPO_ROOT"
-	bun run build:sidebar-css
+	bunx tailwindcss -i packages/core-ui/styles/shadcn.css -o packages/core-ui/styles/shadcn.generated.css --minify
 	bunx vite build --config "$GPUI_DIR/vite.config.ts"
 )
 
@@ -77,13 +82,9 @@ export CEF_PATH="${CEF_PATH:-$GPUI_DIR/build/cef-cache}"
 # sit directly in $CEF_PATH/<cef-version>/cef_linux_<arch>/ with no Release/
 # or Resources/ subdirectories, alongside SDK-only build support
 # (CMakeLists.txt, cmake/, include/, libcef_dll/, archive.json).
-CEF_PAYLOAD=""
-while IFS= read -r candidate; do
-	CEF_PAYLOAD="$(dirname "$candidate")"
-	break
-done < <(find "$CEF_PATH" -type f -name libcef.so 2>/dev/null)
-if [[ -z "$CEF_PAYLOAD" ]]; then
-	echo "cef-rs did not produce libcef.so under $CEF_PATH" >&2
+CEF_PAYLOAD="$(ghostex_cef_distribution_dir "$CEF_PATH" "$CEF_RUST_TARGET")"
+if [[ ! -f "$CEF_PAYLOAD/libcef.so" ]]; then
+	echo "cef-rs did not produce libcef.so under $CEF_PAYLOAD" >&2
 	exit 1
 fi
 if [[ ! -f "$CEF_PAYLOAD/icudtl.dat" ]]; then
@@ -183,6 +184,16 @@ else
 		"$APP_DIR/libcef_dll" "$APP_DIR/archive.json"
 	# no_sandbox runtime: the SUID sandbox helper stays out of the layout.
 	rm -f "$APP_DIR/chrome-sandbox"
+	# The Code view installs the published code-server component that matches
+	# the checkout (tooling/release-gpui/linux-dev-code-server-manifest.mjs).
+	if ! node "$REPO_ROOT/tooling/release-gpui/linux-dev-code-server-manifest.mjs" \
+		--code-server-root "$REPO_ROOT/.dependencies/code-server" \
+		--platform "linux-$CEF_COMPONENT_ARCH" \
+		--version "$RELEASE_VERSION" \
+		--cache-dir "$REPO_ROOT/build/on-demand-components/linux-dev" \
+		--output "$APP_DIR/resources/on-demand-resources.json"; then
+		echo "warning: no published code-server component matches .dependencies/code-server; the Code view will be unavailable in this build" >&2
+	fi
 fi
 mkdir -p "$APP_DIR/dist"
 cp -R "$GPUI_DIR/dist/sidebar" "$APP_DIR/dist/sidebar"

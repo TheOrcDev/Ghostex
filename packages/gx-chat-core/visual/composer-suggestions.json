@@ -1,0 +1,28 @@
+{
+  "gapAbovePx": 8,
+  "radiusPx": 18,
+  "borderPx": 1,
+  "listMaxHeightPx": 288,
+  "listPaddingPx": 6,
+  "paddingInlinePx": 12,
+  "headingFontSizePx": 10,
+  "headingLineHeightPx": 14,
+  "headingLetterSpacingPx": 1.4,
+  "headingPaddingTopPx": 8,
+  "headingPaddingBottomPx": 4,
+  "rowFontSizePx": 14,
+  "rowLineHeightPx": 20,
+  "rowPaddingBlockPx": 8,
+  "rowGapPx": 10,
+  "rowRadiusPx": 11,
+  "rowBorderPx": 1,
+  "labelColumnPx": 200,
+  "iconPx": 16,
+  "retryHeightPx": 28,
+  "retryPaddingInlinePx": 12,
+  "retryRadiusPx": 10,
+  "shadows": [
+    { "offsetYPx": 20, "blurPx": 25, "spreadPx": -5, "alpha": 0.1 },
+    { "offsetYPx": 8, "blurPx": 10, "spreadPx": -6, "alpha": 0.1 }
+  ]
+}

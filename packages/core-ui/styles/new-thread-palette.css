@@ -69,15 +69,22 @@
   background: color-mix(in srgb, var(--app-foreground, var(--foreground)) 14%, transparent);
 }
 
+/*
+ * CDXC:AgentLauncher 2026-09-16 DECISION:
+ * User: "center the controls please in this modal and add 3px margin from
+ * top/bottom of the controls": the key-hint chips are centered with 3px more
+ * room above and below; the native picker mirrors these values.
+ */
 .new-thread-palette-hints {
   color: var(--app-muted, var(--muted-foreground));
   display: flex;
   flex-wrap: wrap;
   font-size: 11px;
   gap: 12px;
+  justify-content: center;
   line-height: 16px;
   opacity: 0.8;
-  padding: 6px 16px 4px;
+  padding: 9px 16px 7px;
   user-select: none;
 }
 
@@ -139,6 +146,25 @@
 .new-thread-palette-row[data-selected='true'] .group-agent-menu-label {
   color: #d8d8d8;
   font-weight: inherit;
+}
+
+/*
+ * CDXC:AppModal 2026-09-16 WHY:
+ * The composer fill is a dark literal, so on the light sidebar themes the
+ * highlighted row takes the light theme's active card fill instead of a black
+ * bar; the native picker in apps/desktop/src/app/window/new_thread_picker.rs
+ * mirrors these values.
+ */
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .new-thread-palette-row[data-selected='true'] {
+  background: #efefef;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);
+}
+
+body:is([data-sidebar-theme='plain-light'], [data-sidebar-theme^='light-'])
+  .new-thread-palette-row[data-selected='true']
+  .group-agent-menu-label {
+  color: #262626;
 }
 
 .new-thread-palette-row .gx-account-logo {

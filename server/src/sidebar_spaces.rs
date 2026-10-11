@@ -34,7 +34,7 @@ const MAX_ID_CHARS: usize = 256;
 const MAX_NAME_CHARS: usize = 256;
 const MAX_ICON_CHARS: usize = 256;
 
-/// Mirrors SIDEBAR_PROJECT_COLLECTION_COLORS in packages/core-ui/project-collections.ts
+/// Mirrors SIDEBAR_PROJECT_COLLECTION_COLORS in packages/core-ui/project-collections.ts (deleted 2026-10-01)
 /// so server-side fallback colors rotate exactly like the sidebar's other
 /// user-colored overlay.
 const SIDEBAR_SPACE_COLORS: [&str; 13] = [
@@ -43,11 +43,23 @@ const SIDEBAR_SPACE_COLORS: [&str; 13] = [
 ];
 
 /// Icon ids come from SIDEBAR_COMMAND_ICON_IDS in
-/// packages/shared/sidebar-command-icons.ts. The daemon deliberately does not
+/// packages/shared/sidebar-command-icons.ts (deleted 2026-10-01). The daemon deliberately does not
 /// validate against that allowlist — that would pin the server to one client
 /// build's icon pack — it only bounds the id and supplies this default when a
 /// Space carries no usable icon.
 const DEFAULT_SIDEBAR_SPACE_ICON: &str = "stack";
+
+/// This machine's own Spaces switch (`sidebarSpacesEnabled`, the built-in Spaces extension on
+/// Settings › Extensions), as its settings file holds it.
+///
+/// CDXC:Spaces 2026-10-06 DECISION:
+/// "so spaces is a setting per gxserver not per client app, but it's toggled in settings like it is now basically". The daemon publishes its own switch with its Spaces document (the presentation snapshot and every `sidebarSpacesChanged` frame), and a client viewing this machine shows Spaces exactly when it is on.
+pub fn read_sidebar_spaces_enabled(paths: &crate::paths::GxserverPaths) -> bool {
+    ghostex_settings_catalog::built_in_extensions::enabled_in_value(
+        crate::session_lifecycle::read_sidebar_settings(paths).as_ref(),
+        ghostex_settings_catalog::built_in_extensions::SPACES,
+    )
+}
 
 pub fn empty_sidebar_spaces_state() -> Value {
     json!({
@@ -73,9 +85,81 @@ pub fn update_sidebar_spaces(
             DomainStateError::bad_request("Sidebar spaces update requires a state object.")
         })?;
     let collections = read_sidebar_project_collections(db)?;
-    let normalized = normalize_sidebar_spaces_state(state, &collections);
+    let previous = read_stored_sidebar_spaces_state(db)?;
+    let state = carry_space_workspace_ids(state, &previous);
+    let normalized = normalize_sidebar_spaces_state(&state, &collections);
     write_sidebar_spaces_state(db, &normalized)?;
     Ok(normalized)
+}
+
+/// A Space written without a `workspaceId` keeps the one it had.
+///
+/// CDXC:Workspaces 2026-10-09 WHY:
+/// Clients that predate workspaces rewrite the whole Space document without the field; without
+/// this carry every Space would fall back to the default workspace on their next edit. A Space
+/// that never had one belongs to the default workspace.
+fn carry_space_workspace_ids(state: &Value, previous: &Value) -> Value {
+    let mut carried = state.clone();
+    let Some(spaces) = carried.get_mut("spaces").and_then(Value::as_object_mut) else {
+        return carried;
+    };
+    for (space_id, space) in spaces.iter_mut() {
+        let Some(space) = space.as_object_mut() else {
+            continue;
+        };
+        if space.contains_key("workspaceId") {
+            continue;
+        }
+        if let Some(workspace_id) = previous
+            .get("spaces")
+            .and_then(|spaces| spaces.get(space_id.trim()))
+            .and_then(|space| space.get("workspaceId"))
+        {
+            space.insert("workspaceId".to_string(), workspace_id.clone());
+        }
+    }
+    carried
+}
+
+/// Moves every Space of a deleted workspace to the default workspace, and drops a project that
+/// left for another workspace from the Spaces that list it directly. Returns the new document
+/// when it changed.
+pub fn rehome_sidebar_spaces_for_workspaces(
+    db: &Connection,
+    deleted_workspace_id: Option<&str>,
+    moved_project_ids: &[String],
+) -> Result<Option<Value>, DomainStateError> {
+    let previous = read_stored_sidebar_spaces_state(db)?;
+    let mut next = previous.clone();
+    if let Some(spaces) = next.get_mut("spaces").and_then(Value::as_object_mut) {
+        for space in spaces.values_mut() {
+            let Some(space) = space.as_object_mut() else {
+                continue;
+            };
+            if deleted_workspace_id.is_some()
+                && space.get("workspaceId").and_then(Value::as_str) == deleted_workspace_id
+            {
+                space.remove("workspaceId");
+            }
+            if let Some(members) = space
+                .get_mut("memberProjectIds")
+                .and_then(Value::as_array_mut)
+            {
+                members.retain(|member| {
+                    !member
+                        .as_str()
+                        .is_some_and(|id| moved_project_ids.iter().any(|moved| moved == id))
+                });
+            }
+        }
+    }
+    let collections = read_sidebar_project_collections(db)?;
+    let normalized = normalize_sidebar_spaces_state(&next, &collections);
+    if normalized == previous {
+        return Ok(None);
+    }
+    write_sidebar_spaces_state(db, &normalized)?;
+    Ok(Some(normalized))
 }
 
 /// Re-apply the cross-document invariants after the collections document
@@ -88,10 +172,16 @@ pub fn update_sidebar_spaces(
 /// and both broadcasts land as one ordered mutation.
 pub fn prune_sidebar_spaces_for_collections(
     db: &Connection,
+    previous_collections_state: &Value,
     collections_state: &Value,
 ) -> Result<Option<Value>, DomainStateError> {
     let previous = read_stored_sidebar_spaces_state(db)?;
-    let normalized = normalize_sidebar_spaces_state(&previous, collections_state);
+    let carried = carry_sidebar_spaces_across_collections(
+        &previous,
+        previous_collections_state,
+        collections_state,
+    );
+    let normalized = normalize_sidebar_spaces_state(&carried, collections_state);
     if normalized == previous {
         return Ok(None);
     }
@@ -99,8 +189,159 @@ pub fn prune_sidebar_spaces_for_collections(
     Ok(Some(normalized))
 }
 
+/// Keeps every project in the Space it was in across a collections change: a new collection that
+/// no Space lists joins the Space its projects were in, and a project that leaves every collection
+/// keeps its old collection's Space. Joining an existing collection still takes that collection's
+/// Space. Runs before the normalizer, which then strips the grouped projects' own membership.
+///
+/// CDXC:Spaces 2026-09-28 SEE-ALSO:
+/// packages/gx-core/src/project_docs/space_edits.rs (`keep_spaces_across_collection_edit`) holds
+/// the user's decision and applies the same rule optimistically in the desktop and web sidebars.
+/// Doing it here too covers `ghostex group-project`, remote machines, and a client whose Spaces
+/// push lands before its collections push and was checked against the old collections.
+fn carry_sidebar_spaces_across_collections(
+    spaces_state: &Value,
+    previous_collections_state: &Value,
+    collections_state: &Value,
+) -> Value {
+    let previous_collections = collection_project_ids(previous_collections_state);
+    let next_collections = collection_project_ids(collections_state);
+    let Some(space_map) = spaces_state.get("spaces").and_then(Value::as_object) else {
+        return spaces_state.clone();
+    };
+    let mut space_order: Vec<&str> = spaces_state
+        .get("order")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|space_id| space_map.contains_key(*space_id))
+        .collect();
+    for space_id in space_map.keys() {
+        if !space_order.contains(&space_id.as_str()) {
+            space_order.push(space_id);
+        }
+    }
+    let space_listing = |field: &str, member_id: &str| -> Option<String> {
+        space_order
+            .iter()
+            .find(|space_id| {
+                space_map
+                    .get(**space_id)
+                    .and_then(|space| space.get(field))
+                    .and_then(Value::as_array)
+                    .is_some_and(|members| {
+                        members
+                            .iter()
+                            .any(|member| member.as_str() == Some(member_id))
+                    })
+            })
+            .map(|space_id| (*space_id).to_string())
+    };
+    let space_before = |project_id: &str| -> Option<String> {
+        match previous_collections
+            .iter()
+            .find(|(_, project_ids)| project_ids.iter().any(|id| id == project_id))
+        {
+            Some((collection_id, _)) => space_listing("memberCollectionIds", collection_id),
+            None => space_listing("memberProjectIds", project_id),
+        }
+    };
+    let mut additions: Vec<(String, &'static str, String)> = Vec::new();
+    for (collection_id, project_ids) in &next_collections {
+        let is_new = !previous_collections
+            .iter()
+            .any(|(previous_id, _)| previous_id == collection_id);
+        if !is_new || space_listing("memberCollectionIds", collection_id).is_some() {
+            continue;
+        }
+        if let Some(space_id) = project_ids
+            .iter()
+            .find_map(|project_id| space_before(project_id))
+        {
+            additions.push((space_id, "memberCollectionIds", collection_id.clone()));
+        }
+    }
+    for (collection_id, project_ids) in &previous_collections {
+        for project_id in project_ids {
+            let still_grouped = next_collections
+                .iter()
+                .any(|(_, next_ids)| next_ids.contains(project_id));
+            if still_grouped || space_listing("memberProjectIds", project_id).is_some() {
+                continue;
+            }
+            if let Some(space_id) = space_listing("memberCollectionIds", collection_id) {
+                additions.push((space_id, "memberProjectIds", project_id.clone()));
+            }
+        }
+    }
+    let mut carried = spaces_state.clone();
+    for (space_id, field, member_id) in additions {
+        let Some(space) = carried
+            .get_mut("spaces")
+            .and_then(|spaces| spaces.get_mut(&space_id))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let members = space
+            .entry(field)
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !members.is_array() {
+            *members = Value::Array(Vec::new());
+        }
+        if let Some(members) = members.as_array_mut() {
+            if !members
+                .iter()
+                .any(|member| member.as_str() == Some(member_id.as_str()))
+            {
+                members.push(Value::String(member_id));
+            }
+        }
+    }
+    carried
+}
+
+/// Each collection's id and project ids, in the order the collections document lists them.
+fn collection_project_ids(collections_state: &Value) -> Vec<(String, Vec<String>)> {
+    let Some(entries) = collections_state
+        .get("collections")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut ordered: Vec<&str> = collections_state
+        .get("order")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|collection_id| entries.contains_key(*collection_id))
+        .collect();
+    for collection_id in entries.keys() {
+        if !ordered.contains(&collection_id.as_str()) {
+            ordered.push(collection_id);
+        }
+    }
+    ordered
+        .into_iter()
+        .map(|collection_id| {
+            let project_ids = entries
+                .get(collection_id)
+                .and_then(|collection| collection.get("projectIds"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            (collection_id.to_string(), project_ids)
+        })
+        .collect()
+}
+
 /// CDXC:Spaces 2026-09-07 SEE-ALSO:
-/// packages/core-ui/spaces.ts owns the one-Space-per-project decision and optimistic moves.
+/// packages/core-ui/spaces.ts (deleted 2026-10-01) owns the one-Space-per-project decision and optimistic moves.
 /// Normalize reads and writes in sidebar order so older clients and CLI payloads cannot retain duplicate memberships.
 pub fn normalize_sidebar_spaces_state(state: &Value, collections_state: &Value) -> Value {
     let collections = collections_state
@@ -189,17 +430,23 @@ pub fn normalize_sidebar_spaces_state(state: &Value, collections_state: &Value) 
         let icon = trimmed_bounded_text(space_state.get("icon"), MAX_ICON_CHARS)
             .unwrap_or_else(|| DEFAULT_SIDEBAR_SPACE_ICON.to_string());
         let color = normalized_space_color(space_state.get("color"), spaces.len());
-        spaces.insert(
-            space_id.clone(),
-            json!({
-                "color": color,
-                "icon": icon,
-                "memberCollectionIds": member_collection_ids,
-                "memberProjectIds": member_project_ids,
-                "name": name,
-                "spaceId": space_id,
-            }),
-        );
+        let mut space = json!({
+            "color": color,
+            "icon": icon,
+            "memberCollectionIds": member_collection_ids,
+            "memberProjectIds": member_project_ids,
+            "name": name,
+            "spaceId": space_id,
+        });
+        // CDXC:Workspaces 2026-10-09 WHY: absent means the default workspace, so the stored
+        // document of an install that never made a second workspace stays byte-identical.
+        if let Some(workspace_id) =
+            trimmed_bounded_text(space_state.get("workspaceId"), MAX_ID_CHARS)
+                .filter(|id| id != crate::workspaces::DEFAULT_WORKSPACE_ID)
+        {
+            space["workspaceId"] = Value::String(workspace_id);
+        }
+        spaces.insert(space_id.clone(), space);
         order.push(space_id);
     }
     json!({

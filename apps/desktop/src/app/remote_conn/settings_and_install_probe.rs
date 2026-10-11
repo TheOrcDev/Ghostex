@@ -44,7 +44,7 @@ impl GhostexGpuiApp {
         }
         // Only explicit remote-machine UI and sidebar ordering saves may replace the
         // saved machine list; broad Settings saves keep the stored value. Mirrors
-        // canSettingsUpdateSourceChangeRemoteMachines in packages/shared/ghostex-settings.ts.
+        // canSettingsUpdateSourceChangeRemoteMachines in packages/shared/ghostex-settings.ts (deleted 2026-10-01).
         let source_can_change_remote_machines = matches!(
             message.get("source").and_then(serde_json::Value::as_str),
             Some("settings:remoteMachines") | Some("sidebar:remoteMachineOrder")
@@ -275,7 +275,7 @@ impl GhostexGpuiApp {
                 self.dispatch_gpui_app_modal_toast(
                     "warning",
                     gpui_remote_machine_password_failure_title(has_password),
-                    "Remote SSH password storage is only available on macOS.",
+                    "Remote SSH password storage is unavailable in this build.",
                     cx,
                 );
                 return;
@@ -284,7 +284,7 @@ impl GhostexGpuiApp {
                 self.dispatch_gpui_app_modal_toast(
                     "warning",
                     gpui_remote_machine_password_failure_title(has_password),
-                    "macOS Keychain could not update the SSH password.",
+                    "Secure system storage could not update the SSH password.",
                     cx,
                 );
                 return;
@@ -314,7 +314,7 @@ impl GhostexGpuiApp {
             self.dispatch_gpui_app_modal_toast(
                 "warning",
                 gpui_remote_machine_password_failure_title(has_password),
-                "GPUI could not update Settings after the Keychain operation.",
+                "Could not update Settings after changing the saved SSH password.",
                 cx,
             );
             return;
@@ -328,12 +328,22 @@ impl GhostexGpuiApp {
                 "SSH password removed"
             },
             if has_password {
-                "The password is stored in macOS Keychain."
+                "The password is stored in secure system storage."
             } else {
-                "The Keychain password was removed."
+                "The SSH password was removed from secure system storage."
             },
             cx,
         );
+        // A refused login is never retried automatically (`reconnect_ladder.rs`), so the new
+        // password is what tries again.
+        if has_password
+            && self
+                .remote_machine_connect_states
+                .get(remote_machine_id.as_str())
+                .is_some_and(|state| state == "authFailed")
+        {
+            self.remote_reconnect_from_sidebar(&remote_machine_id, cx);
+        }
     }
 
     pub(crate) fn handle_gpui_probe_remote_gxserver_install_message(
@@ -363,11 +373,15 @@ impl GhostexGpuiApp {
         remote_machine_id: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.app_modal_window.is_none() {
+        if self.app_modal_window.is_none()
+            && !self
+                .native_app_modal_kind()
+                .is_some_and(|kind| kind.is_settings_modal_entry())
+        {
             /*
-            Nothing can render the answer while no app modal is open, so skip
-            the SSH round trip instead of probing every saved machine on the
-            automatic startup connect pass.
+            Nothing can render the answer while no app modal is open (the React
+            host or the native Settings modal), so skip the SSH round trip instead
+            of probing every saved machine on the automatic startup connect pass.
             */
             return;
         }

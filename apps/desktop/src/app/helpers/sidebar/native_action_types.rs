@@ -18,13 +18,13 @@ use crate::*;
 pub(crate) struct GpuiSidebarNativeProjectPathActionMessage {
     pub(crate) action: GpuiSidebarNativeProjectPathAction,
     pub(crate) file_path: Option<String>,
-    /// Only `openRemoteSessionTerminal` carries it; see `GpuiWorkspaceTerminalFocusPlacement`.
-    pub(crate) placement: GpuiWorkspaceTerminalFocusPlacement,
     pub(crate) preferred_interface: GpuiPreferredAgentInterface,
     pub(crate) project_id: String,
     /// Only `openRemoteSessionTerminal` carries it; the remote twin of
     /// `GpuiSidebarWorkspaceTerminalFocusMessage::keep_view`.
     pub(crate) keep_view: bool,
+    /// Only `openWorkspaceProjectInTarget` carries it: the id of one visible Open In target.
+    pub(crate) target_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,11 +34,13 @@ pub(crate) enum GpuiSidebarNativeProjectPathAction {
     CopyWorkspaceProjectPath,
     OpenWorkspaceProjectInFinder,
     OpenWorkspaceProjectInIde,
+    OpenWorkspaceProjectInTarget,
     OpenActiveWorkspaceProjectInFinder,
     OpenActiveWorkspaceProjectInVscode,
     OpenActiveWorkspaceProjectInZed,
     OpenExistingPullRequestInBrowser,
     OpenSidebarGitChangedFileInIde,
+    RevealSidebarGitChangedFile,
     CopyRemoteProjectPath,
     OpenRemoteProjectTerminal,
     OpenRemoteWorkspaceProjectInIde,
@@ -48,8 +50,6 @@ pub(crate) enum GpuiSidebarNativeProjectPathAction {
     OpenRemoteSidebarGitChangedFileInIde,
     OpenRemoteProjectPortsBrowser,
     OpenRemoteSessionTerminal,
-    CopyRemoteAttachCommand,
-    CopyRemoteResumeCommand,
 }
 
 impl GpuiSidebarNativeProjectPathAction {
@@ -60,11 +60,13 @@ impl GpuiSidebarNativeProjectPathAction {
             "copyWorkspaceProjectPath" => Some(Self::CopyWorkspaceProjectPath),
             "openWorkspaceProjectInFinder" => Some(Self::OpenWorkspaceProjectInFinder),
             "openWorkspaceProjectInIde" => Some(Self::OpenWorkspaceProjectInIde),
+            "openWorkspaceProjectInTarget" => Some(Self::OpenWorkspaceProjectInTarget),
             "openActiveWorkspaceProjectInFinder" => Some(Self::OpenActiveWorkspaceProjectInFinder),
             "openActiveWorkspaceProjectInVscode" => Some(Self::OpenActiveWorkspaceProjectInVscode),
             "openActiveWorkspaceProjectInZed" => Some(Self::OpenActiveWorkspaceProjectInZed),
             "openExistingPullRequestInBrowser" => Some(Self::OpenExistingPullRequestInBrowser),
             "openSidebarGitChangedFileInIde" => Some(Self::OpenSidebarGitChangedFileInIde),
+            "revealSidebarGitChangedFile" => Some(Self::RevealSidebarGitChangedFile),
             "copyRemoteProjectPath" => Some(Self::CopyRemoteProjectPath),
             "openRemoteProjectTerminal" => Some(Self::OpenRemoteProjectTerminal),
             "openRemoteWorkspaceProjectInIde" => Some(Self::OpenRemoteWorkspaceProjectInIde),
@@ -78,8 +80,6 @@ impl GpuiSidebarNativeProjectPathAction {
             }
             "openRemoteProjectPortsBrowser" => Some(Self::OpenRemoteProjectPortsBrowser),
             "openRemoteSessionTerminal" => Some(Self::OpenRemoteSessionTerminal),
-            "copyRemoteAttachCommand" => Some(Self::CopyRemoteAttachCommand),
-            "copyRemoteResumeCommand" => Some(Self::CopyRemoteResumeCommand),
             _ => None,
         }
     }
@@ -110,17 +110,14 @@ impl GpuiSidebarNativeProjectPathAction {
     pub(crate) fn requires_file_path(self) -> bool {
         matches!(
             self,
-            Self::OpenSidebarGitChangedFileInIde | Self::OpenRemoteSidebarGitChangedFileInIde
+            Self::OpenSidebarGitChangedFileInIde
+                | Self::RevealSidebarGitChangedFile
+                | Self::OpenRemoteSidebarGitChangedFileInIde
         )
     }
 
     pub(crate) fn is_remote_session_action(self) -> bool {
-        matches!(
-            self,
-            Self::OpenRemoteSessionTerminal
-                | Self::CopyRemoteAttachCommand
-                | Self::CopyRemoteResumeCommand
-        )
+        matches!(self, Self::OpenRemoteSessionTerminal)
     }
 
     pub(crate) fn is_remote_project_action(self) -> bool {
@@ -175,9 +172,20 @@ impl GpuiStatusIndicatorStatus {
 pub(crate) struct GpuiStatusIndicatorSessionState {
     pub(crate) last_active_at: Option<String>,
     pub(crate) order: u64,
+    /// An unanswered question card is waiting (the sidebar's pink dot).
+    pub(crate) pending_question: bool,
     pub(crate) session_id: String,
     pub(crate) status: GpuiStatusIndicatorStatus,
     pub(crate) title: String,
+}
+
+/// Working / attention / question split the way the sidebar's section headers split them; what
+/// the Ghostex Capture button shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GpuiStatusSectionCounts {
+    pub(crate) attention: u64,
+    pub(crate) question: u64,
+    pub(crate) working: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -193,6 +201,7 @@ pub(crate) struct GpuiSidebarSessionStatusIndicatorsState {
     pub(crate) available_count: u64,
     pub(crate) hide_menu_bar_indicators: bool,
     pub(crate) projects: Vec<GpuiStatusIndicatorProjectState>,
+    pub(crate) section_counts: GpuiStatusSectionCounts,
     pub(crate) working_count: u64,
 }
 
@@ -228,6 +237,7 @@ pub(crate) fn gpui_sidebar_session_status_indicators_from_json(
             "workingCount",
             "hideMenuBarIndicators",
             "projects",
+            "sectionCounts",
         ],
     )?;
     if object.get("version").and_then(serde_json::Value::as_u64)
@@ -250,7 +260,23 @@ pub(crate) fn gpui_sidebar_session_status_indicators_from_json(
         available_count: gpui_status_count_field(object, "availableCount")?,
         hide_menu_bar_indicators: gpui_status_bool_field(object, "hideMenuBarIndicators")?,
         projects,
+        section_counts: gpui_status_section_counts_field(object)?,
         working_count: gpui_status_count_field(object, "workingCount")?,
+    })
+}
+
+fn gpui_status_section_counts_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<GpuiStatusSectionCounts, ()> {
+    let counts = object
+        .get("sectionCounts")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(())?;
+    reject_unexpected_gpui_status_keys(counts, &["attention", "question", "working"])?;
+    Ok(GpuiStatusSectionCounts {
+        attention: gpui_status_count_field(counts, "attention")?,
+        question: gpui_status_count_field(counts, "question")?,
+        working: gpui_status_count_field(counts, "working")?,
     })
 }
 
@@ -373,12 +399,4 @@ pub(crate) fn gpui_sidebar_pet_overlay_state_from_json(
         selected_pet_id: gpui_pet_overlay_selected_pet_id_field(object, "selectedPetId")?,
         status_items,
     })
-}
-
-pub(crate) fn gpui_command_palette_run_sidebar_command_script(
-    message: &serde_json::Value,
-) -> String {
-    format!(
-        "(function(){{const bridge=window.ghostexGpui=window.ghostexGpui||{{}};const payload={message};if(typeof bridge.onCommandPaletteRunSidebarCommand==='function'){{bridge.onCommandPaletteRunSidebarCommand(payload);}}else{{const pending=Array.isArray(bridge.pendingCommandPaletteRunSidebarCommands)?bridge.pendingCommandPaletteRunSidebarCommands:[];pending.push(payload);bridge.pendingCommandPaletteRunSidebarCommands=pending;}}}})(); undefined;"
-    )
 }

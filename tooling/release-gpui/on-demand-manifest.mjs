@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { APP_RELEASE_GITHUB_REPO, componentsGithubRepo } from './components-repo.mjs';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -80,6 +81,17 @@ export function validateOnDemandManifestV2(input) {
     if (downloadTag !== `${name}-${componentVersion}`) {
       fail(`components.${key}.downloadTag must equal ${name}-${componentVersion}`);
     }
+    /*
+     * Components carry their own repository because the top-level githubRepo
+     * names the app release that serves the version-scoped `assets`. Manifests
+     * sealed before 2026-09-16 have no per-component repository and resolve to
+     * the top-level one, which is where their components were published.
+     */
+    if (component.githubRepo !== undefined) {
+      if (typeof component.githubRepo !== 'string' || !githubRepoPattern.test(component.githubRepo)) {
+        fail(`components.${key}.githubRepo must have owner/repository form`);
+      }
+    }
     const platforms = requireObject(component.platforms, `components.${key}.platforms`);
     if (Object.keys(platforms).length === 0) fail(`components.${key}.platforms must not be empty`);
     for (const [platformKey, rawPlatformAsset] of Object.entries(platforms)) {
@@ -124,8 +136,32 @@ export function validateMacosReleaseOnDemandManifest(input) {
   return manifest;
 }
 
-export function buildOnDemandManifestV2({ version, githubRepo = 'maddada/Ghostex', assets, components = {} }) {
-  const manifest = { schemaVersion: 2, version, githubRepo, assets, components };
+/* The repository a sealed component downloads from, for old and new manifests alike. */
+export function componentDownloadRepo(manifest, component) {
+  return component.githubRepo ?? manifest.githubRepo;
+}
+
+/*
+ * `githubRepo` stays the app release repository (it serves the version-scoped
+ * `assets`); every component is stamped with the components repository unless
+ * its publisher record already names one.
+ */
+export function buildOnDemandManifestV2({
+  version,
+  githubRepo = APP_RELEASE_GITHUB_REPO,
+  assets,
+  components = {},
+  componentsRepo = componentsGithubRepo(),
+}) {
+  const stampedComponents = Object.fromEntries(
+    Object.entries(components).map(([key, component]) => [
+      key,
+      component && typeof component === 'object' && !Array.isArray(component) && component.githubRepo === undefined
+        ? { ...component, githubRepo: componentsRepo }
+        : component,
+    ])
+  );
+  const manifest = { schemaVersion: 2, version, githubRepo, assets, components: stampedComponents };
   return validateOnDemandManifestV2(manifest);
 }
 
@@ -199,7 +235,7 @@ async function main() {
       buildManifestPath: options['build-manifest'],
       componentManifestPath: options['component-manifest'],
       outputPath: options.output,
-      githubRepo: options.repo ?? 'maddada/Ghostex',
+      githubRepo: options.repo ?? APP_RELEASE_GITHUB_REPO,
     });
     process.stdout.write(
       `Sealed on-demand manifest v2 with ${Object.keys(manifest.components).length} component(s): ${options.output}\n`

@@ -1,0 +1,1 @@
+../../desktop/src/assets.rs

@@ -98,6 +98,14 @@ impl GhostexGpuiApp {
                     cx.stop_propagation();
                 }),
             )
+            // Middle-click on empty strip space closes the bar's terminals; not on this button.
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |_this, _event: &MouseUpEvent, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }),
+            )
             .when(
                 !collapsed_strip && self.command_pane_tab_hint_visible(group_id),
                 |this| {
@@ -206,6 +214,17 @@ impl GhostexGpuiApp {
             window,
             cx,
         );
+    }
+
+    pub(crate) fn handle_command_pane_empty_titlebar_middle_mouse_up(
+        &mut self,
+        group_id: Option<CommandPaneGroupId>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        window.prevent_default();
+        cx.stop_propagation();
+        self.close_all_command_pane_tabs_in_bar(group_id, cx);
     }
 
     pub(crate) fn render_command_tab_strip_end_drop_target(
@@ -364,26 +383,6 @@ impl GhostexGpuiApp {
             .into_any_element()
     }
 
-    pub(crate) fn set_workspace_tab_hovered(
-        &mut self,
-        tab: WorkspaceHoverTab,
-        hovered: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if hovered {
-            if self.hovered_workspace_tab != Some(tab) {
-                self.hovered_workspace_tab = Some(tab);
-                cx.notify();
-            }
-            return;
-        }
-
-        if self.hovered_workspace_tab == Some(tab) {
-            self.hovered_workspace_tab = None;
-            cx.notify();
-        }
-    }
-
     pub(crate) fn set_command_pane_tab_hovered(
         &mut self,
         tab: CommandPaneHoverTab,
@@ -465,7 +464,7 @@ impl GhostexGpuiApp {
 
     pub(crate) fn clear_command_resize_hover_state_if_command_pane_hidden(&mut self) -> bool {
         clear_command_resize_hover_state_fields_if_command_pane_hidden(
-            self.command_pane.has_sessions(),
+            self.command_pane.has_panel_sessions(),
             &mut self.command_resize_hovering,
             &mut self.command_resize_hover_visible,
             &mut self.command_resize_hover_epoch,
@@ -478,6 +477,13 @@ impl GhostexGpuiApp {
         expanded_chrome: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        if group_id.is_some_and(|group_id| {
+            self.command_pane.dock_for_group(group_id) == Some(CommandPaneDock::View)
+        }) {
+            // Pin, Keep open and Minimize are Commands pane controls; a Terminal view leaf has
+            // only its inline add button, and the view tab strip's own controls above it.
+            return div().into_any_element();
+        }
         let pin_tooltip = command_pane_panel_pin_label(self.command_pane.mode);
         let pin_icon_path = command_pane_panel_pin_icon_path(self.command_pane.mode);
         let expand_icon_path =
@@ -594,6 +600,19 @@ impl GhostexGpuiApp {
         } else {
             command_pane_control_text_color()
         };
+        // Under window glass the lit Keep open toggle is a wash of its blue, like the + button's
+        // hover wash, instead of a solid block.
+        let glass = window_glass_active();
+        let keep_open_fill: Hsla = if glass {
+            icon_color.opacity(0.16)
+        } else {
+            chrome_color(0x19354f, 0xdbeafe).into()
+        };
+        let keep_open_hover: Hsla = if glass {
+            icon_color.opacity(0.24)
+        } else {
+            chrome_color(0x244968, 0xbfdbfe).into()
+        };
 
         div()
             .id(element_id)
@@ -606,14 +625,12 @@ impl GhostexGpuiApp {
             })
             .rounded(px(COMMAND_PANE_CONTROL_CORNER_RADIUS))
             .bg(command_pane_control_button_color())
-            .when(keep_open_active, |this| {
-                this.bg(chrome_color(0x19354f, 0xdbeafe))
-            })
+            .when(keep_open_active, |this| this.bg(keep_open_fill))
             .text_color(command_pane_control_text_color())
             .cursor_default()
             .hover(move |this| {
                 this.bg(if keep_open_active {
-                    chrome_color(0x244968, 0xbfdbfe).into()
+                    keep_open_hover
                 } else {
                     command_pane_control_hover_color()
                 })

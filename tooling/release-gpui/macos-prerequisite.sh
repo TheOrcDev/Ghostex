@@ -89,8 +89,16 @@ runtime)
 	;;
 rust)
 	export CEF_PATH="$REPO_ROOT/apps/desktop/build/cef-cache"
+	# cef-dll-sys uses CEF_PATH/<CEF build>/ only when that folder exists (see
+	# apps/desktop/scripts/cef-distribution.sh); stage from exactly that build.
+	CEF_BUILD="$(sed -n 's/^version = "[^"+]*+\([^"]*\)"$/\1/p' "$REPO_ROOT/.dependencies/cef-rs/Cargo.toml" | head -n 1)"
+	[[ -n "$CEF_BUILD" ]] || {
+		echo "Could not read the pinned CEF build from .dependencies/cef-rs/Cargo.toml" >&2
+		exit 1
+	}
+	mkdir -p "$CEF_PATH/$CEF_BUILD"
 	(
-		cd "$REPO_ROOT/gpui"
+		cd "$REPO_ROOT/apps/desktop"
 		cargo build --release --bins
 	)
 	for binary_path in apps/desktop/target/release/ghostex-gpui apps/desktop/target/release/ghostex-gpui-cef-helper; do
@@ -103,7 +111,7 @@ rust)
 			exit 1
 		}
 	done
-	CEF_FRAMEWORK="$(find "$CEF_PATH" -path '*/Chromium Embedded Framework.framework' -type d -print -quit)"
+	CEF_FRAMEWORK="$CEF_PATH/$CEF_BUILD/cef_macos_aarch64/Chromium Embedded Framework.framework"
 	[[ -d "$CEF_FRAMEWORK" ]] || {
 		echo "Rust build did not produce the CEF framework" >&2
 		exit 1

@@ -16,7 +16,7 @@ export class MacosAppBundleValidationError extends Error {
 
 /**
  * CDXC:Build 2026-06-09-09:07:
- * Local production starts should validate the same bundled runtime shape as release builds without paying notarization or DMG costs. Keep app-bundle resource checks in one module so `bun run start` and release automation reject stale cross-architecture Web resources before the app opens.
+ * Local production starts should validate the same bundled runtime shape as release builds without paying notarization or DMG costs. Keep app-bundle resource checks in one module so `cargo xtask start` and release automation reject stale cross-architecture Web resources before the app opens.
  *
  * CDXC:Build 2026-06-22-23:23:
  * Local contributor starts may intentionally omit optional submodules. Callers that explicitly allow the legacy/dev shape still validate its bundled code-server/Node, CEF, gxserver, zmx, and optional resources; release validation requires manifest v2 by default.
