@@ -1,7 +1,7 @@
 //! The rows a `shells-running` activity draws: one per background task the agent left running.
 //!
 //! CDXC:SessionChat 2026-10-11 DECISION:
-//! User: "1 shell still running" was not clear enough for non-technical users. From the mockups they picked "M3" for every count, also one task: a muted line "Still running in the background · the agent finished its reply at 2:37 AM", then one row per task with its own timer, up to three rows and then "+N more". A row is titled by the description the agent gave the command, a monitor reads "Watching …", and the command itself shows on hover (desktop) or long-press (phone). When a task ends, the chat's existing finished row stays exactly as it looks and only gains how long the task ran (pick "F2"; see `transcript::noise::task_duration_label`).
+//! User: "1 shell still running" was not clear enough for non-technical users. From the mockups they picked "M3" for every count, also one task: a muted line "Still running in the background" (the user later dropped the " · the agent finished its reply at 9:37 AM" tail it first carried), then one row per task with its own timer, up to three rows and then "+N more". A row is titled by the description the agent gave the command, a monitor reads "Watching …", and the command itself shows on hover (desktop) or long-press (phone). When a task ends, the chat's existing finished row stays exactly as it looks and only gains how long the task ran (pick "F2"; see `transcript::noise::task_duration_label`).
 //!
 //! CDXC:SessionChat 2026-10-11 SEE-ALSO:
 //! server/src/session_chat_claude_background.rs reads the tasks from Claude's transcript; apps/desktop/src/app/native_chat/working_strip.rs and apps/mobile/app/src/chat/native/cards/WorkingStrip.tsx draw these rows and must match.
@@ -37,13 +37,7 @@ pub fn background_tasks(activity: &Value, now_ms: f64, utc_offset_minutes: i32) 
         .and_then(Value::as_u64)
         .unwrap_or(0)
         .max(tasks.len() as u64);
-    let header = match background.get("replyDoneAt").and_then(Value::as_str) {
-        Some(done) if !done.trim().is_empty() => format!(
-            "Still running in the background \u{b7} the agent finished its reply at {}",
-            done.trim()
-        ),
-        _ => "Still running in the background".to_string(),
-    };
+    let header = "Still running in the background";
     let rows: Vec<Value> = tasks
         .iter()
         .take(MAX_BACKGROUND_TASK_ROWS)

@@ -307,13 +307,12 @@ export interface SessionChatTerminalActivity {
   /** `agent-stream` only: the message text painted so far; starts with `…` when its first rows scrolled off before the first probe stitched them. */
   text?: string;
   /**
-   * `shells-running` only: the footer's count (the authority on how much runs), the time Claude
-   * says the reply finished (`2:37 AM`), and the newest launches Claude's transcript has not seen
-   * end, never more than `count` (server/src/session_chat_claude_background.rs).
+   * `shells-running` only: the footer's count (the authority on how much runs) and the newest
+   * launches Claude's transcript has not seen end, never more than `count`
+   * (server/src/session_chat_claude_background.rs).
    */
   background?: {
     count: number;
-    replyDoneAt?: string;
     tasks: { id: string; kind: 'shell' | 'monitor'; title: string; command?: string; startedAt: string }[];
   };
 }

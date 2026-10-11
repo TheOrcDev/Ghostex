@@ -130,10 +130,6 @@ fn running_shells_activity(label: &str) -> Option<SessionChatTerminalActivity> {
 
     let background = SessionChatBackgroundWork {
         count,
-        reply_done_at: completed_at
-            .and_then(|done| done.strip_prefix("done "))
-            .map(|done| done.trim().to_string())
-            .filter(|done| !done.is_empty()),
         tasks: Vec::new(),
     };
     let mut activity = if let Some(completed_at) = completed_at {

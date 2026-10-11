@@ -107,8 +107,6 @@ pub struct SessionChatTerminalActivity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionChatBackgroundWork {
     pub count: u64,
-    /// The time Claude says the reply finished (`2:37 AM`), as painted.
-    pub reply_done_at: Option<String>,
     pub tasks: Vec<SessionChatBackgroundTask>,
 }
 
@@ -131,9 +129,6 @@ impl SessionChatBackgroundWork {
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("count".to_string(), json!(self.count));
-        if let Some(done) = &self.reply_done_at {
-            map.insert("replyDoneAt".to_string(), json!(done));
-        }
         map.insert(
             "tasks".to_string(),
             Value::Array(
