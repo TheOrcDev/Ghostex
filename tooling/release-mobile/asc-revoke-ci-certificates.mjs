@@ -10,44 +10,15 @@
  * Env: GHOSTEX_ASC_KEY_PATH, GHOSTEX_ASC_KEY_ID, GHOSTEX_ASC_ISSUER_ID (the workflow's key step).
  */
 
-import { X509Certificate, sign } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { X509Certificate } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const API = "https://api.appstoreconnect.apple.com";
+import { ascClientFromEnv } from "./asc-api.mjs";
+
 const DEVELOPMENT_TYPES = new Set(["DEVELOPMENT", "IOS_DEVELOPMENT"]);
 /** The parenthesised value is the ID of the API key that made the certificate. */
 const CI_COMMON_NAME = /^Apple Development: Created via API \([A-Z0-9]{10}\)$/;
-
-function base64url(value) {
-  return Buffer.from(value).toString("base64url");
-}
-
-/** App Store Connect API token: ES256 JWT, valid for 10 minutes (the API allows 20). */
-export function ascToken({
-  keyPem,
-  keyId,
-  issuerId,
-  now = Math.floor(Date.now() / 1000),
-}) {
-  const header = base64url(
-    JSON.stringify({ alg: "ES256", kid: keyId, typ: "JWT" }),
-  );
-  const payload = base64url(
-    JSON.stringify({
-      iss: issuerId,
-      iat: now,
-      exp: now + 600,
-      aud: "appstoreconnect-v1",
-    }),
-  );
-  const signature = sign("sha256", Buffer.from(`${header}.${payload}`), {
-    key: keyPem,
-    dsaEncoding: "ieee-p1363",
-  });
-  return `${header}.${payload}.${signature.toString("base64url")}`;
-}
 
 /** The subject's attributes, e.g. { CN: '…', OU: '…' }. A repeated attribute makes the subject unreadable. */
 function subjectFields(x509) {
@@ -95,33 +66,13 @@ export function classifyCertificate(resource, teamId) {
   return { ci: true, subject };
 }
 
-async function ascRequest(token, method, url) {
-  const response = await fetch(
-    url.startsWith("https://") ? url : `${API}${url}`,
-    {
-      method,
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  );
-  if (!response.ok) {
-    throw new Error(
-      `${method} ${url} answered ${response.status}: ${(await response.text()).slice(0, 500)}`,
-    );
-  }
-  return response.status === 204 ? null : response.json();
-}
-
-async function listDevelopmentCertificates(token) {
+async function listDevelopmentCertificates(client) {
   const fields =
     "name,certificateType,serialNumber,expirationDate,certificateContent";
-  let url = `/v1/certificates?filter[certificateType]=${[...DEVELOPMENT_TYPES].join(",")}&fields[certificates]=${fields}&limit=200`;
-  const resources = [];
-  while (url) {
-    const page = await ascRequest(token, "GET", url);
-    resources.push(...(page.data ?? []));
-    url = page.links?.next ?? null;
-  }
-  return resources;
+  const { data } = await client.list(
+    `/v1/certificates?filter[certificateType]=${[...DEVELOPMENT_TYPES].join(",")}&fields[certificates]=${fields}&limit=200`,
+  );
+  return data;
 }
 
 async function main(argv) {
@@ -131,22 +82,8 @@ async function main(argv) {
     throw new Error(
       `usage: asc-revoke-ci-certificates.mjs <teamId> [--dry-run]`,
     );
-  const {
-    GHOSTEX_ASC_KEY_PATH: keyPath,
-    GHOSTEX_ASC_KEY_ID: keyId,
-    GHOSTEX_ASC_ISSUER_ID: issuerId,
-  } = process.env;
-  if (!keyPath || !keyId || !issuerId)
-    throw new Error(
-      "GHOSTEX_ASC_KEY_PATH, GHOSTEX_ASC_KEY_ID and GHOSTEX_ASC_ISSUER_ID are required",
-    );
-
-  const token = ascToken({
-    keyPem: readFileSync(keyPath, "utf8"),
-    keyId,
-    issuerId,
-  });
-  const certificates = await listDevelopmentCertificates(token);
+  const client = ascClientFromEnv();
+  const certificates = await listDevelopmentCertificates(client);
   let revoked = 0;
   for (const resource of certificates) {
     const { attributes = {} } = resource;
@@ -162,8 +99,7 @@ async function main(argv) {
       console.log(`would revoke ${label} ${verdict.subject}`);
       continue;
     }
-    await ascRequest(
-      token,
+    await client.request(
       "DELETE",
       `/v1/certificates/${encodeURIComponent(resource.id)}`,
     );
