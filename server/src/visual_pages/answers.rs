@@ -16,7 +16,7 @@ use super::{
 
 pub(crate) const VISUAL_PAGE_ANSWERS_SUFFIX: &str = "/answers";
 /// The page's `{answers}` body; answers are form fields, not files.
-const ANSWERS_BODY_MAX_BYTES: usize = 64 * 1024;
+pub(super) const ANSWERS_BODY_MAX_BYTES: usize = 64 * 1024;
 
 /// Whether `POST <path>` is a page's answers route, `/visual/<id>/answers`.
 pub(crate) fn is_answers_route(path: &str) -> bool {
@@ -167,7 +167,7 @@ fn answers_message(id: &str, title: &str, answers: &Value) -> String {
     )
 }
 
-fn reply(status: StatusCode, body: Value) -> RoutedResponse {
+pub(super) fn reply(status: StatusCode, body: Value) -> RoutedResponse {
     let mut response = Response::new(Body::from(body.to_string()));
     *response.status_mut() = status;
     for (name, value) in [

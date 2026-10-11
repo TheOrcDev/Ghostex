@@ -318,3 +318,10 @@ under 64 KiB and returns a promise that rejects with an `Error` saying why it
 wasn't sent; `ghostex.answered` and `ghostex.answers` tell a reopened page what
 was sent; an element with `data-gx-answered` is where the Answered note goes.
 A page takes one set of answers either way.
+
+What the reader picks and types is kept until they send, also when they close
+and reopen the page: the kit's picks and the value of every named `input`,
+`textarea` and `select` are saved and filled back in on their own. For other
+state (a ranking, marks on a mockup), call `ghostex.saveDraft(value)` with any
+JSON as it changes and read it back from `ghostex.draft` when the page loads;
+check `ghostex.saveDraft` exists first, since older Ghostex versions lack it.

@@ -108,8 +108,39 @@ pub(super) fn store_answers(
     record["answers"] = answers.clone();
     record["answeredAt"] =
         json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    // The answers replace the draft they were written from.
+    if let Some(fields) = record.as_object_mut() {
+        fields.remove("draft");
+    }
     write_record(gxserver_state_dir, id, &record).map_err(StoreAnswersError::Io)?;
     Ok(record)
+}
+
+/// Keeps what the reader has picked and written so far on the page's record, so closing and
+/// reopening the page (or a restart) brings it back; `null` forgets it. A page that was answered
+/// keeps its answers instead.
+pub(super) fn store_draft(
+    gxserver_state_dir: &Path,
+    id: &str,
+    draft: &serde_json::Value,
+) -> Result<(), StoreAnswersError> {
+    let _guard = RECORD_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut record = read_record(gxserver_state_dir, id).ok_or(StoreAnswersError::NotFound)?;
+    if let Some(answered_at) = record.get("answeredAt").and_then(serde_json::Value::as_str) {
+        return Err(StoreAnswersError::AlreadyAnswered(answered_at.to_string()));
+    }
+    match record.as_object_mut() {
+        Some(fields) if draft.is_null() => {
+            fields.remove("draft");
+        }
+        Some(fields) => {
+            fields.insert("draft".to_string(), draft.clone());
+        }
+        None => return Err(StoreAnswersError::NotFound),
+    }
+    write_record(gxserver_state_dir, id, &record).map_err(StoreAnswersError::Io)
 }
 
 /// Replaces the record whole (written beside it, then renamed), so a reader never sees half.

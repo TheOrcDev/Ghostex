@@ -12,9 +12,9 @@ use super::{appearance::ChatAppearance, state::NativeChatView, transcript::text}
 use crate::app::native_chat::cursor::ChatCursor as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, AppContext as _, Context, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    px, rgb, svg,
+    AnyElement, AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div, px, rgb, svg,
 };
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use serde_json::{Value, json};
@@ -23,6 +23,16 @@ use serde_json::{Value, json};
 /// packages/gx-chat-core/src/transcript/native_markdown.rs).
 pub(super) const OPEN: &str = "\u{E000}questions:";
 pub(super) const CLOSE: &str = "\u{E000}/questions";
+
+/// One open form's note or text box.
+pub(super) struct FormInput {
+    pub(super) input: Entity<TextareaState>,
+    _subscription: Subscription,
+    /// The placeholder it shows, which follows the picks.
+    placeholder: String,
+    /// It holds the reader's text: typed into, or filled from the saved draft once.
+    settled: bool,
+}
 
 fn error_color(p: &ChatAppearance) -> Hsla {
     rgb(if p.light { 0xb91c1c } else { 0xfb7185 }).into()
@@ -65,34 +75,59 @@ impl NativeChatView {
                 let draft = &form["drafts"][index];
                 let hint = placeholder(question, draft);
                 wanted.insert(key.clone());
-                if let Some((input, _, shown)) = self.form_inputs.get_mut(&key) {
-                    if *shown != hint {
-                        *shown = hint.clone();
-                        input.update(cx, |state, cx| state.set_placeholder(hint, window, cx));
+                let value = text(draft, "other");
+                if let Some(entry) = self.form_inputs.get_mut(&key) {
+                    if entry.placeholder != hint {
+                        entry.placeholder = hint.clone();
+                        entry
+                            .input
+                            .update(cx, |state, cx| state.set_placeholder(hint, window, cx));
+                    }
+                    // The saved draft is read as the form appears, so its text can land after the
+                    // box was made; it fills the box once, never over what the reader typed.
+                    if !entry.settled && !value.is_empty() {
+                        entry.settled = true;
+                        entry
+                            .input
+                            .update(cx, |state, cx| state.set_value(value, window, cx));
                     }
                     continue;
                 }
-                let value = text(draft, "other");
+                let settled = !value.is_empty();
                 let input = cx.new(|cx| {
                     TextareaState::new(window, cx)
                         .auto_grow(1, 6)
                         .placeholder(hint.clone())
                         .default_value(value)
                 });
+                let typed_key = key.clone();
                 let form_id = id.clone();
                 let subscription = cx.subscribe_in(
                     &input,
                     window,
                     move |this, input, event: &InputEvent, window, cx| match event {
-                        InputEvent::Change => this.invoke(
-                            json!({"type":"formText","form":form_id,"question":index,"text":input.read(cx).value().to_string()}),
-                            cx,
-                        ),
+                        InputEvent::Change => {
+                            if let Some(entry) = this.form_inputs.get_mut(&typed_key) {
+                                entry.settled = true;
+                            }
+                            this.invoke(
+                                json!({"type":"formText","form":form_id,"question":index,"text":input.read(cx).value().to_string()}),
+                                cx,
+                            )
+                        }
                         InputEvent::Focus => super::focus::reclaim_keyboard_focus(window),
                         _ => {}
                     },
                 );
-                self.form_inputs.insert(key, (input, subscription, hint));
+                self.form_inputs.insert(
+                    key,
+                    FormInput {
+                        input,
+                        _subscription: subscription,
+                        placeholder: hint,
+                        settled,
+                    },
+                );
             }
         }
         self.form_inputs.retain(|key, _| wanted.contains(key));
@@ -370,7 +405,7 @@ impl NativeChatView {
         }
         let written = text(draft, "other");
         match self.form_inputs.get(&format!("{id}:{index}")) {
-            Some((input, _, _)) if enabled => {
+            Some(FormInput { input, .. }) if enabled => {
                 column = column.child(
                     div()
                         .w_full()

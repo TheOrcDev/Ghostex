@@ -19,7 +19,9 @@
 //! letters its choices, ends with "Other / none of these", and has a note box; a `type="text"`
 //! question is a text box. The kit adds the send button, posts the answers with `ghostex.submit`
 //! keyed by each question's `name` (its title when it has none), with a non-empty note as
-//! `"<key> (note)"`, and shows a sent page's answers locked when it is opened again.
+//! `"<key> (note)"`, and shows a sent page's answers locked when it is opened again. Until then it
+//! keeps the reader's picks as the page's draft on the host (theme.rs `PAGE_API`), so closing and
+//! reopening the page brings them back.
 //!
 //! CDXC:SessionChat 2026-10-11 DECISION:
 //! User: every question page offers "Other / none of these" with a note box, consistently, instead of each agent hand-rolling it, and the reader may leave a question unanswered. No choice is ever preselected; an agent marks the one it recommends with a Recommended badge and the reader picks. Mockups can use the full width of the page between or above the questions, and the Answered note is as wide as the question cards.
@@ -79,7 +81,7 @@ var OTHER="Other / none of these";
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
 function kids(node){return Array.prototype.slice.call(node.childNodes);}
 function labelText(node){var c=node.cloneNode(true);c.querySelectorAll("small").forEach(function(s){s.remove();});return c.textContent.replace(/\s+/g," ").trim();}
-function question(qe,index,used){
+function question(qe,index,used,changed){
   var title=(qe.getAttribute("title")||"").trim(),key=(qe.getAttribute("name")||"").trim()||title||"Question "+(index+1);
   for(var n=2;used[key];n++)key=key.replace(/ \(\d+\)$/,"")+" ("+n+")";
   used[key]=true;
@@ -93,14 +95,14 @@ function question(qe,index,used){
   qe.textContent="";qe.append(head);
   if(desc.textContent.trim()||desc.querySelector("img,svg,canvas,table"))qe.append(desc);
   if(text){
-    var area=el("textarea","gx-text");area.placeholder=qe.getAttribute("placeholder")||"Your answer (optional)";area.setAttribute("aria-labelledby",titleId);qe.append(area);
+    var area=el("textarea","gx-text");area.placeholder=qe.getAttribute("placeholder")||"Your answer (optional)";area.setAttribute("aria-labelledby",titleId);area.addEventListener("input",changed);qe.append(area);
     return{collect:function(out){out[key]=area.value.trim()||null;},
       restore:function(answers){if(typeof answers[key]==="string")area.value=answers[key];},
       lock:function(){area.readOnly=true;if(!area.value)area.hidden=true;}};
   }
   var list=el("div","gx-choices"),choices=[];
   list.setAttribute("role",multiple?"group":"radiogroup");list.setAttribute("aria-labelledby",titleId);
-  var note=el("textarea","gx-note");note.rows=1;note.setAttribute("aria-label","Note");
+  var note=el("textarea","gx-note");note.rows=1;note.setAttribute("aria-label","Note");note.addEventListener("input",changed);
   function sync(){note.placeholder=other.on()?"What would you prefer instead? (optional)":"Note (optional)";}
   function choice(nodes,value,recommended){
     var button=el("button","gx-choice"),body=el("span","gx-choice-body"),index=choices.length;
@@ -110,7 +112,7 @@ function question(qe,index,used){
     if(recommended)body.insertBefore(el("span","gx-rec","Recommended"),body.querySelector(":scope>small"));
     button.append(el("span","gx-mark"),body);list.append(button);
     var c={button:button,value:value,on:function(){return button.getAttribute("aria-checked")==="true";},set:function(v){button.setAttribute("aria-checked",v?"true":"false");}};
-    button.addEventListener("click",function(){var on=!c.on();if(on&&!multiple)choices.forEach(function(o){o.set(false);});c.set(on);sync();if(on&&c===other)note.focus();});
+    button.addEventListener("click",function(){var on=!c.on();if(on&&!multiple)choices.forEach(function(o){o.set(false);});c.set(on);sync();changed();if(on&&c===other)note.focus();});
     choices.push(c);return c;
   }
   choiceEls.forEach(function(ce){choice(kids(ce),(ce.getAttribute("value")||"").trim()||labelText(ce),ce.hasAttribute("recommended"));});
@@ -124,12 +126,16 @@ function question(qe,index,used){
     lock:function(){choices.forEach(function(c){c.button.disabled=true;});note.readOnly=true;if(!note.value)note.hidden=true;}};
 }
 function setup(root){
-  var used={},questions=Array.prototype.map.call(root.querySelectorAll("gx-question"),function(qe,index){return question(qe,index,used);});
+  var used={},questions=[];
+  /* The reader's picks so far are kept on the host (PAGE_API's draft), so closing and reopening the page loses nothing. */
+  function changed(){if(window.ghostex&&ghostex.__saveDraft){var out={};questions.forEach(function(q){q.collect(out);});ghostex.__saveDraft("kit",out);}}
+  questions=Array.prototype.map.call(root.querySelectorAll("gx-question"),function(qe,index){return question(qe,index,used,changed);});
   var bar=el("div","gx-send"),button=el("button","gx-send-button",root.getAttribute("submit")||"Send answers"),status=el("span","gx-send-status","Questions you leave blank are sent as unanswered.");
   button.type="button";bar.append(button,status);root.append(bar);
   function lock(){questions.forEach(function(q){q.lock();});button.disabled=true;button.textContent="Sent";status.textContent="";}
   if(!window.ghostex){button.disabled=true;status.textContent="This Ghostex can't send answers from a page; type them in the chat.";return;}
   if(ghostex.answered){var answers=ghostex.answers||{};questions.forEach(function(q){q.restore(answers);});lock();return;}
+  var saved=ghostex.__draft&&ghostex.__draft("kit");if(saved&&typeof saved==="object")questions.forEach(function(q){q.restore(saved);});
   button.addEventListener("click",function(){
     var out={};questions.forEach(function(q){q.collect(out);});
     button.disabled=true;status.classList.remove("gx-error");status.textContent="Sending…";

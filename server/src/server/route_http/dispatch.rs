@@ -66,6 +66,10 @@ pub(in crate::server) async fn route_http(
         return crate::visual_pages::submit_answers(state.clone(), path, body).await;
     }
 
+    if method == Method::POST && crate::visual_pages::is_draft_route(&path) {
+        return crate::visual_pages::save_draft(state.clone(), path, body).await;
+    }
+
     let endpoint = endpoint_for(&path);
 
     /*

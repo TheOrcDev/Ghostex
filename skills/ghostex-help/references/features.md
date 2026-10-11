@@ -1008,7 +1008,10 @@ it. Send delivers your answers to the agent as a message, the chat shows them
 as a card, and the form then reads Answered. Questions that need a picture,
 such as choosing between two mockups, come as a page instead, which works the
 same way: its card reads Answered once you send, and opening it again shows
-what you sent. Commands:
+what you sent. On desktop the floating window closes once your answers are
+sent, and stays open with the error if they could not be. Until you send,
+what you picked and typed is kept, in a form and on a page alike, even when
+you close the page or the chat, switch sessions, or restart. Commands:
 `ghostex show <file.html>`
 publishes a page and prints the block that shows its card (`--browser` opens it
 in the browser instead of floating), and

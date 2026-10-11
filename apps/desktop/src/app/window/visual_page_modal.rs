@@ -57,10 +57,33 @@ impl GpuiVisualPageModalWindow {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         let theme = if palette.light { "light" } else { "dark" };
-        let page_url = format!("{}#gx-theme={theme}", url.split('#').next().unwrap_or(&url));
+        let page_url = format!(
+            "{}#gx-theme={theme}&gx-floating=1",
+            url.split('#').next().unwrap_or(&url)
+        );
         let popup_open_handler: cef::BrowserPopupOpenHandler = Rc::new(|requested_url, _| {
             let _ = gpui_open_external_http_url(&requested_url);
         });
+        // CDXC:SessionChat 2026-10-11 DECISION: User: when the reader clicks Send on a page in this window, the window closes once the answers are sent, and stays open showing the error when sending fails. The page knows it floats (`gx-floating=1`, server/src/visual_pages/theme.rs) and closes itself only after gxserver accepted its answers; CEF reports that as a close request, which closes this window.
+        let page_closed: cef::BrowserPageMetadataHandler = {
+            let modal = cx.weak_entity();
+            let async_cx = cx.to_async();
+            let foreground = cx.foreground_executor().clone();
+            Rc::new(move |event| {
+                if !matches!(event, cef::BrowserPageMetadataEvent::CloseRequested) {
+                    return;
+                }
+                let modal = modal.clone();
+                let mut async_cx = async_cx.clone();
+                foreground
+                    .spawn(async move {
+                        let _ = modal.update(&mut async_cx, |this, cx| {
+                            (this.host)(VisualPageModalCommand::Close, cx);
+                        });
+                    })
+                    .detach();
+            })
+        };
         let created = cef_parent_native_view(window)
             .map_err(|error| error.to_string())
             .and_then(|parent| {
@@ -75,7 +98,7 @@ impl GpuiVisualPageModalWindow {
                     None,
                     true,
                     Some(popup_open_handler),
-                    None,
+                    Some(page_closed),
                     None,
                     None,
                     None,
