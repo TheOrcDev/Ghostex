@@ -25,6 +25,7 @@ impl GhostexGpuiApp {
         &self,
         appearance: &SidebarAppearance,
         footer: bool,
+        window: &gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let scale = appearance.scale;
@@ -69,8 +70,9 @@ impl GhostexGpuiApp {
         User: the Search button is always icon-only, at every sidebar width, with the label and
         shortcut in its tooltip. Only the Commands row still switches at its width threshold.
         */
-        // CDXC:Sidebar 2026-10-11 DECISION: the Commands threshold is the raw stored width, unscaled (see the constant).
-        let compact = !footer || self.sidebar_width <= SIDEBAR_COMPACT_COMMANDS_WIDTH;
+        // CDXC:Sidebar 2026-10-11 DECISION: the Commands threshold is real screen pixels (see the constant), so the logical width is multiplied by the window's display scale factor only.
+        let compact = !footer
+            || self.sidebar_width * window.scale_factor() <= SIDEBAR_COMPACT_COMMANDS_WIDTH;
         /*
         CDXC:Sidebar 2026-10-05 DECISION:
         User: "i actually want search and notifications to be always shown, there's space for those
